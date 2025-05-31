@@ -16,10 +16,10 @@ cc_library(
     deps = [
         "@fmt",
         "@iassert",
-        "@com_google_absl//absl/strings",
-        "@com_google_absl//absl/types:span",
+        "@abseil-cpp//absl/strings",
+        "@abseil-cpp//absl/types:span",
         # The following are needed ONLY for lconst (to remove in the future)
-        "@boost//:multiprecision",
+        "@boost.multiprecision",
     ]
 )
 
@@ -28,8 +28,8 @@ cc_test(
     srcs = ["tests/lconst_test.cpp"],
     deps = [
         ":hlop",
-        "@com_google_absl//absl/container:flat_hash_map",
-        "@com_google_absl//absl/container:flat_hash_set",
+        "@abseil-cpp//absl/container:flat_hash_map",
+        "@abseil-cpp//absl/container:flat_hash_set",
         "@com_google_googletest//:gtest_main",
     ],
 )
@@ -39,8 +39,8 @@ cc_test(
     srcs = ["tests/lconst_bench.cpp"],
     deps = [
         ":hlop",
-        "@com_google_absl//absl/container:flat_hash_map",
-        "@com_google_absl//absl/container:flat_hash_set",
+        "@abseil-cpp//absl/container:flat_hash_map",
+        "@abseil-cpp//absl/container:flat_hash_set",
         "@com_google_benchmark//:benchmark",
     ],
 )

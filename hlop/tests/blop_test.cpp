@@ -20,7 +20,7 @@ protected:
 public:
   void TearDown() override {}
 
-  void SetUp() override{
+  void SetUp() override {
 
   };
 };
