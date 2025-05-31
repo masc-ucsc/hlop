@@ -56,9 +56,9 @@ http_archive(
 # abseil
 http_archive(
   name = "com_google_absl",
-  strip_prefix = "abseil-cpp-20230125.4",
-  urls = ["https://github.com/abseil/abseil-cpp/archive/refs/tags/20230125.4.zip"],
-  sha256 = "35259f1d976ac29269ab762c48bf846d1b0880bead2e304372b033e999597b9a",
+  strip_prefix = "abseil-cpp-20250512.0",
+  urls = ["https://github.com/abseil/abseil-cpp/archive/refs/tags/20250512.0.zip"],
+  sha256 = "520551a68a57f58be691151d59918a7ddcd8d727f81c0bb530bca272f985e674",
 )
 
 # Boost (needed for lconst. To remove afterwards)
