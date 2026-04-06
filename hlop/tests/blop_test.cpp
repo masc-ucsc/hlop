@@ -12,8 +12,6 @@
 #include "dlop.hpp"
 #include "fmt/format.h"
 #include "gtest/gtest.h"
-#include "lconst.hpp"
-#include "lrand.hpp"
 
 class Blop_test : public ::testing::Test {
 protected:

@@ -3,6 +3,20 @@
 load("@rules_cc//cc:defs.bzl", "cc_library", "cc_test")
 
 cc_library(
+    name = "support",
+    hdrs = [
+        "likely.hpp",
+        "str_tools.hpp",
+    ],
+    includes = ["."],
+    visibility = ["//visibility:public"],
+    deps = [
+        "@abseil-cpp//absl/strings",
+        "@iassert",
+    ],
+)
+
+cc_library(
     name = "hlop",
     srcs = glob(
         ["*.cpp"],
@@ -14,35 +28,12 @@ cc_library(
     includes = ["."],
     visibility = ["//visibility:public"],
     deps = [
+        ":support",
         "@fmt",
         "@iassert",
         "@abseil-cpp//absl/strings",
         "@abseil-cpp//absl/types:span",
-        # The following are needed ONLY for lconst (to remove in the future)
-        "@boost.multiprecision",
     ]
-)
-
-cc_test(
-    name = "lconst_test",
-    srcs = ["tests/lconst_test.cpp"],
-    deps = [
-        ":hlop",
-        "@abseil-cpp//absl/container:flat_hash_map",
-        "@abseil-cpp//absl/container:flat_hash_set",
-        "@com_google_googletest//:gtest_main",
-    ],
-)
-
-cc_test(
-    name = "lconst_bench",
-    srcs = ["tests/lconst_bench.cpp"],
-    deps = [
-        ":hlop",
-        "@abseil-cpp//absl/container:flat_hash_map",
-        "@abseil-cpp//absl/container:flat_hash_set",
-        "@com_google_benchmark//:benchmark",
-    ],
 )
 
 cc_test(
@@ -59,6 +50,7 @@ cc_test(
     srcs = ["tests/dlop_test.cpp"],
     deps = [
         ":hlop",
+        "//benchref:benchref",
         "@com_google_googletest//:gtest_main",
     ],
 )
@@ -66,15 +58,6 @@ cc_test(
 cc_test(
     name = "slop_test",
     srcs = ["tests/slop_test.cpp"],
-    deps = [
-        ":hlop",
-        "@com_google_googletest//:gtest_main",
-    ],
-)
-
-cc_test(
-    name = "cross_test",
-    srcs = ["tests/cross_test.cpp"],
     deps = [
         ":hlop",
         "@com_google_googletest//:gtest_main",

@@ -1,4 +1,3 @@
-
 #include "benchmark/benchmark.h"
 #include "blop.hpp"
 #include "dlop.hpp"

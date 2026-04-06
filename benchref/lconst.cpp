@@ -1,4 +1,3 @@
-
 #include "lconst.hpp"
 
 #include <string_view>
