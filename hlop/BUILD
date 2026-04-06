@@ -53,3 +53,30 @@ cc_test(
         "@com_google_googletest//:gtest_main",
     ],
 )
+
+cc_test(
+    name = "dlop_test",
+    srcs = ["tests/dlop_test.cpp"],
+    deps = [
+        ":hlop",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
+cc_test(
+    name = "slop_test",
+    srcs = ["tests/slop_test.cpp"],
+    deps = [
+        ":hlop",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
+cc_test(
+    name = "cross_test",
+    srcs = ["tests/cross_test.cpp"],
+    deps = [
+        ":hlop",
+        "@com_google_googletest//:gtest_main",
+    ],
+)

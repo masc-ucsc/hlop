@@ -1,115 +1,147 @@
 // This file is distributed under the BSD 3-Clause License. See LICENSE for details.
 //
-// Some code based on https://github.com/ucsc-vama/firrtl-sig/blob/master/uint.h
+// blop: Base Logic Operation
+//
+// Provides low-level arithmetic and bitwise primitives for both:
+//   - Dlop (dynamic, runtime-sized): uses pointer+size variants
+//   - Slop (static, compile-time-sized): uses std::array<int64_t,N> variants
+//
+// All operations are signed with unlimited-precision semantics.
+// The 64-bit scalar path is the fast common case (most values fit in 63 signed bits).
 
 #pragma once
 
+#include <array>
 #include <cassert>
-#include <cmath>
 #include <cstdint>
-#include <iostream>
-
-// lop: Logic Operation Library
-//
-// blop: Base Logic Operation
-// dlop: Dynamic Logic Operation
-// slop: Static Logic Operation
-//
-// slop needs of an external pass to "BOUND" the maximum number of bits needed to perform the operation. Hence, it does not need
-// memory allocation and it is much faster. As a result, the goal of slop is for simulation.
-//
-// dlop adjusts at run-time the number of bits needed. Ideal for emulation inside the compiler to avoid prepasses with max/min
-// sizing.
-//
-// Both dlop/slop use the blop (base) class for all the operations. They are fairly close, the main difference is the memory
-// allocation.
-//
-// Both dlop/slop can handle unknowns (?). The semantics are NOT compatible with Verilog, but they have more accuracy.
-//
-// The "unknowns" (extra field) are a runtime (dlop) or compile (slop) option. If disabled, the unknowns ('?') are randomly
-// translated to zero or one when importing to lop.
-//
-// When unknowns are supported, each number is encoded with a "base" and an "extra" blop. The extra is true for each bit with
-// unknowns. The corresponding bit in the "base" is set to 1. Then, assert(base == (base|extra)) should hold always.
-//
-// The lop is anways SIGNED. All the operations are always signed and behave like having unlimited accuracy. This means that for
-// numbers that can be encoding in 13 bits, we can use 32 bit signed, and we do not need to drop bits. The logical optimization is
-// to have 8 bit, 64bit, and multiples of 64bits for all the numbers. (32bit is reasonable)
-//
-// It may make sense to move the lop to a separate repo so that other projects could use the library.
-//
-// jop is the javascript version of this project (should be semantically equivalent in operations and results)
-//
-// For development and benchmarking, most of the operations (pyrope strings) should be equivalent to Lconst, but the idea is to
-// replace lconst for the new lop library.
-//
-// The slop class should compile with tcc  (https://repo.or.cz/w/tinycc.git) (not C++, but C99) so that a faster compiler for code
-// generation can be used.
-//
+#include <cstring>
 
 class Blop {
-protected:
 public:
-  //---------------------------------------------------------------------------
-  // extend
-  //---------------------------------------------------------------------------
+  // =========================================================================
+  // EXTEND (sign-extend a scalar into an array)
+  // =========================================================================
   static void extend(int64_t *dest, size_t dest_sz, const int64_t src) {
     dest[0]   = src;
     int64_t v = src < 0 ? -1 : 0;
-    for (auto i = 1u; i < dest_sz; ++i) {
+    for (size_t i = 1; i < dest_sz; ++i) {
       dest[i] = v;
     }
   }
 
-  //--------------------------------------------------------------------------
+  template <size_t N>
+  static void extend(std::array<int64_t, N> &dest, const int64_t src) {
+    dest[0]   = src;
+    int64_t v = src < 0 ? -1 : 0;
+    for (size_t i = 1; i < N; ++i) {
+      dest[i] = v;
+    }
+  }
+
+  // =========================================================================
   // ADD
-  //---------------------------------------------------------------------------
-  static void add8(int8_t &dest, const int8_t src1, const int8_t src2) { dest = src1 + src2; }
+  // =========================================================================
   static void add64(int64_t &dest, const int64_t src1, const int64_t src2) { dest = src1 + src2; }
+
   static void addn(int64_t *dest, size_t dest_sz, const int64_t *src1, const int64_t *src2) {
     assert(dest_sz >= 1);
-
     uint64_t carry = __builtin_uaddll_overflow(src1[0], src2[0], reinterpret_cast<unsigned long long *>(dest));
-    for (auto i = 1u; i < dest_sz - 1; ++i) {
+    for (size_t i = 1; i < dest_sz - 1; ++i) {
       unsigned long long tmp;
       carry = __builtin_uaddll_overflow(src1[i], carry, &tmp);
       carry |= __builtin_uaddll_overflow(tmp, src2[i], reinterpret_cast<unsigned long long *>(dest + i));
     }
-    assert(carry == 0 || carry == 1);
-    dest[dest_sz - 1] = src1[dest_sz - 1] + src2[dest_sz - 1] + carry;
+    if (dest_sz > 1) {
+      dest[dest_sz - 1] = src1[dest_sz - 1] + src2[dest_sz - 1] + carry;
+    }
   }
 
-  //---------------------------------------------------------------------------
+  template <size_t N>
+  static void add(std::array<int64_t, N> &dest, const std::array<int64_t, N> &src1, const std::array<int64_t, N> &src2) {
+    if constexpr (N == 1) {
+      dest[0] = src1[0] + src2[0];
+    } else {
+      uint64_t carry = __builtin_uaddll_overflow(src1[0], src2[0], reinterpret_cast<unsigned long long *>(&dest[0]));
+      for (size_t i = 1; i < N - 1; ++i) {
+        unsigned long long tmp;
+        carry = __builtin_uaddll_overflow(src1[i], carry, &tmp);
+        carry |= __builtin_uaddll_overflow(tmp, src2[i], reinterpret_cast<unsigned long long *>(&dest[i]));
+      }
+      dest[N - 1] = src1[N - 1] + src2[N - 1] + carry;
+    }
+  }
+
+  // =========================================================================
   // SUB
-  //---------------------------------------------------------------------------
-  static void sub8(int8_t &dest, const int8_t src1, const int8_t src2) { dest = src1 - src2; }
+  // =========================================================================
   static void sub64(int64_t &dest, const int64_t src1, const int64_t src2) { dest = src1 - src2; }
 
   static void subn(int64_t *dest, size_t dest_sz, const int64_t *src1, const int64_t *src2) {
     assert(dest_sz >= 1);
-
     uint64_t carry = __builtin_usubll_overflow(src1[0], src2[0], reinterpret_cast<unsigned long long *>(dest));
-    for (auto i = 1u; i < dest_sz - 1; ++i) {
+    for (size_t i = 1; i < dest_sz - 1; ++i) {
       unsigned long long tmp;
       carry = __builtin_usubll_overflow(src1[i], carry, &tmp);
       carry |= __builtin_usubll_overflow(tmp, src2[i], reinterpret_cast<unsigned long long *>(dest + i));
     }
-    assert(carry == 0 || carry == 1);
-    dest[dest_sz - 1] = src1[dest_sz - 1] - src2[dest_sz - 1] - carry;
+    if (dest_sz > 1) {
+      dest[dest_sz - 1] = src1[dest_sz - 1] - src2[dest_sz - 1] - carry;
+    }
   }
 
-  //---------------------------------------------------------------------------
-  // SHL
-  //---------------------------------------------------------------------------
-  static void shl8(int8_t &dest, const int8_t src1, const int8_t src2) {
-    assert(src2 >= 0);
-    dest = src1 << src2;
-    assert((dest >> src2) == src1);  // no precision lost of allocate larger dest
+  template <size_t N>
+  static void sub(std::array<int64_t, N> &dest, const std::array<int64_t, N> &src1, const std::array<int64_t, N> &src2) {
+    if constexpr (N == 1) {
+      dest[0] = src1[0] - src2[0];
+    } else {
+      uint64_t carry = __builtin_usubll_overflow(src1[0], src2[0], reinterpret_cast<unsigned long long *>(&dest[0]));
+      for (size_t i = 1; i < N - 1; ++i) {
+        unsigned long long tmp;
+        carry = __builtin_usubll_overflow(src1[i], carry, &tmp);
+        carry |= __builtin_usubll_overflow(tmp, src2[i], reinterpret_cast<unsigned long long *>(&dest[i]));
+      }
+      dest[N - 1] = src1[N - 1] - src2[N - 1] - carry;
+    }
   }
+
+  // =========================================================================
+  // NEG (two's complement negate: -x == ~x + 1)
+  // =========================================================================
+  static void neg64(int64_t &dest, const int64_t src) { dest = -src; }
+
+  static void negn(int64_t *dest, size_t dest_sz, const int64_t *src) {
+    assert(dest_sz >= 1);
+    // ~src + 1
+    uint64_t carry = 1;
+    for (size_t i = 0; i < dest_sz; ++i) {
+      uint64_t flipped = ~static_cast<uint64_t>(src[i]);
+      uint64_t sum     = flipped + carry;
+      carry            = (sum < flipped) ? 1 : 0;
+      dest[i]          = static_cast<int64_t>(sum);
+    }
+  }
+
+  template <size_t N>
+  static void neg(std::array<int64_t, N> &dest, const std::array<int64_t, N> &src) {
+    if constexpr (N == 1) {
+      dest[0] = -src[0];
+    } else {
+      uint64_t carry = 1;
+      for (size_t i = 0; i < N; ++i) {
+        uint64_t flipped = ~static_cast<uint64_t>(src[i]);
+        uint64_t sum     = flipped + carry;
+        carry            = (sum < flipped) ? 1 : 0;
+        dest[i]          = static_cast<int64_t>(sum);
+      }
+    }
+  }
+
+  // =========================================================================
+  // SHL (shift left)
+  // =========================================================================
   static void shl64(int64_t &dest, const int64_t src1, const int64_t src2) {
-    assert(src2 >= 0);
+    assert(src2 >= 0 && src2 < 64);
     dest = src1 << src2;
-    assert((dest >> src2) == src1);  // no precision lost of allocate larger dest
   }
 
   static void shln(int64_t *dest, size_t dest_sz, const int64_t *src1, const int64_t src2) {
@@ -126,26 +158,51 @@ public:
       }
     } else {
       for (int i = dest_sz - word_up - 1; i > 0; --i) {
-        auto tmp          = src1[i];  // need to do copy because self update
-        dest[i + word_up] = static_cast<uint64_t>(src1[i - 1]) >> static_cast<uint64_t>(64 - bits_up);
+        auto tmp          = src1[i];
+        dest[i + word_up] = static_cast<uint64_t>(src1[i - 1]) >> (64 - bits_up);
         dest[i + word_up] |= tmp << bits_up;
       }
       dest[word_up] = src1[0] << bits_up;
     }
-    for (auto i = 0u; i < word_up; ++i) {
+    for (size_t i = 0; i < word_up; ++i) {
       dest[i] = 0;
     }
   }
 
-  //---------------------------------------------------------------------------
-  // SHR
-  //---------------------------------------------------------------------------
-  static void shr8(int8_t &dest, const int8_t src1, const int8_t src2) {
-    assert(src2 >= 0);
-    dest = src1 >> src2;
+  template <size_t N>
+  static void shl(std::array<int64_t, N> &dest, const std::array<int64_t, N> &src1, int64_t amount) {
+    if constexpr (N == 1) {
+      assert(amount >= 0 && amount < 64);
+      dest[0] = src1[0] << amount;
+    } else {
+      assert(amount >= 0);
+      size_t word_up = amount / 64;
+      assert(word_up < N);
+      size_t bits_up = amount & 63;
+
+      if (bits_up == 0) {
+        for (int i = N - word_up - 1; i >= 0; --i) {
+          dest[i + word_up] = src1[i];
+        }
+      } else {
+        for (int i = N - word_up - 1; i > 0; --i) {
+          auto tmp          = src1[i];
+          dest[i + word_up] = static_cast<uint64_t>(src1[i - 1]) >> (64 - bits_up);
+          dest[i + word_up] |= tmp << bits_up;
+        }
+        dest[word_up] = src1[0] << bits_up;
+      }
+      for (size_t i = 0; i < word_up; ++i) {
+        dest[i] = 0;
+      }
+    }
   }
+
+  // =========================================================================
+  // SHR (arithmetic shift right — sign-extending)
+  // =========================================================================
   static void shr64(int64_t &dest, const int64_t src1, const int64_t src2) {
-    assert(src2 >= 0);
+    assert(src2 >= 0 && src2 < 64);
     dest = src1 >> src2;
   }
 
@@ -153,205 +210,569 @@ public:
     assert(dest_sz >= 1);
     assert(src2 >= 0);
 
-    uint64_t word_down = src2 / 64;
-    uint64_t bits_down = src2 & 63;
+    size_t word_down = src2 / 64;
+    size_t bits_down = src2 & 63;
+
+    int64_t sign_fill = src1[dest_sz - 1] < 0 ? -1 : 0;
 
     if (bits_down == 0) {
-      for (auto i = word_down; i < dest_sz; i++) {
+      for (size_t i = word_down; i < dest_sz; i++) {
         dest[i - word_down] = src1[i];
       }
     } else {
-      for (auto i = word_down; i < dest_sz - 1; i++) {
+      for (size_t i = word_down; i < dest_sz - 1; i++) {
         auto tmp = static_cast<uint64_t>(src1[i]) >> bits_down;
-        tmp |= src1[i + 1] << static_cast<uint64_t>(64 - bits_down);
+        tmp |= static_cast<uint64_t>(src1[i + 1]) << (64 - bits_down);
         dest[i - word_down] = tmp;
       }
-      dest[dest_sz - 1 - word_down] = src1[dest_sz - 1] >> bits_down;
+      dest[dest_sz - 1 - word_down] = src1[dest_sz - 1] >> bits_down;  // arithmetic shift on top word
+    }
+    // Fill upper words with sign
+    for (size_t i = dest_sz - word_down; i < dest_sz; ++i) {
+      dest[i] = sign_fill;
     }
   }
 
-  //---------------------------------------------------------------------------
+  template <size_t N>
+  static void shr(std::array<int64_t, N> &dest, const std::array<int64_t, N> &src1, int64_t amount) {
+    if constexpr (N == 1) {
+      assert(amount >= 0 && amount < 64);
+      dest[0] = src1[0] >> amount;
+    } else {
+      assert(amount >= 0);
+      size_t word_down = amount / 64;
+      size_t bits_down = amount & 63;
+
+      int64_t sign_fill = src1[N - 1] < 0 ? -1 : 0;
+
+      if (bits_down == 0) {
+        for (size_t i = word_down; i < N; i++) {
+          dest[i - word_down] = src1[i];
+        }
+      } else {
+        for (size_t i = word_down; i < N - 1; i++) {
+          auto tmp = static_cast<uint64_t>(src1[i]) >> bits_down;
+          tmp |= static_cast<uint64_t>(src1[i + 1]) << (64 - bits_down);
+          dest[i - word_down] = tmp;
+        }
+        dest[N - 1 - word_down] = src1[N - 1] >> bits_down;
+      }
+      for (size_t i = N - word_down; i < N; ++i) {
+        dest[i] = sign_fill;
+      }
+    }
+  }
+
+  // =========================================================================
   // OR
-  //---------------------------------------------------------------------------
-  static void or8(int8_t &dest, const int8_t src1, const int8_t src2) { dest = src1 | src2; }
+  // =========================================================================
   static void or64(int64_t &dest, const int64_t src1, const int64_t src2) { dest = src1 | src2; }
 
   static void orn(int64_t *dest, size_t dest_sz, const int64_t *src1, const int64_t *src2) {
-    assert(dest_sz >= 1);
-    for (auto i = 0u; i < dest_sz; i++) {
+    for (size_t i = 0; i < dest_sz; i++) {
       dest[i] = src1[i] | src2[i];
     }
   }
 
   static void orn(int64_t *dest, size_t dest_sz, const int64_t *src1, const int64_t src2) {
-    assert(dest_sz >= 1);
     dest[0]    = src1[0] | src2;
-    uint64_t v = src2 < 0 ? -1 : 0;
-    for (auto i = 1u; i < dest_sz; i++) {
+    int64_t v = src2 < 0 ? -1 : 0;
+    for (size_t i = 1; i < dest_sz; i++) {
       dest[i] = src1[i] | v;
     }
   }
 
-  //---------------------------------------------------------------------------
-  // MULT
-  //---------------------------------------------------------------------------
-  static void mult8(int8_t &dest, const int8_t src1, const int8_t src2) { dest = src1 * src2; }
+  template <size_t N>
+  static void bor(std::array<int64_t, N> &dest, const std::array<int64_t, N> &src1, const std::array<int64_t, N> &src2) {
+    for (size_t i = 0; i < N; i++) {
+      dest[i] = src1[i] | src2[i];
+    }
+  }
+
+  // =========================================================================
+  // AND
+  // =========================================================================
+  static void and64(int64_t &dest, const int64_t src1, const int64_t src2) { dest = src1 & src2; }
+
+  static void andn(int64_t *dest, size_t dest_sz, const int64_t *src1, const int64_t *src2) {
+    for (size_t i = 0; i < dest_sz; i++) {
+      dest[i] = src1[i] & src2[i];
+    }
+  }
+
+  template <size_t N>
+  static void band(std::array<int64_t, N> &dest, const std::array<int64_t, N> &src1, const std::array<int64_t, N> &src2) {
+    for (size_t i = 0; i < N; i++) {
+      dest[i] = src1[i] & src2[i];
+    }
+  }
+
+  // =========================================================================
+  // XOR
+  // =========================================================================
+  static void xor64(int64_t &dest, const int64_t src1, const int64_t src2) { dest = src1 ^ src2; }
+
+  static void xorn(int64_t *dest, size_t dest_sz, const int64_t *src1, const int64_t *src2) {
+    for (size_t i = 0; i < dest_sz; i++) {
+      dest[i] = src1[i] ^ src2[i];
+    }
+  }
+
+  template <size_t N>
+  static void bxor(std::array<int64_t, N> &dest, const std::array<int64_t, N> &src1, const std::array<int64_t, N> &src2) {
+    for (size_t i = 0; i < N; i++) {
+      dest[i] = src1[i] ^ src2[i];
+    }
+  }
+
+  // =========================================================================
+  // NOT (bitwise complement: ~x == -x - 1)
+  // =========================================================================
+  static void not64(int64_t &dest, const int64_t src) { dest = ~src; }
+
+  static void notn(int64_t *dest, size_t dest_sz, const int64_t *src) {
+    for (size_t i = 0; i < dest_sz; i++) {
+      dest[i] = ~src[i];
+    }
+  }
+
+  template <size_t N>
+  static void bnot(std::array<int64_t, N> &dest, const std::array<int64_t, N> &src) {
+    for (size_t i = 0; i < N; i++) {
+      dest[i] = ~src[i];
+    }
+  }
+
+  // =========================================================================
+  // MULT (schoolbook multiplication using __uint128_t)
+  // =========================================================================
   static void mult64(int64_t &dest, const int64_t src1, const int64_t src2) { dest = src1 * src2; }
 
+  // Multi-word signed multiply: dest[0..dest_sz-1] = src1[0..src1_sz-1] * src2[0..src2_sz-1]
+  // dest_sz must be >= src1_sz + src2_sz to avoid overflow.
+  // All arrays are in signed two's complement.
   static void multn(int64_t *dest, size_t dest_sz, const int64_t *src1, size_t src1_sz, const int64_t *src2, size_t src2_sz) {
+    using u128 = unsigned __int128;
+
+    // Clear dest
     for (size_t i = 0; i < dest_sz; i++) {
       dest[i] = 0;
     }
 
-    int64_t flip_carry[dest_sz];
+    // Unsigned schoolbook multiply of magnitudes, then fix sign
+    // But for two's complement, we can do unsigned multiply directly
+    // if we sign-extend conceptually. The schoolbook works on unsigned
+    // words and the two's complement representation handles sign naturally
+    // as long as dest is large enough.
 
-    int64_t *temp_src1 = const_cast<int64_t *>(src1);
-
-    bool s1Negative = false;
-    bool s2Negative = false;
-
-    for (size_t i = 0; i < dest_sz; i++) {
-      if (i == 0) {
-        flip_carry[i] = 1;
-      } else {
-        flip_carry[i] = 0;
+    for (size_t j = 0; j < src2_sz; ++j) {
+      uint64_t carry = 0;
+      for (size_t i = 0; i < src1_sz; ++i) {
+        if (i + j >= dest_sz) break;
+        u128 prod = static_cast<u128>(static_cast<uint64_t>(src1[i])) * static_cast<uint64_t>(src2[j])
+                    + static_cast<uint64_t>(dest[i + j]) + carry;
+        dest[i + j] = static_cast<int64_t>(static_cast<uint64_t>(prod));
+        carry        = static_cast<uint64_t>(prod >> 64);
+      }
+      if (j + src1_sz < dest_sz) {
+        dest[j + src1_sz] += carry;
       }
     }
-    assert(dest_sz >= 1 && sizeof(src1) > 1 && sizeof(src2) > 1);
 
+    // Fix for signed: if src2 is negative, subtract src1 shifted left by src2_sz words
+    // (This accounts for the two's complement of src2's top word)
+    if (src2[src2_sz - 1] < 0) {
+      for (size_t i = 0; i < src1_sz && (i + src2_sz) < dest_sz; ++i) {
+        dest[i + src2_sz] -= src1[i];
+      }
+    }
     if (src1[src1_sz - 1] < 0) {
-      s1Negative = true;
-      subn(temp_src1, src1_sz, temp_src1, flip_carry);
-      for (size_t i = 0; i < src1_sz; i++) {
-        temp_src1[i] = ~temp_src1[i];
-      }
-    }
-
-    {
-      int64_t *temp_src2 = const_cast<int64_t *>(src2);
-      if (src2[src2_sz - 1] < 0) {
-        s2Negative = true;
-        subn(temp_src2, src2_sz, temp_src2, flip_carry);
-        for (size_t i = 0; i < src2_sz; i++) {
-          temp_src2[i] = ~temp_src2[i];
-        }
-      }
-    }
-
-    int64_t exponent = 63;
-    for (size_t j = 0; j < src2_sz; j++) {
-      uint64_t temp_src2 = (uint64_t)src2[j];
-      while (temp_src2 > 0) {
-        uint64_t exp = std::pow(2, exponent);
-        if (temp_src2 >= exp) {
-          int64_t temp[dest_sz];
-          for (size_t k = 0; k < dest_sz; k++) {
-            temp[k] = 0;
-          }
-          temp_src2 -= exp;
-          // shift left base on exponent
-          shln(temp, dest_sz, temp_src1, exponent);
-          //-------------add shifted bits to lastindex of temp-----------
-          uint64_t src1_msb = temp_src1[src1_sz - 1];
-          for (auto i = 0; i < 64; i++) {
-            if (src1_msb != 0) {
-              uint temp_bit = src1_msb % 2;
-              src1_msb      = src1_msb / 2;
-              if (i >= (64 - exponent)) {
-                // -----------------------------------------------not finished-----------------------------------------------
-
-                temp[src1_sz + j + 1] += temp_bit * (std::pow(2, i));
-                // -----------------------------------------------not finished-----------------------------------------------
-              }
-            } else {
-              break;
-            }
-          }
-          addn(dest, dest_sz, temp, dest);
-        }
-        exponent--;
-      }
-    }
-
-    // check sign
-    if (src2 != 0) {
-      if (s1Negative + s2Negative == 1) {
-        // positive to two's complement negative
-        for (size_t i = 0; i < dest_sz; i++) {
-          dest[i] = ~dest[i];
-        }
-        addn(dest, dest_sz, dest, flip_carry);
+      for (size_t j = 0; j < src2_sz && (j + src1_sz) < dest_sz; ++j) {
+        dest[j + src1_sz] -= src2[j];
       }
     }
   }
 
+  // Multiply multi-word by scalar (4-arg compat: dest_sz == src1_sz)
   static void multn(int64_t *dest, size_t dest_sz, const int64_t *src1, const int64_t src2) {
+    multn(dest, dest_sz, src1, dest_sz, src2);
+  }
+
+  // Multiply multi-word by scalar
+  static void multn(int64_t *dest, size_t dest_sz, const int64_t *src1, size_t src1_sz, const int64_t src2) {
+    using u128 = unsigned __int128;
+
     for (size_t i = 0; i < dest_sz; i++) {
       dest[i] = 0;
     }
 
-    int64_t *temp_src1 = const_cast<int64_t *>(src1);
-    int64_t  temp_src2 = src2;
-    int64_t  flip_carry[dest_sz];
-    for (size_t i = 0; i < dest_sz; i++) {
-      if (i == 0) {
-        flip_carry[i] = 1;
-      } else {
-        flip_carry[i] = 0;
-      }
+    uint64_t carry = 0;
+    for (size_t i = 0; i < src1_sz && i < dest_sz; ++i) {
+      u128 prod = static_cast<u128>(static_cast<uint64_t>(src1[i])) * static_cast<uint64_t>(src2)
+                  + carry;
+      dest[i] = static_cast<int64_t>(static_cast<uint64_t>(prod));
+      carry   = static_cast<uint64_t>(prod >> 64);
     }
-    assert(dest_sz >= 1 && sizeof(src1) > 1);
-    bool s1Negative, s2Negative = false;
+    if (src1_sz < dest_sz) {
+      dest[src1_sz] += carry;
+    }
+
+    // Sign correction
     if (src2 < 0) {
-      s2Negative = true;
-      temp_src2  = ~(src2 - 1);
-    }
-    if (src1[dest_sz - 2] < 0) {
-      s1Negative = true;
-      subn(temp_src1, dest_sz - 1, temp_src1, flip_carry);
-      for (size_t i = 0; i < dest_sz - 1; i++) {
-        temp_src1[i] = ~temp_src1[i];
+      for (size_t i = 0; i < src1_sz && (i + 1) < dest_sz; ++i) {
+        dest[i + 1] -= src1[i];
       }
     }
+    if (src1[src1_sz - 1] < 0) {
+      dest[src1_sz] -= src2;  // only 1 word for src2
+    }
+  }
 
-    // split src2
-    int64_t exponent = 63;
-    while (temp_src2 > 0) {
-      auto exp = std::pow(2, exponent);
-      if (temp_src2 >= exp) {
-        int64_t temp[dest_sz];
-        temp_src2 -= exp;
-        // shift left base on exponent
-        shln(temp, dest_sz, temp_src1, exponent);
+  template <size_t N>
+  static void mult(std::array<int64_t, N> &dest, const std::array<int64_t, N> &src1, const std::array<int64_t, N> &src2) {
+    if constexpr (N == 1) {
+      dest[0] = src1[0] * src2[0];
+    } else {
+      multn(dest.data(), N, src1.data(), N, src2.data(), N);
+    }
+  }
 
-        //-------------add shifted bits to lastindex of temp-----------
-        temp[dest_sz - 1] = 0;
-        uint64_t src1_msb = temp_src1[dest_sz - 2];
-        for (auto i = 0; i < 64; i++) {
-          if (src1_msb != 0) {
-            uint temp_bit = src1_msb % 2;
-            src1_msb      = src1_msb / 2;
-            if (i >= (64 - exponent)) {
-              temp[dest_sz - 1] += temp_bit * (std::pow(2, i));
-            }
-          } else {
-            break;
-          }
-        }
-        addn(dest, dest_sz, temp, dest);
-      }
-      exponent--;
+  // =========================================================================
+  // DIV (signed division, truncating toward zero)
+  // =========================================================================
+  static void div64(int64_t &dest, const int64_t src1, const int64_t src2) {
+    assert(src2 != 0);
+    dest = src1 / src2;
+  }
+
+  // Multi-word division is complex. For now, provide a 64-bit fast path
+  // and a helper that converts to/from single words when possible.
+  // Full Knuth Algorithm D can be added later if needed.
+  static void divn(int64_t *dest, size_t dest_sz, const int64_t *src1, size_t src1_sz, const int64_t *src2, size_t src2_sz) {
+    // Check if both fit in 64 bits
+    bool s1_fits = true;
+    int64_t s1_sign = src1[src1_sz - 1] < 0 ? -1 : 0;
+    for (size_t i = 1; i < src1_sz; ++i) {
+      if (src1[i] != s1_sign) { s1_fits = false; break; }
     }
 
-    // check sign
-    if (src2 != 0) {
-      if (s1Negative + s2Negative == 1) {
-        // positive to two's complement negative
-        for (size_t i = 0; i < dest_sz; i++) {
-          dest[i] = ~dest[i];
-        }
-        addn(dest, dest_sz, dest, flip_carry);
+    bool s2_fits = true;
+    int64_t s2_sign = src2[src2_sz - 1] < 0 ? -1 : 0;
+    for (size_t i = 1; i < src2_sz; ++i) {
+      if (src2[i] != s2_sign) { s2_fits = false; break; }
+    }
+
+    if (s1_fits && s2_fits) {
+      assert(src2[0] != 0);
+      int64_t result = src1[0] / src2[0];
+      dest[0] = result;
+      int64_t fill = result < 0 ? -1 : 0;
+      for (size_t i = 1; i < dest_sz; ++i) {
+        dest[i] = fill;
       }
+      return;
+    }
+
+    // TODO: Knuth Algorithm D for full multi-word division
+    assert(false && "Multi-word division beyond 64-bit not yet implemented");
+  }
+
+  template <size_t N>
+  static void div(std::array<int64_t, N> &dest, const std::array<int64_t, N> &src1, const std::array<int64_t, N> &src2) {
+    if constexpr (N == 1) {
+      assert(src2[0] != 0);
+      dest[0] = src1[0] / src2[0];
+    } else {
+      divn(dest.data(), N, src1.data(), N, src2.data(), N);
+    }
+  }
+
+  // =========================================================================
+  // EQ (equality comparison, returns bool)
+  // =========================================================================
+  static bool eq64(const int64_t src1, const int64_t src2) { return src1 == src2; }
+
+  static bool eqn(const int64_t *src1, const int64_t *src2, size_t sz) {
+    for (size_t i = 0; i < sz; ++i) {
+      if (src1[i] != src2[i]) return false;
+    }
+    return true;
+  }
+
+  template <size_t N>
+  static bool eq(const std::array<int64_t, N> &src1, const std::array<int64_t, N> &src2) {
+    for (size_t i = 0; i < N; ++i) {
+      if (src1[i] != src2[i]) return false;
+    }
+    return true;
+  }
+
+  // =========================================================================
+  // LT (signed less-than comparison)
+  // =========================================================================
+  static bool lt64(const int64_t src1, const int64_t src2) { return src1 < src2; }
+
+  static bool ltn(const int64_t *src1, const int64_t *src2, size_t sz) {
+    // Compare from MSW down; top word is signed, rest are unsigned magnitude
+    if (src1[sz - 1] != src2[sz - 1]) {
+      return src1[sz - 1] < src2[sz - 1];  // signed compare on top word
+    }
+    for (int i = static_cast<int>(sz) - 2; i >= 0; --i) {
+      if (static_cast<uint64_t>(src1[i]) != static_cast<uint64_t>(src2[i])) {
+        return static_cast<uint64_t>(src1[i]) < static_cast<uint64_t>(src2[i]);
+      }
+    }
+    return false;  // equal
+  }
+
+  template <size_t N>
+  static bool lt(const std::array<int64_t, N> &src1, const std::array<int64_t, N> &src2) {
+    if constexpr (N == 1) {
+      return src1[0] < src2[0];
+    } else {
+      return ltn(src1.data(), src2.data(), N);
+    }
+  }
+
+  // =========================================================================
+  // IS_NEGATIVE / IS_ZERO
+  // =========================================================================
+  static bool is_negative64(const int64_t src) { return src < 0; }
+
+  static bool is_negativen(const int64_t *src, size_t sz) { return src[sz - 1] < 0; }
+
+  template <size_t N>
+  static bool is_negative(const std::array<int64_t, N> &src) { return src[N - 1] < 0; }
+
+  static bool is_zero64(const int64_t src) { return src == 0; }
+
+  static bool is_zeron(const int64_t *src, size_t sz) {
+    for (size_t i = 0; i < sz; ++i) {
+      if (src[i] != 0) return false;
+    }
+    return true;
+  }
+
+  template <size_t N>
+  static bool is_zero(const std::array<int64_t, N> &src) {
+    for (size_t i = 0; i < N; ++i) {
+      if (src[i] != 0) return false;
+    }
+    return true;
+  }
+
+  // =========================================================================
+  // POPCOUNT
+  // =========================================================================
+  static int popcount64(const int64_t src) { return __builtin_popcountll(static_cast<uint64_t>(src)); }
+
+  static int popcountn(const int64_t *src, size_t sz) {
+    int count = 0;
+    for (size_t i = 0; i < sz; ++i) {
+      count += __builtin_popcountll(static_cast<uint64_t>(src[i]));
+    }
+    return count;
+  }
+
+  template <size_t N>
+  static int popcount(const std::array<int64_t, N> &src) {
+    int count = 0;
+    for (size_t i = 0; i < N; ++i) {
+      count += __builtin_popcountll(static_cast<uint64_t>(src[i]));
+    }
+    return count;
+  }
+
+  // =========================================================================
+  // CLZ (count leading zeros from MSB of the top word)
+  // Returns the number of leading sign bits - 1 (i.e., how many bits match the sign)
+  // =========================================================================
+  static int clz64(const uint64_t src) {
+    if (src == 0) return 64;
+    return __builtin_clzll(src);
+  }
+
+  // =========================================================================
+  // CTZ (count trailing zeros)
+  // =========================================================================
+  static int ctz64(const uint64_t src) {
+    if (src == 0) return 64;
+    return __builtin_ctzll(src);
+  }
+
+  static int ctzn(const int64_t *src, size_t sz) {
+    for (size_t i = 0; i < sz; ++i) {
+      if (src[i] != 0) {
+        return i * 64 + __builtin_ctzll(static_cast<uint64_t>(src[i]));
+      }
+    }
+    return sz * 64;
+  }
+
+  template <size_t N>
+  static int ctz(const std::array<int64_t, N> &src) {
+    for (size_t i = 0; i < N; ++i) {
+      if (src[i] != 0) {
+        return i * 64 + __builtin_ctzll(static_cast<uint64_t>(src[i]));
+      }
+    }
+    return N * 64;
+  }
+
+  // =========================================================================
+  // BIT_TEST (test a specific bit position)
+  // =========================================================================
+  static bool bit_test64(const int64_t src, int pos) {
+    assert(pos >= 0 && pos < 64);
+    return (src >> pos) & 1;
+  }
+
+  static bool bit_testn(const int64_t *src, size_t sz, int pos) {
+    int word = pos / 64;
+    int bit  = pos % 64;
+    assert(word >= 0 && static_cast<size_t>(word) < sz);
+    return (src[word] >> bit) & 1;
+  }
+
+  template <size_t N>
+  static bool bit_test(const std::array<int64_t, N> &src, int pos) {
+    int word = pos / 64;
+    int bit  = pos % 64;
+    assert(word >= 0 && static_cast<size_t>(word) < N);
+    return (src[word] >> bit) & 1;
+  }
+
+  // =========================================================================
+  // SEXT (sign-extend from bit position 'from_bit')
+  // Bits above from_bit are set to match the value of bit at from_bit.
+  // =========================================================================
+  static void sext64(int64_t &dest, const int64_t src, int from_bit) {
+    assert(from_bit >= 0 && from_bit < 64);
+    if (from_bit == 63) {
+      dest = src;
+      return;
+    }
+    int64_t mask = (int64_t(1) << (from_bit + 1)) - 1;
+    if ((src >> from_bit) & 1) {
+      dest = src | ~mask;  // sign bit is 1, fill upper with 1s
+    } else {
+      dest = src & mask;   // sign bit is 0, fill upper with 0s
+    }
+  }
+
+  static void sextn(int64_t *dest, size_t dest_sz, const int64_t *src, int from_bit) {
+    assert(from_bit >= 0);
+    int word = from_bit / 64;
+    int bit  = from_bit % 64;
+
+    // Copy lower words unchanged
+    for (int i = 0; i < word && static_cast<size_t>(i) < dest_sz; ++i) {
+      dest[i] = src[i];
+    }
+
+    if (static_cast<size_t>(word) < dest_sz) {
+      // Sign extend within the word containing from_bit
+      int64_t mask = (int64_t(1) << (bit + 1)) - 1;
+      bool sign_bit = (src[word] >> bit) & 1;
+      if (sign_bit) {
+        dest[word] = src[word] | ~mask;
+      } else {
+        dest[word] = src[word] & mask;
+      }
+
+      // Fill remaining words with sign
+      int64_t fill = sign_bit ? -1 : 0;
+      for (size_t i = word + 1; i < dest_sz; ++i) {
+        dest[i] = fill;
+      }
+    }
+  }
+
+  template <size_t N>
+  static void sext(std::array<int64_t, N> &dest, const std::array<int64_t, N> &src, int from_bit) {
+    if constexpr (N == 1) {
+      sext64(dest[0], src[0], from_bit);
+    } else {
+      sextn(dest.data(), N, src.data(), from_bit);
+    }
+  }
+
+  // =========================================================================
+  // GET_BITS: number of signed bits needed to represent the value
+  // A value of 0 needs 0 bits. A value of -1 needs 1 bit.
+  // A positive value v needs floor(log2(v)) + 2 bits (one for sign).
+  // A negative value v needs floor(log2(-v-1)) + 2 bits.
+  // =========================================================================
+  static int get_bits64(const int64_t src) {
+    if (src == 0)  return 0;
+    if (src == -1) return 1;
+    if (src > 0) {
+      return 64 - __builtin_clzll(static_cast<uint64_t>(src)) + 1;
+    }
+    return 64 - __builtin_clzll(static_cast<uint64_t>(-(src + 1))) + 1;
+  }
+
+  static int get_bitsn(const int64_t *src, size_t sz) {
+    int64_t sign = src[sz - 1] < 0 ? -1 : 0;
+
+    // Find topmost word that differs from sign extension
+    int top = sz - 1;
+    while (top > 0 && src[top] == sign) {
+      --top;
+    }
+
+    if (top == 0) {
+      return get_bits64(src[0]);
+    }
+
+    // The value at src[top] is significant
+    if (sign == 0) {
+      // Positive: count bits in top word + lower words
+      return top * 64 + 64 - __builtin_clzll(static_cast<uint64_t>(src[top])) + 1;
+    } else {
+      // Negative: count bits in ~top word
+      uint64_t flipped = ~static_cast<uint64_t>(src[top]);
+      if (flipped == 0) {
+        // All 1s in this word but differs from sign — check one below
+        return top * 64 + 1;
+      }
+      return top * 64 + 64 - __builtin_clzll(flipped) + 1;
+    }
+  }
+
+  template <size_t N>
+  static int get_bits(const std::array<int64_t, N> &src) {
+    if constexpr (N == 1) {
+      return get_bits64(src[0]);
+    } else {
+      return get_bitsn(src.data(), N);
+    }
+  }
+
+  // =========================================================================
+  // MSB position (index of highest set bit, for positive numbers)
+  // =========================================================================
+  static int msb64(const uint64_t src) {
+    assert(src != 0);
+    return 63 - __builtin_clzll(src);
+  }
+
+  static int msbn(const int64_t *src, size_t sz) {
+    for (int i = sz - 1; i >= 0; --i) {
+      if (static_cast<uint64_t>(src[i]) != 0) {
+        return i * 64 + 63 - __builtin_clzll(static_cast<uint64_t>(src[i]));
+      }
+    }
+    return -1;  // all zero
+  }
+
+  template <size_t N>
+  static int msb(const std::array<int64_t, N> &src) {
+    if constexpr (N == 1) {
+      if (src[0] == 0) return -1;
+      return msb64(static_cast<uint64_t>(src[0]));
+    } else {
+      return msbn(src.data(), N);
     }
   }
 };
