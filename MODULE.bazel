@@ -11,7 +11,7 @@ bazel_dep(name = "abseil-cpp", version = "20250814.2") # 20240722.0.bcr.2")
 
 bazel_dep(name = "boost.multiprecision", version = "1.87.0")
 
-bazel_dep(name = "fmt", version = "11.1.4")
+bazel_dep(name = "fmt", version = "11.2.0.bcr.1")
 
 bazel_dep(name = "googletest", version = "1.17.0.bcr.2", dev_dependency = True, repo_name = "com_google_googletest")
 bazel_dep(name = "google_benchmark", version = "1.9.5", dev_dependency = True, repo_name = "com_google_benchmark")
