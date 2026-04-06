@@ -103,13 +103,13 @@ static void BM_dlop_add(benchmark::State& state) {
   state.counters["speed"] = benchmark::Counter(state.iterations() * state.range(0), benchmark::Counter::kIsRate);
 }
 
-static void BM_dlop_mut_add(benchmark::State& state) {
+static void BM_dlop_add_reassign(benchmark::State& state) {
   for (auto _ : state) {
     auto total = Dlop::create_integer(0);
 
     for (int j = 0; j < state.range(0); ++j) {
       auto v = Dlop::create_integer(j);
-      total->mut_add(v);
+      total  = total->add_op(v);
     }
 
     benchmark::DoNotOptimize(total);
@@ -127,12 +127,12 @@ static void BM_test(benchmark::State& state) {
   state.counters["speed"] = benchmark::Counter(state.iterations() * state.range(0), benchmark::Counter::kIsRate);
 }
 
-static void BM_dlop_mut_addi(benchmark::State& state) {
+static void BM_dlop_addi_reassign(benchmark::State& state) {
   for (auto _ : state) {
     auto total = Dlop::create_integer(0);
 
     for (int j = 0; j < state.range(0); ++j) {
-      total->mut_add(j);
+      total = total->add_op(j);
     }
 
     benchmark::DoNotOptimize(total);
@@ -148,8 +148,8 @@ BENCHMARK(BM_blop_add1)->Arg(512);
 BENCHMARK(BM_blop_add2)->Arg(512);
 BENCHMARK(BM_dlop_create)->Arg(512);
 BENCHMARK(BM_dlop_add)->Arg(512);
-BENCHMARK(BM_dlop_mut_add)->Arg(512);
-BENCHMARK(BM_dlop_mut_addi)->Arg(512);
+BENCHMARK(BM_dlop_add_reassign)->Arg(512);
+BENCHMARK(BM_dlop_addi_reassign)->Arg(512);
 BENCHMARK(BM_test)->Arg(512);
 
 #if 0

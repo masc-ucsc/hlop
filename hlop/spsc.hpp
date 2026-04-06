@@ -39,6 +39,9 @@
 #include <cstdlib>
 #include <iostream>
 #include <optional>
+#ifndef NDEBUG
+#include <thread>
+#endif
 
 #if 0
 template <typename T>
@@ -137,14 +140,35 @@ protected:
     std::free(*(reinterpret_cast<void**>(ptr) - 1));
   }
 
+#ifndef NDEBUG
+  void assert_owner_thread() const {
+    assert(owner_thread_id == std::this_thread::get_id());
+  }
+#endif
+
 public:
-  spsc256() : _buffer(reinterpret_cast<T*>(aligned_malloc(sizeof(void*) * (256 + 1)))), _head(0), _tail(0) {}
+  spsc256()
+      : _buffer(reinterpret_cast<T*>(aligned_malloc(sizeof(void*) * (256 + 1))))
+      , _head(0)
+      , _tail(0)
+#ifndef NDEBUG
+      , owner_thread_id(std::this_thread::get_id())
+#endif
+  {}
 
   ~spsc256() { aligned_free(_buffer); }
 
-  bool empty() const { return _head == _tail; }
+  bool empty() const {
+#ifndef NDEBUG
+    assert_owner_thread();
+#endif
+    return _head == _tail;
+  }
 
   bool enqueue(T& input) {
+#ifndef NDEBUG
+    assert_owner_thread();
+#endif
     const size_t head = _head.load(std::memory_order_relaxed);
 
     if (((_tail.load(std::memory_order_acquire) - (head + 1)) & 255) >= 1) {
@@ -156,6 +180,9 @@ public:
   }
 
   std::optional<T> dequeue() {
+#ifndef NDEBUG
+    assert_owner_thread();
+#endif
     const size_t tail = _tail.load(std::memory_order_relaxed);
 
     if (((_head.load(std::memory_order_acquire) - tail) & 255) >= 1) {
@@ -177,6 +204,10 @@ private:
 
   cache_line_pad_t    _pad2;
   std::atomic<size_t> _tail;
+
+#ifndef NDEBUG
+  std::thread::id owner_thread_id;
+#endif
 
   spsc256(const spsc256&) {}
   void operator=(const spsc256&) {}

@@ -185,10 +185,12 @@ public:
   static spool_ptr<Dlop> unknown_positive(int nbits);
   static spool_ptr<Dlop> unknown_negative(int nbits);
 
+protected:
   // --- Mutating arithmetic ---
   void mut_add(spool_ptr<Dlop> other);
   void mut_add(int64_t other);
 
+public:
   // --- Arithmetic operations ---
   spool_ptr<Dlop> add_op(spool_ptr<Dlop> other) const;
   spool_ptr<Dlop> add_op(int64_t other) const;
