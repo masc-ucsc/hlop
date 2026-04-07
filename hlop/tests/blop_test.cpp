@@ -7,10 +7,10 @@
 #include <iomanip>
 #include <iostream>
 #include <iterator>
+#include <print>
 #include <vector>
 
 #include "dlop.hpp"
-#include "fmt/format.h"
 #include "gtest/gtest.h"
 
 class Blop_test : public ::testing::Test {
@@ -33,8 +33,8 @@ TEST_F(Blop_test, addition) {
   int64_t dst2[3];
   Blop::subn(dst2, 3, dst1, src2);
 
-  fmt::print("dst1:{},{},{}\n", dst1[0], dst1[1], dst1[2]);
-  fmt::print("dst2:{},{},{}\n", dst2[0], dst2[1], dst2[2]);
+  std::print("dst1:{},{},{}\n", dst1[0], dst1[1], dst1[2]);
+  std::print("dst2:{},{},{}\n", dst2[0], dst2[1], dst2[2]);
 }
 
 TEST_F(Blop_test, shift) {
@@ -47,8 +47,8 @@ TEST_F(Blop_test, shift) {
     int64_t dst2[3];
     Blop::shrn(dst2, 3, dst1, i);
 
-    fmt::print("<<{} dst1:{},{},{}\n", i, dst1[0], dst1[1], dst1[2]);
-    fmt::print(">>{} dst2:{},{},{}\n", i, dst2[0], dst2[1], dst2[2]);
+    std::print("<<{} dst1:{},{},{}\n", i, dst1[0], dst1[1], dst1[2]);
+    std::print(">>{} dst2:{},{},{}\n", i, dst2[0], dst2[1], dst2[2]);
 
     EXPECT_EQ(dst2[0], src1[0]);
     EXPECT_EQ(dst2[1], src1[1]);

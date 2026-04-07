@@ -2,6 +2,8 @@
 
 load("@rules_cc//cc:defs.bzl", "cc_library", "cc_test")
 
+CPP23_COPTS = ["-std=c++23"]
+
 cc_library(
     name = "support",
     hdrs = [
@@ -9,6 +11,7 @@ cc_library(
         "str_tools.hpp",
     ],
     includes = ["."],
+    copts = CPP23_COPTS,
     visibility = ["//visibility:public"],
     deps = [
         "@abseil-cpp//absl/strings",
@@ -26,10 +29,10 @@ cc_library(
     ),
     hdrs = glob(["*.hpp"]),
     includes = ["."],
+    copts = CPP23_COPTS,
     visibility = ["//visibility:public"],
     deps = [
         ":support",
-        "@fmt",
         "@iassert",
         "@abseil-cpp//absl/strings",
         "@abseil-cpp//absl/types:span",
@@ -39,6 +42,7 @@ cc_library(
 cc_test(
     name = "blop_test",
     srcs = ["tests/blop_test.cpp"],
+    copts = CPP23_COPTS,
     deps = [
         ":hlop",
         "@com_google_googletest//:gtest_main",
@@ -48,6 +52,7 @@ cc_test(
 cc_test(
     name = "dlop_test",
     srcs = ["tests/dlop_test.cpp"],
+    copts = CPP23_COPTS,
     deps = [
         ":hlop",
         "//benchref:benchref",
@@ -58,6 +63,7 @@ cc_test(
 cc_test(
     name = "slop_test",
     srcs = ["tests/slop_test.cpp"],
+    copts = CPP23_COPTS,
     deps = [
         ":hlop",
         "@com_google_googletest//:gtest_main",

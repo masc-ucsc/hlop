@@ -3,8 +3,9 @@
 #include "dlop.hpp"
 
 #include <cstdlib>
+#include <format>
+#include <print>
 
-#include "fmt/format.h"
 #include "likely.hpp"
 #include "str_tools.hpp"
 
@@ -215,7 +216,7 @@ spool_ptr<Dlop> Dlop::from_binary(std::string_view txt, bool unsigned_result) {
     } else if (ch2 == '1') {
       dlop->or_base(1);
     } else {
-      throw std::runtime_error(fmt::format("ERROR: {} binary encoding could not use {}\n", txt, ch2));
+      throw std::runtime_error(std::format("ERROR: {} binary encoding could not use {}\n", txt, ch2));
     }
   }
 
@@ -257,7 +258,7 @@ spool_ptr<Dlop> Dlop::from_pyrope(std::string_view orig_txt) {
         ++skip_chars;
         sel_ch = txt[skip_chars];
         if (sel_ch != 'b') {
-          throw std::runtime_error(fmt::format("ERROR: {} unknown pyrope encoding only binary can be signed 0sb...\n", orig_txt));
+          throw std::runtime_error(std::format("ERROR: {} unknown pyrope encoding only binary can be signed 0sb...\n", orig_txt));
         }
         assert(!unsigned_result);
       } else {
@@ -279,7 +280,7 @@ spool_ptr<Dlop> Dlop::from_pyrope(std::string_view orig_txt) {
         shift_mode = 3;
         ++skip_chars;
       } else {
-        throw std::runtime_error(fmt::format("ERROR: {} unknown pyrope encoding (leading {})\n", orig_txt, sel_ch));
+        throw std::runtime_error(std::format("ERROR: {} unknown pyrope encoding (leading {})\n", orig_txt, sel_ch));
       }
     }
   } else {
@@ -304,7 +305,7 @@ spool_ptr<Dlop> Dlop::from_pyrope(std::string_view orig_txt) {
         dlop->add_base(v);
       } else {
         if (txt[i] == '_') continue;
-        throw std::runtime_error(fmt::format("ERROR: {} encoding could not use {}\n", orig_txt, txt[i]));
+        throw std::runtime_error(std::format("ERROR: {} encoding could not use {}\n", orig_txt, txt[i]));
       }
     }
   } else if (shift_mode == 1) {
@@ -321,13 +322,13 @@ spool_ptr<Dlop> Dlop::from_pyrope(std::string_view orig_txt) {
 
       auto v = char_to_val[(uint8_t)txt[i]];
       if (unlikely(v < 0)) {
-        throw std::runtime_error(fmt::format("ERROR: {} encoding could not use {}\n", orig_txt, txt[i]));
+        throw std::runtime_error(std::format("ERROR: {} encoding could not use {}\n", orig_txt, txt[i]));
       }
 
       auto char_sa = char_to_bits[(uint8_t)txt[i]];
       if (unlikely(char_sa > shift_mode)) {
         throw std::runtime_error(
-            fmt::format("ERROR: {} invalid syntax for number {} bits needed for '{}'", orig_txt, char_sa, txt[i]));
+            std::format("ERROR: {} invalid syntax for number {} bits needed for '{}'", orig_txt, char_sa, txt[i]));
       }
       dlop->shl_base(shift_mode);
       dlop->or_base(v);
@@ -1199,7 +1200,7 @@ std::string Dlop::to_pyrope() const {
   if (type == Type::String) {
     auto str = to_string();
     if (str.empty()) return "''";
-    return fmt::format("'{}'", str);
+    return std::format("'{}'", str);
   }
 
   if (type == Type::Boolean) {
@@ -1209,9 +1210,9 @@ std::string Dlop::to_pyrope() const {
   if (has_unknowns()) {
     auto bin = to_binary();
     if (is_negative()) {
-      return fmt::format("0sb{}", bin);
+      return std::format("0sb{}", bin);
     }
-    return fmt::format("0b{}", bin);
+    return std::format("0b{}", bin);
   }
 
   if (is_i()) {
@@ -1221,9 +1222,9 @@ std::string Dlop::to_pyrope() const {
     }
 
     if (val < 0) {
-      return fmt::format("-0x{:x}", -val);
+      return std::format("-0x{:x}", -val);
     }
-    return fmt::format("0x{:x}", val);
+    return std::format("0x{:x}", val);
   }
 
   // Large number: convert to hex
@@ -1235,18 +1236,18 @@ std::string Dlop::to_pyrope() const {
     auto pos = neg_op();
     for (int i = pos->size - 1; i >= 0; --i) {
       if (i == pos->size - 1) {
-        result += fmt::format("{:x}", static_cast<uint64_t>(pos->base[i]));
+        result += std::format("{:x}", static_cast<uint64_t>(pos->base[i]));
       } else {
-        result += fmt::format("{:016x}", static_cast<uint64_t>(pos->base[i]));
+        result += std::format("{:016x}", static_cast<uint64_t>(pos->base[i]));
       }
     }
   } else {
     result = "0x";
     for (int i = size - 1; i >= 0; --i) {
       if (i == size - 1) {
-        result += fmt::format("{:x}", static_cast<uint64_t>(base[i]));
+        result += std::format("{:x}", static_cast<uint64_t>(base[i]));
       } else {
-        result += fmt::format("{:016x}", static_cast<uint64_t>(base[i]));
+        result += std::format("{:016x}", static_cast<uint64_t>(base[i]));
       }
     }
   }
@@ -1258,46 +1259,46 @@ std::string Dlop::to_verilog() const {
 
   if (has_unknowns()) {
     auto bin = to_binary();
-    return fmt::format("{}'sb{}", get_bits(), bin);
+    return std::format("{}'sb{}", get_bits(), bin);
   }
 
   if (type == Type::String) {
-    return fmt::format("\"{}\"", to_string());
+    return std::format("\"{}\"", to_string());
   }
 
   int nbits = get_bits();
   if (is_negative()) {
     auto pos = neg_op();
     // Two's complement: (1 << nbits) - abs
-    return fmt::format("{}'sh{}", nbits, pos->to_pyrope().substr(2));  // skip "0x"
+    return std::format("{}'sh{}", nbits, pos->to_pyrope().substr(2));  // skip "0x"
   }
 
   if (is_i()) {
-    return fmt::format("{}'sh{:x}", nbits, static_cast<uint64_t>(base[0]));
+    return std::format("{}'sh{:x}", nbits, static_cast<uint64_t>(base[0]));
   }
 
   std::string hex;
   for (int i = size - 1; i >= 0; --i) {
     if (i == size - 1) {
-      hex += fmt::format("{:x}", static_cast<uint64_t>(base[i]));
+      hex += std::format("{:x}", static_cast<uint64_t>(base[i]));
     } else {
-      hex += fmt::format("{:016x}", static_cast<uint64_t>(base[i]));
+      hex += std::format("{:016x}", static_cast<uint64_t>(base[i]));
     }
   }
-  return fmt::format("{}'sh{}", nbits, hex);
+  return std::format("{}'sh{}", nbits, hex);
 }
 
 // =========================================================================
 // Debug
 // =========================================================================
 void Dlop::dump() const {
-  fmt::print("size:{}\n  base:0x", size);
+  std::print("size:{}\n  base:0x", size);
   for (int i = size - 1; i >= 0; --i) {
-    fmt::print("_{:016x}", (uint64_t)base[i]);
+    std::print("_{:016x}", (uint64_t)base[i]);
   }
-  fmt::print("\n extra:0x");
+  std::print("\n extra:0x");
   for (int i = size - 1; i >= 0; --i) {
-    fmt::print("_{:016x}", (uint64_t)extra[i]);
+    std::print("_{:016x}", (uint64_t)extra[i]);
   }
-  fmt::print("\n");
+  std::print("\n");
 }

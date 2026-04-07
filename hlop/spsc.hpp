@@ -114,7 +114,7 @@ protected:
   }
 
   static inline void* aligned_malloc(size_t size) {
-    if (std::alignment_of<T>::value >= 256) {
+    if (alignof(T) >= 256) {
       return std::malloc(size);
     }
     size_t alignment = 256;
@@ -133,7 +133,7 @@ protected:
       return;
     }
 
-    if (std::alignment_of<T>::value >= 256) {
+    if (alignof(T) >= 256) {
       return std::free(ptr);
     }
 

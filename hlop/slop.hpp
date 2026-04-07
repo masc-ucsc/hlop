@@ -12,11 +12,12 @@
 #include <array>
 #include <cassert>
 #include <cstdint>
+#include <format>
+#include <print>
 #include <string>
 #include <string_view>
 
 #include "blop.hpp"
-#include "fmt/format.h"
 
 template <int N>
 class Slop {
@@ -180,7 +181,7 @@ public:
       } else if (ch == '0') {
         // nothing
       } else {
-        throw std::runtime_error(fmt::format("ERROR: {} binary encoding could not use {}\n", txt, ch));
+        throw std::runtime_error(std::format("ERROR: {} binary encoding could not use {}\n", txt, ch));
       }
     }
     return s;
@@ -219,7 +220,7 @@ public:
           ++skip_chars;
           sel_ch = txt[skip_chars];
           if (sel_ch != 'b') {
-            throw std::runtime_error(fmt::format("ERROR: {} unknown pyrope encoding\n", orig_txt));
+            throw std::runtime_error(std::format("ERROR: {} unknown pyrope encoding\n", orig_txt));
           }
         } else {
           unsigned_result = true;
@@ -231,7 +232,7 @@ public:
         else if (std::isdigit(sel_ch)) { shift_mode = 10; }
         else if (sel_ch == 'o') { shift_mode = 3; ++skip_chars; }
         else {
-          throw std::runtime_error(fmt::format("ERROR: {} unknown pyrope encoding\n", orig_txt));
+          throw std::runtime_error(std::format("ERROR: {} unknown pyrope encoding\n", orig_txt));
         }
       }
     } else {
@@ -256,7 +257,7 @@ public:
         } else if (txt[i] == '_') {
           continue;
         } else {
-          throw std::runtime_error(fmt::format("ERROR: {} encoding could not use {}\n", orig_txt, txt[i]));
+          throw std::runtime_error(std::format("ERROR: {} encoding could not use {}\n", orig_txt, txt[i]));
         }
       }
     } else if (shift_mode == 1) {
@@ -271,7 +272,7 @@ public:
         if (txt[i] == '_') continue;
         auto v = char_to_val[(uint8_t)txt[i]];
         if (v < 0) {
-          throw std::runtime_error(fmt::format("ERROR: {} encoding could not use {}\n", orig_txt, txt[i]));
+          throw std::runtime_error(std::format("ERROR: {} encoding could not use {}\n", orig_txt, txt[i]));
         }
         Blop::shl<n_words>(result.base_, result.base_, shift_mode);
         result.base_[0] |= v;
@@ -650,7 +651,7 @@ public:
     if (type_ == Type::String) {
       auto str = to_string();
       if (str.empty()) return "''";
-      return fmt::format("'{}'", str);
+      return std::format("'{}'", str);
     }
 
     if (type_ == Type::Boolean) {
@@ -659,15 +660,15 @@ public:
 
     if (has_extra()) {
       auto bin = to_binary();
-      if (is_negative()) return fmt::format("0sb{}", bin);
-      return fmt::format("0b{}", bin);
+      if (is_negative()) return std::format("0sb{}", bin);
+      return std::format("0b{}", bin);
     }
 
     if (is_i()) {
       int64_t val = to_i();
       if (val >= -63 && val <= 63) return std::to_string(val);
-      if (val < 0) return fmt::format("-0x{:x}", -val);
-      return fmt::format("0x{:x}", val);
+      if (val < 0) return std::format("-0x{:x}", -val);
+      return std::format("0x{:x}", val);
     }
 
     // Multi-word hex
@@ -676,9 +677,9 @@ public:
       std::string result = "-0x";
       for (int i = n_words - 1; i >= 0; --i) {
         if (i == n_words - 1) {
-          result += fmt::format("{:x}", static_cast<uint64_t>(pos.base_[i]));
+          result += std::format("{:x}", static_cast<uint64_t>(pos.base_[i]));
         } else {
-          result += fmt::format("{:016x}", static_cast<uint64_t>(pos.base_[i]));
+          result += std::format("{:016x}", static_cast<uint64_t>(pos.base_[i]));
         }
       }
       return result;
@@ -687,9 +688,9 @@ public:
     std::string result = "0x";
     for (int i = n_words - 1; i >= 0; --i) {
       if (i == n_words - 1) {
-        result += fmt::format("{:x}", static_cast<uint64_t>(base_[i]));
+        result += std::format("{:x}", static_cast<uint64_t>(base_[i]));
       } else {
-        result += fmt::format("{:016x}", static_cast<uint64_t>(base_[i]));
+        result += std::format("{:016x}", static_cast<uint64_t>(base_[i]));
       }
     }
     return result;
@@ -698,33 +699,33 @@ public:
   std::string to_verilog() const {
     if (is_known_false()) return "'sb0";
     if (has_extra()) {
-      return fmt::format("{}'sb{}", get_bits(), to_binary());
+      return std::format("{}'sb{}", get_bits(), to_binary());
     }
     if (type_ == Type::String) {
-      return fmt::format("\"{}\"", to_string());
+      return std::format("\"{}\"", to_string());
     }
     int nbits = get_bits();
     if (is_i()) {
-      return fmt::format("{}'sh{:x}", nbits, static_cast<uint64_t>(base_[0]));
+      return std::format("{}'sh{:x}", nbits, static_cast<uint64_t>(base_[0]));
     }
     std::string hex;
     for (int i = n_words - 1; i >= 0; --i) {
-      if (i == n_words - 1) hex += fmt::format("{:x}", static_cast<uint64_t>(base_[i]));
-      else hex += fmt::format("{:016x}", static_cast<uint64_t>(base_[i]));
+      if (i == n_words - 1) hex += std::format("{:x}", static_cast<uint64_t>(base_[i]));
+      else hex += std::format("{:016x}", static_cast<uint64_t>(base_[i]));
     }
-    return fmt::format("{}'sh{}", nbits, hex);
+    return std::format("{}'sh{}", nbits, hex);
   }
 
   // --- Debug ---
   void dump() const {
-    fmt::print("Slop<{}> base:0x", N);
+    std::print("Slop<{}> base:0x", N);
     for (int i = n_words - 1; i >= 0; --i) {
-      fmt::print("_{:016x}", static_cast<uint64_t>(base_[i]));
+      std::print("_{:016x}", static_cast<uint64_t>(base_[i]));
     }
-    fmt::print("\n        extra:0x");
+    std::print("\n        extra:0x");
     for (int i = n_words - 1; i >= 0; --i) {
-      fmt::print("_{:016x}", static_cast<uint64_t>(extra_[i]));
+      std::print("_{:016x}", static_cast<uint64_t>(extra_[i]));
     }
-    fmt::print("\n");
+    std::print("\n");
   }
 };

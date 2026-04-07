@@ -9,9 +9,9 @@
 
 #include "absl/container/flat_hash_map.h"
 #include "absl/strings/str_cat.h"
-#include "fmt/format.h"
 #include "gtest/gtest.h"
 #include "lrand.hpp"
+#include <print>
 #include "sint.hpp"
 #include "str_tools.hpp"
 #include "uint.hpp"
@@ -110,7 +110,7 @@ public:
 
 template <int N>
 void print_method(const UInt<N> v) {
-  fmt::print("{} bits:{}\n", v.to_string(), N);
+  std::print("{} bits:{}\n", v.to_string(), N);
 }
 
 TEST_F(Lconst_test, to_from_pyrope) {
@@ -121,7 +121,7 @@ TEST_F(Lconst_test, to_from_pyrope) {
 
 TEST_F(Lconst_test, lvar_sizes) {
   auto l1 = Lconst::from_pyrope("-1");  // 0xFF or -1
-  fmt::print("l1:{} bits:{}\n", l1.to_pyrope(), l1.get_bits());
+  std::print("l1:{} bits:{}\n", l1.to_pyrope(), l1.get_bits());
   EXPECT_TRUE(Lconst::from_pyrope("false") == l1.eq_op(Lconst::from_pyrope("0xFF")));
 
   EXPECT_FALSE(l1.eq_op(Lconst::from_pyrope("-1")).is_known_false());
@@ -133,17 +133,17 @@ TEST_F(Lconst_test, lvar_sizes) {
   EXPECT_EQ(l1.get_bits(), 1);
 
   auto s1 = l1 + Lconst::from_pyrope("1");
-  fmt::print("s1:{} bits:{}\n", s1.to_pyrope(), s1.get_bits());
+  std::print("s1:{} bits:{}\n", s1.to_pyrope(), s1.get_bits());
   EXPECT_EQ(s1.eq_op(Lconst::from_pyrope("0x0")).is_known_false(), false);
   EXPECT_EQ(s1.get_bits(), 0);
 
   auto s2 = l1 + Lconst::from_pyrope("-1");
-  fmt::print("s2:{} bits:{}\n", s2.to_pyrope(), s2.get_bits());
+  std::print("s2:{} bits:{}\n", s2.to_pyrope(), s2.get_bits());
   EXPECT_FALSE(s2.eq_op(Lconst::from_pyrope("-2")).is_known_false());
   EXPECT_EQ(s2.get_bits(), 2);
 
   auto s4 = l1 + Lconst::from_pyrope("0x1F");
-  fmt::print("s4:{} bits:{}\n", s4.to_pyrope(), s4.get_bits());
+  std::print("s4:{} bits:{}\n", s4.to_pyrope(), s4.get_bits());
   EXPECT_FALSE(s4.eq_op(Lconst::from_pyrope("0x1E")).is_known_false());
   EXPECT_EQ(s4.get_bits(), 6);
 }
@@ -819,11 +819,11 @@ TEST_F(Lconst_test, Trivial) {
   print_method(a1u);
   print_method(a16u);
 
-  fmt::print("UInt<1> has sizeof {}\n", sizeof(a1u));
-  fmt::print("UInt<16> has sizeof {}\n", sizeof(a16u));
-  fmt::print("UInt<64> has sizeof {}\n", sizeof(a64u));
-  fmt::print("UInt<80> has sizeof {}\n", sizeof(a80u));
-  fmt::print("UInt<128> has sizeof {}\n", sizeof(a128u));
+  std::print("UInt<1> has sizeof {}\n", sizeof(a1u));
+  std::print("UInt<16> has sizeof {}\n", sizeof(a16u));
+  std::print("UInt<64> has sizeof {}\n", sizeof(a64u));
+  std::print("UInt<80> has sizeof {}\n", sizeof(a80u));
+  std::print("UInt<128> has sizeof {}\n", sizeof(a128u));
 
   EXPECT_EQ(a16u.cat(b16u), UInt<32>(0xcafebebe));
   EXPECT_EQ(a16u.cat(a64u), UInt<80>("0xcafee2bd5b4ff8b30fc8"));
@@ -862,16 +862,16 @@ TEST_F(Lconst_test, Trivial) {
 TEST_F(Lconst_test, used_bits) {
   auto a = 0x010_uint;
   print_method(a);
-  fmt::print("a used bits:{}\n", a.bit_length());
+  std::print("a used bits:{}\n", a.bit_length());
 
   auto b = 0x010_uint;  // runtime or compile time
   print_method(b);
-  fmt::print("b used bits:{}\n", b.bit_length());
+  std::print("b used bits:{}\n", b.bit_length());
 
   uint64_t v        = 0x10;
   auto     uint_ptr = reinterpret_cast<UInt<8> *>(&v);
   auto    &u        = *uint_ptr;
-  fmt::print("u used bits:{}\n", u.bit_length());
+  std::print("u used bits:{}\n", u.bit_length());
 }
 
 TEST_F(Lconst_test, boost) {
@@ -931,13 +931,13 @@ TEST_F(Lconst_test, hexa_check) {
   auto v2 = Lconst::unserialize(s1);
 
 #if 0
-  fmt::print("or:");
+  std::print("or:");
   for(auto i=0u;i<s1.size();++i) {
-    fmt::print(":{}", (int)s1[i]);
+    std::print(":{}", (int)s1[i]);
   }
-  fmt::print("\n");
-  fmt::print("v1:{}\n", v1.to_pyrope());
-  fmt::print("v2:{}\n", v2.to_pyrope());
+  std::print("\n");
+  std::print("v1:{}\n", v1.to_pyrope());
+  std::print("v2:{}\n", v2.to_pyrope());
 #endif
 
   EXPECT_EQ(v1, v2);
@@ -974,9 +974,9 @@ TEST_F(Lconst_test, hexa_check_long) {
 
     auto v1 = Lconst::from_pyrope(rnd_list[i]);
     auto v2 = Lconst::unserialize(v1.serialize());
-    // fmt::print("raw:{}\n",rnd_list[i]);
-    // fmt::print("1  :{}\n",v1.to_pyrope());
-    // fmt::print("2  :{}\n",v2.to_pyrope());
+    // std::print("raw:{}\n",rnd_list[i]);
+    // std::print("1  :{}\n",v1.to_pyrope());
+    // std::print("2  :{}\n",v2.to_pyrope());
     // v1.dump();
     // v2.dump();
     EXPECT_EQ(v1, v2);
@@ -989,9 +989,9 @@ TEST_F(Lconst_test, hexa_check_long) {
 
       auto v1 = Lconst::unserialize(it->second);
       auto v2 = Lconst::from_pyrope(rnd_list[i]);
-      // fmt::print("raw:{}\n",rnd_list[i]);
-      // fmt::print("   :{}\n",v1.to_pyrope());
-      // fmt::print("   :{}\n",v2.to_pyrope());
+      // std::print("raw:{}\n",rnd_list[i]);
+      // std::print("   :{}\n",v1.to_pyrope());
+      // std::print("   :{}\n",v2.to_pyrope());
       EXPECT_EQ(v1, v2);
     }
 
@@ -1066,7 +1066,7 @@ TEST_F(Lconst_test, dec_check) {
     auto a2 = Lconst::from_pyrope(padded);
 #if 0
     if (a2.get_raw_num() != c) {
-      fmt::print("PADDED:{}\n", padded);
+      std::print("PADDED:{}\n", padded);
       a2.dump();
       a1.dump();
     }
@@ -1077,11 +1077,11 @@ TEST_F(Lconst_test, dec_check) {
     auto b     = Lconst::from_pyrope(fmt_a);
 
 #if 0
-    fmt::print("orig:{}\n",rnd_list[i]);
-    fmt::print("  a1:{}\n",a1.to_pyrope());
-    fmt::print("  a2:{}\n",a2.to_pyrope());
-    fmt::print("padd:{}\n",padded);
-    fmt::print("   b:{}\n",b.to_pyrope());
+    std::print("orig:{}\n",rnd_list[i]);
+    std::print("  a1:{}\n",a1.to_pyrope());
+    std::print("  a2:{}\n",a2.to_pyrope());
+    std::print("padd:{}\n",padded);
+    std::print("   b:{}\n",b.to_pyrope());
 #endif
 
     EXPECT_EQ(b.get_raw_num(), c);
@@ -1212,8 +1212,8 @@ TEST_F(Lconst_test, binary) {
 
   Lconst g4 = Lconst::from_pyrope("0sb11111xxxx_xxxx_");
   g4.dump();
-  fmt::print("pyrope :{}\n", g4.to_pyrope());
-  fmt::print("verilog:{}\n", g4.to_verilog());
+  std::print("pyrope :{}\n", g4.to_pyrope());
+  std::print("verilog:{}\n", g4.to_verilog());
   EXPECT_EQ(g4.to_pyrope(), "0sb1111_????_????");
   EXPECT_EQ(g4.to_verilog(), "9'sb1????????");
   EXPECT_EQ(g4.to_binary(), "1????????");
@@ -1270,12 +1270,12 @@ TEST_F(Lconst_test, serialize) {
 
   b.dump();
   s_b.dump();
-  fmt::print("  a:{}\n", a.to_pyrope());
-  fmt::print("s_a:{}\n", s_a.to_pyrope());
-  fmt::print("  b:{}\n", b.to_pyrope());
-  fmt::print("s_b:{}\n", s_b.to_pyrope());
-  fmt::print("  c:{}\n", c.to_pyrope());
-  fmt::print("s_c:{}\n", s_c.to_pyrope());
+  std::print("  a:{}\n", a.to_pyrope());
+  std::print("s_a:{}\n", s_a.to_pyrope());
+  std::print("  b:{}\n", b.to_pyrope());
+  std::print("s_b:{}\n", s_b.to_pyrope());
+  std::print("  c:{}\n", c.to_pyrope());
+  std::print("s_c:{}\n", s_c.to_pyrope());
 
   EXPECT_EQ(a, s_a);
   EXPECT_EQ(b, s_b);
@@ -1315,15 +1315,15 @@ TEST_F(Lconst_test, cpp_int_vs_lconst) {
   a_not      = ~a;
   auto b_not = b;
   b_not      = ~b;
-  fmt::print("{} s:{} p:{}\n", a.str(), a.sign(), a_not.str());
-  fmt::print("{} s:{} p:{}\n", b.str(), b.sign(), b_not.str());
+  std::print("{} s:{} p:{}\n", a.str(), a.sign(), a_not.str());
+  std::print("{} s:{} p:{}\n", b.str(), b.sign(), b_not.str());
 
   auto c_and_not = c_and;
   auto d_and_not = d_and;
   c_and_not      = ~c_and;
   d_and_not      = ~d_and;
-  fmt::print("{} = {} & {} s:{} ~:{}\n", c_and.str(), a.str(), b.str(), c_and.sign(), c_and_not.str());
-  fmt::print("{} = {} & {} s:{} ~:{}\n", d_and.str(), a.str(), a.str(), c_and.sign(), d_and_not.str());
+  std::print("{} = {} & {} s:{} ~:{}\n", c_and.str(), a.str(), b.str(), c_and.sign(), c_and_not.str());
+  std::print("{} = {} & {} s:{} ~:{}\n", d_and.str(), a.str(), a.str(), c_and.sign(), d_and_not.str());
 
   cpp_int c_or = a | b;
   cpp_int d_or = a | a;
@@ -1332,8 +1332,8 @@ TEST_F(Lconst_test, cpp_int_vs_lconst) {
   auto d_or_not = d_or;
   c_or_not      = ~c_or;
   d_or_not      = ~d_or;
-  fmt::print("{} = {} | {} s:{} ~:{}\n", c_or.str(), a.str(), b.str(), c_or.sign(), c_or_not.str());
-  fmt::print("{} = {} | {} s:{} ~:{}\n", d_or.str(), a.str(), a.str(), c_or.sign(), d_or_not.str());
+  std::print("{} = {} | {} s:{} ~:{}\n", c_or.str(), a.str(), b.str(), c_or.sign(), c_or_not.str());
+  std::print("{} = {} | {} s:{} ~:{}\n", d_or.str(), a.str(), a.str(), c_or.sign(), d_or_not.str());
 
   Lconst l_a = Lconst::from_pyrope("-1");
   Lconst l_b = Lconst::from_pyrope("0xFF");
@@ -1355,8 +1355,8 @@ TEST_F(Lconst_test, cpp_int_vs_lconst) {
   cpp_int c_eq = a == b;
   cpp_int d_eq = a == a;
 
-  fmt::print("{} = {} == {} s:{}\n", c_eq.str(), a.str(), b.str(), c_eq.sign());
-  fmt::print("{} = {} == {} s:{}\n", d_eq.str(), a.str(), a.str(), c_eq.sign());
+  std::print("{} = {} == {} s:{}\n", c_eq.str(), a.str(), b.str(), c_eq.sign());
+  std::print("{} = {} == {} s:{}\n", d_eq.str(), a.str(), a.str(), c_eq.sign());
 
   Lconst l_c_eq = l_a.eq_op(l_b);
   Lconst l_d_eq = l_a.eq_op(l_a);
@@ -1577,7 +1577,7 @@ TEST_F(Lconst_test, lconst_sign) {
 
     EXPECT_TRUE(!pos1.is_negative());
     auto zero = pos1.rsh_op(2).and_op(1);
-    fmt::print("zero:{}\n", zero.to_pyrope());
+    std::print("zero:{}\n", zero.to_pyrope());
     EXPECT_EQ(zero, Lconst::from_pyrope("0b?"));
   }
 

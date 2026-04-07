@@ -2,6 +2,8 @@
 
 load("@rules_cc//cc:defs.bzl", "cc_library", "cc_test")
 
+CPP23_COPTS = ["-std=c++23"]
+
 cc_library(
     name = "benchref",
     srcs = ["lconst.cpp"],
@@ -14,6 +16,7 @@ cc_library(
         "woothash.hpp",
     ],
     includes = ["."],
+    copts = CPP23_COPTS,
     visibility = ["//visibility:public"],
     deps = [
         "//hlop:hlop",
@@ -21,7 +24,6 @@ cc_library(
         "@abseil-cpp//absl/strings",
         "@abseil-cpp//absl/types:span",
         "@boost.multiprecision",
-        "@fmt",
         "@iassert",
     ],
 )
@@ -29,6 +31,7 @@ cc_library(
 cc_test(
     name = "lconst_test",
     srcs = ["tests/lconst_test.cpp"],
+    copts = CPP23_COPTS,
     deps = [
         ":benchref",
         "//hlop:hlop",
@@ -41,6 +44,7 @@ cc_test(
 cc_test(
     name = "lconst_bench",
     srcs = ["tests/lconst_bench.cpp"],
+    copts = CPP23_COPTS,
     deps = [
         ":benchref",
         "//hlop:hlop",
@@ -53,6 +57,7 @@ cc_test(
 cc_test(
     name = "cross_test",
     srcs = ["tests/cross_test.cpp"],
+    copts = CPP23_COPTS,
     deps = [
         ":benchref",
         "//hlop:hlop",

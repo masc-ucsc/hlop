@@ -4,7 +4,6 @@
 
 #include <string>
 
-#include "fmt/format.h"
 #include "gtest/gtest.h"
 #include "lconst.hpp"
 
