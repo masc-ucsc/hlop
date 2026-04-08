@@ -69,3 +69,13 @@ cc_test(
         "@com_google_googletest//:gtest_main",
     ],
 )
+
+cc_test(
+    name = "eval_test",
+    srcs = ["tests/eval_test.cpp"],
+    copts = CPP23_COPTS,
+    deps = [
+        ":hlop",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
