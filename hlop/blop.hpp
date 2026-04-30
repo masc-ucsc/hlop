@@ -15,6 +15,7 @@
 #include <cassert>
 #include <cstdint>
 #include <cstring>
+#include <type_traits>
 
 class Blop {
 public:
@@ -57,7 +58,7 @@ public:
   }
 
   template <size_t N>
-  static void add(std::array<int64_t, N> &dest, const std::array<int64_t, N> &src1, const std::array<int64_t, N> &src2) {
+  static constexpr void add(std::array<int64_t, N> &dest, const std::array<int64_t, N> &src1, const std::array<int64_t, N> &src2) {
     if constexpr (N == 1) {
       dest[0] = src1[0] + src2[0];
     } else {
@@ -122,7 +123,7 @@ public:
   }
 
   template <size_t N>
-  static void neg(std::array<int64_t, N> &dest, const std::array<int64_t, N> &src) {
+  static constexpr void neg(std::array<int64_t, N> &dest, const std::array<int64_t, N> &src) {
     if constexpr (N == 1) {
       dest[0] = -src[0];
     } else {
@@ -170,7 +171,7 @@ public:
   }
 
   template <size_t N>
-  static void shl(std::array<int64_t, N> &dest, const std::array<int64_t, N> &src1, int64_t amount) {
+  static constexpr void shl(std::array<int64_t, N> &dest, const std::array<int64_t, N> &src1, int64_t amount) {
     if constexpr (N == 1) {
       assert(amount >= 0 && amount < 64);
       dest[0] = src1[0] << amount;
@@ -429,11 +430,31 @@ public:
   }
 
   template <size_t N>
-  static void mult(std::array<int64_t, N> &dest, const std::array<int64_t, N> &src1, const std::array<int64_t, N> &src2) {
+  static constexpr void mult(std::array<int64_t, N> &dest, const std::array<int64_t, N> &src1, const std::array<int64_t, N> &src2) {
     if constexpr (N == 1) {
       dest[0] = src1[0] * src2[0];
     } else {
-      multn(dest.data(), N, src1.data(), N, src2.data(), N);
+      // Multi-word case is not constexpr-evaluable (uses pointer arithmetic
+      // through `multn`). For consteval contexts, callers are expected to
+      // stay within the N==1 fast path.
+      if (std::is_constant_evaluated()) {
+        // Schoolbook multiplication on the constant-evaluation path.
+        std::array<int64_t, N> tmp{};
+        for (size_t i = 0; i < N; ++i) {
+          uint64_t carry = 0;
+          for (size_t j = 0; j + i < N; ++j) {
+            __uint128_t prod = static_cast<__uint128_t>(static_cast<uint64_t>(src1[i]))
+                             * static_cast<__uint128_t>(static_cast<uint64_t>(src2[j]))
+                             + static_cast<__uint128_t>(static_cast<uint64_t>(tmp[i + j]))
+                             + carry;
+            tmp[i + j] = static_cast<int64_t>(static_cast<uint64_t>(prod));
+            carry      = static_cast<uint64_t>(prod >> 64);
+          }
+        }
+        dest = tmp;
+      } else {
+        multn(dest.data(), N, src1.data(), N, src2.data(), N);
+      }
     }
   }
 
@@ -703,7 +724,7 @@ public:
   // A positive value v needs floor(log2(v)) + 2 bits (one for sign).
   // A negative value v needs floor(log2(-v-1)) + 2 bits.
   // =========================================================================
-  static int get_bits64(const int64_t src) {
+  static constexpr int get_bits64(const int64_t src) {
     if (src == 0)  return 0;
     if (src == -1) return 1;
     if (src > 0) {
@@ -712,7 +733,7 @@ public:
     return 64 - __builtin_clzll(static_cast<uint64_t>(-(src + 1))) + 1;
   }
 
-  static int get_bitsn(const int64_t *src, size_t sz) {
+  static constexpr int get_bitsn(const int64_t *src, size_t sz) {
     int64_t sign = src[sz - 1] < 0 ? -1 : 0;
 
     // Find topmost word that differs from sign extension
@@ -741,7 +762,7 @@ public:
   }
 
   template <size_t N>
-  static int get_bits(const std::array<int64_t, N> &src) {
+  static constexpr int get_bits(const std::array<int64_t, N> &src) {
     if constexpr (N == 1) {
       return get_bits64(src[0]);
     } else {

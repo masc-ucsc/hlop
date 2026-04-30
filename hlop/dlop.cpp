@@ -128,6 +128,20 @@ spool_ptr<Dlop> Dlop::from_string(std::string_view txt) {
   return create_string(txt);
 }
 
+spool_ptr<Dlop> Dlop::from_ref(std::string_view txt) {
+  // ref shares the Invalid tag with `invalid()` — distinguished by carrying
+  // a non-zero byte-packed payload. Mirrors Lconst::from_ref encoding.
+  if (txt.empty()) {
+    return invalid();
+  }
+  auto dlop = spool_ptr<Dlop>::make(Type::Invalid, 1 + txt.size() / 8);
+  for (int i = txt.size() - 1; i >= 0; --i) {
+    dlop->shl_base(8);
+    dlop->or_base(static_cast<unsigned char>(txt[i]));
+  }
+  return dlop;
+}
+
 spool_ptr<Dlop> Dlop::invalid() {
   return spool_ptr<Dlop>::make(Type::Invalid, 0);
 }
@@ -231,32 +245,44 @@ spool_ptr<Dlop> Dlop::from_pyrope(std::string_view orig_txt) {
     return spool_ptr<Dlop>::make(Type::Invalid, 0);
   }
 
-  auto txt = str_tools::to_lower(orig_txt);
+  // Operate directly on the input string_view — avoids the std::string copy
+  // that `str_tools::to_lower` did. Per-character lowercasing is local; the
+  // hex char_to_val table already accepts both cases for `[a-fA-F]`.
+  auto lower = [](char c) -> char {
+    return (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c;
+  };
+  auto eq_ci = [&](std::string_view a, std::string_view b) {
+    if (a.size() != b.size()) return false;
+    for (size_t i = 0; i < a.size(); ++i) {
+      if (lower(a[i]) != b[i]) return false;
+    }
+    return true;
+  };
 
-  if (txt == "true")  return Dlop::create_bool(true);
-  if (txt == "false") return Dlop::create_bool(false);
+  if (eq_ci(orig_txt, "true"))  return Dlop::create_bool(true);
+  if (eq_ci(orig_txt, "false")) return Dlop::create_bool(false);
 
-  bool negative   = false;
-  auto skip_chars = 0u;
+  bool   negative   = false;
+  size_t skip_chars = 0;
 
-  if (txt.front() == '-') {
+  if (orig_txt.front() == '-') {
     negative   = true;
     skip_chars = 1;
-  } else if (txt.front() == '+') {
+  } else if (orig_txt.front() == '+') {
     skip_chars = 1;
   }
 
-  auto shift_mode      = 0;
+  int  shift_mode      = 0;
   bool unsigned_result = false;
 
-  if (txt.size() >= (1 + skip_chars) && std::isdigit(txt[skip_chars])) {
+  if (orig_txt.size() >= (1 + skip_chars) && std::isdigit(orig_txt[skip_chars])) {
     shift_mode = 10;
-    if (txt.size() >= (2 + skip_chars) && txt[skip_chars] == '0') {
+    if (orig_txt.size() >= (2 + skip_chars) && orig_txt[skip_chars] == '0') {
       ++skip_chars;
-      auto sel_ch = txt[skip_chars];
+      char sel_ch = lower(orig_txt[skip_chars]);
       if (sel_ch == 's') {
         ++skip_chars;
-        sel_ch = txt[skip_chars];
+        sel_ch = lower(orig_txt[skip_chars]);
         if (sel_ch != 'b') {
           throw std::runtime_error(std::format("ERROR: {} unknown pyrope encoding only binary can be signed 0sb...\n", orig_txt));
         }
@@ -284,8 +310,8 @@ spool_ptr<Dlop> Dlop::from_pyrope(std::string_view orig_txt) {
       }
     }
   } else {
-    int start_i = static_cast<int>(orig_txt.size());
-    int end_i   = 0;
+    size_t start_i = orig_txt.size();
+    size_t end_i   = 0;
 
     if (orig_txt.size() > 1 && orig_txt.front() == '\'' && orig_txt.back() == '\'') {
       --start_i;
@@ -295,21 +321,22 @@ spool_ptr<Dlop> Dlop::from_pyrope(std::string_view orig_txt) {
     return Dlop::create_string(orig_txt.substr(end_i, start_i - end_i));
   }
 
-  auto dlop = spool_ptr<Dlop>::make(Type::Integer, 1 + txt.size() / 16);
+  auto dlop = spool_ptr<Dlop>::make(Type::Integer, 1 + orig_txt.size() / 16);
 
   if (shift_mode == 10) {
-    for (auto i = skip_chars; i < txt.size(); ++i) {
-      auto v = char_to_val[(uint8_t)txt[i]];
-      if (likely(v >= 0)) {
+    for (size_t i = skip_chars; i < orig_txt.size(); ++i) {
+      char c = orig_txt[i];
+      auto v = char_to_val[static_cast<uint8_t>(c)];
+      if (likely(v >= 0 && v < 10)) {
         dlop->mult_base(10);
         dlop->add_base(v);
       } else {
-        if (txt[i] == '_') continue;
-        throw std::runtime_error(std::format("ERROR: {} encoding could not use {}\n", orig_txt, txt[i]));
+        if (c == '_') continue;
+        throw std::runtime_error(std::format("ERROR: {} encoding could not use {}\n", orig_txt, c));
       }
     }
   } else if (shift_mode == 1) {
-    auto v = from_binary(txt.substr(skip_chars), unsigned_result);
+    auto v = from_binary(orig_txt.substr(skip_chars), unsigned_result);
     if (negative) {
       v->negate_mut();
     }
@@ -317,18 +344,19 @@ spool_ptr<Dlop> Dlop::from_pyrope(std::string_view orig_txt) {
   } else {
     assert(shift_mode == 3 || shift_mode == 4);
 
-    for (auto i = skip_chars; i < txt.size(); ++i) {
-      if (txt[i] == '_') continue;
+    for (size_t i = skip_chars; i < orig_txt.size(); ++i) {
+      char c = orig_txt[i];
+      if (c == '_') continue;
 
-      auto v = char_to_val[(uint8_t)txt[i]];
+      auto v = char_to_val[static_cast<uint8_t>(c)];
       if (unlikely(v < 0)) {
-        throw std::runtime_error(std::format("ERROR: {} encoding could not use {}\n", orig_txt, txt[i]));
+        throw std::runtime_error(std::format("ERROR: {} encoding could not use {}\n", orig_txt, c));
       }
 
-      auto char_sa = char_to_bits[(uint8_t)txt[i]];
+      auto char_sa = char_to_bits[static_cast<uint8_t>(c)];
       if (unlikely(char_sa > shift_mode)) {
         throw std::runtime_error(
-            std::format("ERROR: {} invalid syntax for number {} bits needed for '{}'", orig_txt, char_sa, txt[i]));
+            std::format("ERROR: {} invalid syntax for number {} bits needed for '{}'", orig_txt, char_sa, c));
       }
       dlop->shl_base(shift_mode);
       dlop->or_base(v);
@@ -956,6 +984,149 @@ spool_ptr<Dlop> Dlop::get_mask_op() const {
   return dlop;
 }
 
+// get_mask_op(mask): copy the bits of `*this` selected by `mask` into a new
+// integer, packed into the low bits in their original order. Negative mask
+// means "all bits except the lowest |mask| bits" (matches Lconst semantics).
+//
+// Examples (mirroring lconst.cpp comment header):
+//   get_mask(0xfeed, 0xff)  -> 0xed
+//   get_mask(0xfeed, -16)   -> 0     (all bits beyond bit 15)
+//   get_mask(0xfeed, 0xf00) -> 0xe
+spool_ptr<Dlop> Dlop::get_mask_op(spool_ptr<Dlop> mask) const {
+  // mask == -1 falls back to the no-arg, sign-strip version.
+  if (mask->is_negative() && mask->is_known_true()) {
+    bool all_ones = true;
+    for (int i = 0; i < mask->size; ++i) {
+      if (mask->base[i] != -1) { all_ones = false; break; }
+    }
+    if (all_ones) {
+      return get_mask_op();
+    }
+  }
+
+  if (mask->has_unknowns()) {
+    return invalid();
+  }
+
+  // Determine effective range: positive mask uses its bit width; a negative
+  // mask carves out everything ABOVE its bit width (sign extension picks up).
+  int  mask_bits          = mask->get_bits();
+  bool mask_neg           = mask->is_negative();
+  int  src_bits           = get_bits();
+  int  positive_mask_bits = mask_neg ? (mask_bits - 1) : mask_bits;
+  int  end_pos            = mask_neg ? src_bits : std::min(src_bits, positive_mask_bits);
+
+  // Pre-size the output: at most src_bits selected (when all bits pass).
+  int out_words = std::max(1, (src_bits + 63) / 64);
+  auto result   = make_result(Type::Integer, static_cast<int16_t>(out_words));
+  for (int i = 0; i < out_words; ++i) {
+    result->base[i]  = 0;
+    result->extra[i] = 0;
+  }
+
+  int out_bit = 0;
+  for (int i = 0; i < positive_mask_bits; ++i) {
+    bool selected = mask_neg ? !mask->bit_test(i) : mask->bit_test(i);
+    if (!selected) continue;
+    if (i < end_pos && bit_test(i)) {
+      result->base[out_bit / 64] |= int64_t(1) << (out_bit % 64);
+    }
+    ++out_bit;
+  }
+  if (mask_neg) {
+    for (int i = positive_mask_bits; i < src_bits; ++i) {
+      if (bit_test(i)) {
+        result->base[out_bit / 64] |= int64_t(1) << (out_bit % 64);
+      }
+      ++out_bit;
+    }
+  }
+  result->normalize();
+  return result;
+}
+
+// set_mask_op(mask, value): replace the bits of `*this` selected by `mask`
+// with bits taken LSB-first from `value`; bits not selected stay as-is.
+// Mirrors Lconst::set_mask_op semantics, but only handles the
+// non-unknown integer case (mask must not have unknowns).
+//
+//   set_mask(0xFFF, 0xF, 0xa) -> 0xFFa
+//   set_mask(0xFFF, -16, 0xa) -> 0x0aF
+//   set_mask(foo, -1, bar)    -> bar
+//   set_mask(foo,  0, bar)    -> foo
+spool_ptr<Dlop> Dlop::set_mask_op(spool_ptr<Dlop> mask, spool_ptr<Dlop> value) const {
+  if (mask->is_known_false()) {
+    auto dlop = make_result(Type::Integer, size);
+    memcpy(dlop->base, base, size * sizeof(int64_t));
+    memcpy(dlop->extra, extra, size * sizeof(int64_t));
+    return dlop;
+  }
+  // mask == -1: fully replaced
+  if (mask->is_negative()) {
+    bool all_ones = true;
+    for (int i = 0; i < mask->size; ++i) {
+      if (mask->base[i] != -1) { all_ones = false; break; }
+    }
+    if (all_ones) {
+      auto dlop = make_result(Type::Integer, value->size);
+      memcpy(dlop->base, value->base, value->size * sizeof(int64_t));
+      memcpy(dlop->extra, value->extra, value->size * sizeof(int64_t));
+      return dlop;
+    }
+  }
+
+  assert(!mask->has_unknowns());
+
+  bool mask_neg          = mask->is_negative();
+  int  mask_bits         = mask->get_bits();
+  int  positive_mask_bits = mask_neg ? (mask_bits - 1) : mask_bits;
+
+  // out_bits: enough to hold base bits and (for negative masks) the value
+  // bits past mask_bits.
+  int out_bits = std::max(get_bits(), mask_bits);
+  if (mask_neg) {
+    out_bits = std::max(out_bits, positive_mask_bits + value->get_bits());
+  }
+
+  int out_words = std::max(1, (out_bits + 63) / 64);
+  auto result   = make_result(Type::Integer, static_cast<int16_t>(out_words));
+  for (int i = 0; i < out_words; ++i) {
+    result->base[i]  = 0;
+    result->extra[i] = 0;
+  }
+
+  int value_pos = 0;
+  for (int i = 0; i < out_bits; ++i) {
+    bool from_value;
+    if (i < positive_mask_bits) {
+      bool mb = mask->bit_test(i);
+      from_value = mask_neg ? !mb : mb;
+    } else {
+      from_value = mask_neg;
+    }
+    bool the_bit;
+    if (from_value) {
+      the_bit = value->bit_test(value_pos);
+      ++value_pos;
+    } else {
+      the_bit = bit_test(i);
+    }
+    if (the_bit) {
+      result->base[i / 64] |= int64_t(1) << (i % 64);
+    }
+  }
+
+  result->normalize();
+  return result;
+}
+
+// ror_op: OR-reduce two operands to a single bit. Yields 1 if either side has
+// any nonzero bit; otherwise 0. Matches Lconst::ror_op.
+spool_ptr<Dlop> Dlop::ror_op(spool_ptr<Dlop> other) const {
+  bool any = is_known_true() || other->is_known_true();
+  return create_integer(any ? int64_t(1) : int64_t(0));
+}
+
 spool_ptr<Dlop> Dlop::concat_op(spool_ptr<Dlop> other) const {
   int other_bits = other->get_bits();
   if (other_bits <= 0) {
@@ -1027,6 +1198,15 @@ bool Dlop::is_known_true() const {
     }
     return false;
   }
+  for (int i = 0; i < size; ++i) {
+    if (base[i] != 0) return true;
+  }
+  return false;
+}
+
+bool Dlop::is_ref() const {
+  if (type != Type::Invalid) return false;
+  if (size <= 0) return false;
   for (int i = 0; i < size; ++i) {
     if (base[i] != 0) return true;
   }

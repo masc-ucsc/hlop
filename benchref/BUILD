@@ -42,6 +42,16 @@ cc_test(
 )
 
 cc_test(
+    name = "lconst_test2",
+    srcs = ["tests/lconst_test2.cpp"],
+    copts = CPP23_COPTS,
+    deps = [
+        ":benchref",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
+cc_test(
     name = "lconst_bench",
     srcs = ["tests/lconst_bench.cpp"],
     copts = CPP23_COPTS,

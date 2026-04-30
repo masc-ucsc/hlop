@@ -1,17 +1,19 @@
+
 #include "lconst.hpp"
 
 #include <cassert>
+#include <format>
 #include <functional>
 #include <iomanip>
 #include <iostream>
 #include <iterator>
+#include <print>
 #include <vector>
 
 #include "absl/container/flat_hash_map.h"
 #include "absl/strings/str_cat.h"
 #include "gtest/gtest.h"
 #include "lrand.hpp"
-#include <print>
 #include "sint.hpp"
 #include "str_tools.hpp"
 #include "uint.hpp"
@@ -869,8 +871,8 @@ TEST_F(Lconst_test, used_bits) {
   std::print("b used bits:{}\n", b.bit_length());
 
   uint64_t v        = 0x10;
-  auto     uint_ptr = reinterpret_cast<UInt<8> *>(&v);
-  auto    &u        = *uint_ptr;
+  auto     uint_ptr = reinterpret_cast<UInt<8>*>(&v);
+  auto&    u        = *uint_ptr;
   std::print("u used bits:{}\n", u.bit_length());
 }
 
@@ -931,11 +933,11 @@ TEST_F(Lconst_test, hexa_check) {
   auto v2 = Lconst::unserialize(s1);
 
 #if 0
-  std::print("or:");
+  std::cout << "or:";
   for(auto i=0u;i<s1.size();++i) {
     std::print(":{}", (int)s1[i]);
   }
-  std::print("\n");
+  std::cout << "\n";
   std::print("v1:{}\n", v1.to_pyrope());
   std::print("v2:{}\n", v2.to_pyrope());
 #endif
@@ -1696,8 +1698,8 @@ TEST_F(Lconst_test, get_set_mask_equivalence) {
 TEST_F(Lconst_test, bit_test) {
   Lconst a(0xF0);
 
-  EXPECT_EQ(a.get_first_bit_set(), 4);
-  EXPECT_EQ(a.get_last_bit_set(), 7);
+  EXPECT_EQ(a.get_first_bit_set(), size_t{4});
+  EXPECT_EQ(a.get_last_bit_set(), size_t{7});
 
   EXPECT_FALSE(a.bit_test(0));
   EXPECT_FALSE(a.bit_test(1));
@@ -1750,27 +1752,27 @@ TEST_F(Lconst_test, ref_const_string) {
 TEST_F(Lconst_test, mask_range_pairs) {
   Lconst zero(0);
   auto   zero_pv = zero.get_mask_range_pairs();
-  EXPECT_EQ(zero_pv.size(), 0);
+  EXPECT_EQ(zero_pv.size(), size_t{0});
 
-  EXPECT_EQ(Lconst(1).get_mask_range_pairs().size(), 1);
+  EXPECT_EQ(Lconst(1).get_mask_range_pairs().size(), size_t{1});
   EXPECT_EQ(Lconst(1).get_mask_range_pairs()[0].first, 0);
   EXPECT_EQ(Lconst(1).get_mask_range_pairs()[0].second, 1);
 
-  EXPECT_EQ(Lconst(2).get_mask_range_pairs().size(), 1);
+  EXPECT_EQ(Lconst(2).get_mask_range_pairs().size(), size_t{1});
   EXPECT_EQ(Lconst(2).get_mask_range_pairs()[0].first, 1);
   EXPECT_EQ(Lconst(2).get_mask_range_pairs()[0].second, 1);
 
-  EXPECT_EQ(Lconst(0x30).get_mask_range_pairs().size(), 1);
+  EXPECT_EQ(Lconst(0x30).get_mask_range_pairs().size(), size_t{1});
   EXPECT_EQ(Lconst(0x30).get_mask_range_pairs()[0].first, 4);
   EXPECT_EQ(Lconst(0x30).get_mask_range_pairs()[0].second, 2);
 
-  EXPECT_EQ(Lconst(0xF030).get_mask_range_pairs().size(), 2);
+  EXPECT_EQ(Lconst(0xF030).get_mask_range_pairs().size(), size_t{2});
   EXPECT_EQ(Lconst(0xF030).get_mask_range_pairs()[0].first, 4);
   EXPECT_EQ(Lconst(0xF030).get_mask_range_pairs()[0].second, 2);
   EXPECT_EQ(Lconst(0xF030).get_mask_range_pairs()[1].first, 12);
   EXPECT_EQ(Lconst(0xF030).get_mask_range_pairs()[1].second, 4);
 
-  EXPECT_EQ(Lconst(0x10F030).get_mask_range_pairs().size(), 3);
+  EXPECT_EQ(Lconst(0x10F030).get_mask_range_pairs().size(), size_t{3});
   EXPECT_EQ(Lconst(0x10F030).get_mask_range_pairs()[0].first, 4);
   EXPECT_EQ(Lconst(0x10F030).get_mask_range_pairs()[0].second, 2);
   EXPECT_EQ(Lconst(0x10F030).get_mask_range_pairs()[1].first, 12);
@@ -1778,18 +1780,20 @@ TEST_F(Lconst_test, mask_range_pairs) {
   EXPECT_EQ(Lconst(0x10F030).get_mask_range_pairs()[2].first, 20);
   EXPECT_EQ(Lconst(0x10F030).get_mask_range_pairs()[2].second, 1);
 
-  EXPECT_EQ(Lconst(-1).get_mask_range_pairs().size(), 1);
+  EXPECT_EQ(Lconst(-1).get_mask_range_pairs().size(), size_t{1});
   EXPECT_EQ(Lconst(-1).get_mask_range_pairs()[0].first, 0);
   EXPECT_EQ(Lconst(-1).get_mask_range_pairs()[0].second, Bits_max);
 
-  EXPECT_EQ(Lconst(-2).get_mask_range_pairs().size(), 1);
+  EXPECT_EQ(Lconst(-2).get_mask_range_pairs().size(), size_t{1});
   EXPECT_EQ(Lconst(-2).get_mask_range_pairs()[0].first, 1);
   EXPECT_EQ(Lconst(-2).get_mask_range_pairs()[0].second, Bits_max);
 
   auto neg1 = Lconst::from_pyrope("0sb1_0110");
-  EXPECT_EQ(neg1.get_mask_range_pairs().size(), 2);
+  EXPECT_EQ(neg1.get_mask_range_pairs().size(), size_t{2});
   EXPECT_EQ(neg1.get_mask_range_pairs()[0].first, 1);
   EXPECT_EQ(neg1.get_mask_range_pairs()[0].second, 2);
   EXPECT_EQ(neg1.get_mask_range_pairs()[1].first, 4);
   EXPECT_EQ(neg1.get_mask_range_pairs()[1].second, Bits_max);
 }
+
+// String / nil / concat / unknowns tests live in lconst_test2.cpp.

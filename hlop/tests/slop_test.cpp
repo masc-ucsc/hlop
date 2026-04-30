@@ -32,6 +32,19 @@ TEST_F(Slop_test, create_bool) {
   EXPECT_TRUE(f.is_known_false());
 }
 
+// from_pyrope is constexpr — these static_asserts confirm the parser folds
+// at compile time for typical literal forms (decimal, hex, binary, signed).
+TEST_F(Slop_test, from_pyrope_constexpr) {
+  static constexpr auto three = Slop<8>::from_pyrope("3");
+  static_assert(three.to_i() == 3);
+  static constexpr auto neg = Slop<8>::from_pyrope("-7");
+  static_assert(neg.to_i() == -7);
+  static constexpr auto hex = Slop<32>::from_pyrope("0x1f");
+  static_assert(hex.to_i() == 0x1f);
+  static constexpr auto bin = Slop<8>::from_pyrope("0b1010");
+  static_assert(bin.to_i() == 0b1010);
+}
+
 TEST_F(Slop_test, from_pyrope_decimal) {
   auto a = S::from_pyrope("123");
   EXPECT_EQ(a.to_i(), 123);

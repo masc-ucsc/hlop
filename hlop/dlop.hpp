@@ -177,8 +177,13 @@ public:
   static spool_ptr<Dlop> create_integer(int64_t val);
   static spool_ptr<Dlop> create_string(std::string_view txt);
   static spool_ptr<Dlop> from_binary(std::string_view txt, bool unsigned_result);
+  // Note: Dlop::from_pyrope cannot be constexpr — Dlop bodies live in a
+  // thread-local pool (raw_ptr_pool) and acquire storage at runtime. For
+  // compile-time literals use Slop<N>::from_pyrope, which folds at the
+  // call site and stays in the static stack-allocated path.
   static spool_ptr<Dlop> from_pyrope(std::string_view orig_txt);
   static spool_ptr<Dlop> from_string(std::string_view txt);
+  static spool_ptr<Dlop> from_ref(std::string_view txt);
   static spool_ptr<Dlop> invalid();
 
   static spool_ptr<Dlop> unknown(int nbits);
@@ -219,9 +224,15 @@ public:
   bool operator>(const Dlop &other) const;
   bool operator>=(const Dlop &other) const;
 
+  // --- Reduction operations ---
+  // ror_op: OR-reduction with another operand (1-bit result, 1 if any nonzero).
+  spool_ptr<Dlop> ror_op(spool_ptr<Dlop> other) const;
+
   // --- Bit manipulation ---
   spool_ptr<Dlop> sext_op(int bits) const;
   spool_ptr<Dlop> get_mask_op() const;
+  spool_ptr<Dlop> get_mask_op(spool_ptr<Dlop> mask) const;
+  spool_ptr<Dlop> set_mask_op(spool_ptr<Dlop> mask, spool_ptr<Dlop> value) const;
   spool_ptr<Dlop> concat_op(spool_ptr<Dlop> other) const;
   spool_ptr<Dlop> adjust_bits(int amount) const;
 
@@ -233,6 +244,10 @@ public:
   bool is_known_true() const;
   bool is_mask() const;
   bool is_power2() const;
+  // is_ref: encoded as Type::Invalid carrying a non-zero packed-string payload.
+  // Invalid (no value) has Type::Invalid + zero/empty content; from_ref keeps
+  // the same Invalid tag but stores the byte-packed identifier in `base`.
+  bool is_ref() const;
   int  get_bits() const;
   bool bit_test(int pos) const;
   int  get_first_bit_set() const;

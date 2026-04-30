@@ -54,7 +54,7 @@ class Slop {
     return a;
   }
 
-  bool has_extra() const {
+  constexpr bool has_extra() const {
     for (int i = 0; i < n_words; ++i) {
       if (extra_[i] != 0) return true;
     }
@@ -88,15 +88,15 @@ public:
   constexpr Slop(int64_t val) : type_(Type::Integer), base_(fill_array(val)), extra_(zero_array()) {}
 
   // --- Factory methods ---
-  static Slop create_bool(bool val) {
+  static constexpr Slop create_bool(bool val) {
     return Slop(Type::Boolean, fill_array(val ? -1 : 0), zero_array());
   }
 
-  static Slop create_integer(int64_t val) {
+  static constexpr Slop create_integer(int64_t val) {
     return Slop(Type::Integer, fill_array(val), zero_array());
   }
 
-  static Slop create_string(std::string_view txt) {
+  static constexpr Slop create_string(std::string_view txt) {
     Slop s(Type::String, zero_array(), zero_array());
     for (int i = txt.size() - 1; i >= 0; --i) {
       Blop::shl<n_words>(s.base_, s.base_, 8);
@@ -105,12 +105,23 @@ public:
     return s;
   }
 
-  static Slop from_string(std::string_view txt) {
+  static constexpr Slop from_string(std::string_view txt) {
     return create_string(txt);
   }
 
-  static Slop invalid() {
+  static constexpr Slop invalid() {
     return Slop(Type::Invalid, zero_array(), zero_array());
+  }
+
+  // ref shares the Invalid tag with `invalid()` — distinguished by carrying
+  // a non-zero byte-packed payload. Mirrors Lconst::from_ref encoding.
+  static constexpr Slop from_ref(std::string_view txt) {
+    Slop s(Type::Invalid, zero_array(), zero_array());
+    for (int i = txt.size() - 1; i >= 0; --i) {
+      Blop::shl<n_words>(s.base_, s.base_, 8);
+      s.base_[0] |= static_cast<unsigned char>(txt[i]);
+    }
+    return s;
   }
 
   static Slop unknown(int nbits) {
@@ -152,7 +163,7 @@ public:
     return s;
   }
 
-  static Slop from_binary(std::string_view txt, bool unsigned_result) {
+  static constexpr Slop from_binary(std::string_view txt, bool unsigned_result) {
     Slop s;
     if (!unsigned_result) {
       for (size_t i = 0; i < txt.size(); ++i) {
@@ -187,59 +198,80 @@ public:
     return s;
   }
 
-  static Slop from_pyrope(std::string_view orig_txt) {
+  // from_pyrope is constexpr so simple compile-time literals like
+  // `Slop<8>::from_pyrope("3")` fold at compile time. This avoids the
+  // runtime `std::tolower` / `std::isdigit` / `std::string` work that the
+  // previous implementation needed. The error paths still throw — that is
+  // legal in a constexpr function as long as a constant-evaluation never
+  // reaches them. Quoted-string paths produce String-typed Slops at
+  // compile time too.
+  static constexpr Slop from_pyrope(std::string_view orig_txt) {
     if (orig_txt.empty()) return invalid();
 
-    // Simple lowercase conversion
-    std::string txt;
-    txt.reserve(orig_txt.size());
-    for (auto c : orig_txt) txt.push_back(std::tolower(c));
+    // Manual case-insensitive equality keeps this constexpr (std::tolower
+    // is locale-aware and not constant-evaluable).
+    auto eq_ci = [](std::string_view a, std::string_view b) constexpr {
+      if (a.size() != b.size()) return false;
+      for (size_t i = 0; i < a.size(); ++i) {
+        char ca = a[i];
+        char cb = b[i];
+        if (ca >= 'A' && ca <= 'Z') ca = static_cast<char>(ca - 'A' + 'a');
+        if (ca != cb) return false;
+      }
+      return true;
+    };
+    auto lower = [](char c) constexpr -> char {
+      return (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c;
+    };
+    auto is_dec_digit = [](char c) constexpr -> bool { return c >= '0' && c <= '9'; };
 
-    if (txt == "true")  return create_bool(true);
-    if (txt == "false") return create_bool(false);
+    if (eq_ci(orig_txt, "true"))  return create_bool(true);
+    if (eq_ci(orig_txt, "false")) return create_bool(false);
 
-    bool negative   = false;
-    auto skip_chars = 0u;
+    bool   negative   = false;
+    size_t skip_chars = 0;
 
-    if (txt.front() == '-') {
+    if (orig_txt.front() == '-') {
       negative   = true;
       skip_chars = 1;
-    } else if (txt.front() == '+') {
+    } else if (orig_txt.front() == '+') {
       skip_chars = 1;
     }
 
-    auto shift_mode      = 0;
+    int  shift_mode      = 0;
     bool unsigned_result = false;
 
-    if (txt.size() >= (1 + skip_chars) && std::isdigit(txt[skip_chars])) {
+    if (orig_txt.size() >= (1 + skip_chars) && is_dec_digit(orig_txt[skip_chars])) {
       shift_mode = 10;
-      if (txt.size() >= (2 + skip_chars) && txt[skip_chars] == '0') {
+      if (orig_txt.size() >= (2 + skip_chars) && orig_txt[skip_chars] == '0') {
         ++skip_chars;
-        auto sel_ch = txt[skip_chars];
+        char sel_ch = lower(orig_txt[skip_chars]);
         if (sel_ch == 's') {
           ++skip_chars;
-          sel_ch = txt[skip_chars];
+          sel_ch = lower(orig_txt[skip_chars]);
           if (sel_ch != 'b') {
-            throw std::runtime_error(std::format("ERROR: {} unknown pyrope encoding\n", orig_txt));
+            throw std::runtime_error("ERROR: unknown pyrope encoding (only 0sb...)");
           }
         } else {
           unsigned_result = true;
         }
 
-        if (sel_ch == 'x')      { shift_mode = 4; ++skip_chars; }
-        else if (sel_ch == 'b') { shift_mode = 1; ++skip_chars; }
-        else if (sel_ch == 'd') { shift_mode = 10; ++skip_chars; }
-        else if (std::isdigit(sel_ch)) { shift_mode = 10; }
-        else if (sel_ch == 'o') { shift_mode = 3; ++skip_chars; }
+        if (sel_ch == 'x')           { shift_mode = 4; ++skip_chars; }
+        else if (sel_ch == 'b')      { shift_mode = 1; ++skip_chars; }
+        else if (sel_ch == 'd')      { shift_mode = 10; ++skip_chars; }
+        else if (is_dec_digit(sel_ch)) { shift_mode = 10; }
+        else if (sel_ch == 'o')      { shift_mode = 3; ++skip_chars; }
         else {
-          throw std::runtime_error(std::format("ERROR: {} unknown pyrope encoding\n", orig_txt));
+          throw std::runtime_error("ERROR: unknown pyrope encoding (leading)");
         }
       }
     } else {
-      int start_i = orig_txt.size();
-      int end_i   = 0;
+      // Non-digit start → quoted/unquoted string literal.
+      size_t start_i = orig_txt.size();
+      size_t end_i   = 0;
       if (orig_txt.size() > 1 && orig_txt.front() == '\'' && orig_txt.back() == '\'') {
-        --start_i; ++end_i;
+        --start_i;
+        ++end_i;
       }
       return create_string(orig_txt.substr(end_i, start_i - end_i));
     }
@@ -247,32 +279,34 @@ public:
     Slop result;
 
     if (shift_mode == 10) {
-      for (auto i = skip_chars; i < txt.size(); ++i) {
-        auto v = char_to_val[(uint8_t)txt[i]];
-        if (v >= 0) {
-          auto tmp_base = result.base_;
+      for (size_t i = skip_chars; i < orig_txt.size(); ++i) {
+        char c = lower(orig_txt[i]);
+        int  v = char_to_val[static_cast<uint8_t>(c)];
+        if (v >= 0 && v < 10) {
+          std::array<int64_t, n_words> tmp_base = result.base_;
           Blop::mult<n_words>(result.base_, tmp_base, fill_array(10));
           std::array<int64_t, n_words> tmp = fill_array(v);
           Blop::add<n_words>(result.base_, result.base_, tmp);
-        } else if (txt[i] == '_') {
+        } else if (c == '_') {
           continue;
         } else {
-          throw std::runtime_error(std::format("ERROR: {} encoding could not use {}\n", orig_txt, txt[i]));
+          throw std::runtime_error("ERROR: invalid digit in decimal");
         }
       }
     } else if (shift_mode == 1) {
-      result = from_binary(txt.substr(skip_chars), unsigned_result);
+      result = from_binary(orig_txt.substr(skip_chars), unsigned_result);
       if (negative) {
         Blop::neg<n_words>(result.base_, result.base_);
       }
       return result;
     } else {
-      assert(shift_mode == 3 || shift_mode == 4);
-      for (auto i = skip_chars; i < txt.size(); ++i) {
-        if (txt[i] == '_') continue;
-        auto v = char_to_val[(uint8_t)txt[i]];
-        if (v < 0) {
-          throw std::runtime_error(std::format("ERROR: {} encoding could not use {}\n", orig_txt, txt[i]));
+      // octal (3) or hex (4)
+      for (size_t i = skip_chars; i < orig_txt.size(); ++i) {
+        char c = lower(orig_txt[i]);
+        if (c == '_') continue;
+        int v = char_to_val[static_cast<uint8_t>(c)];
+        if (v < 0 || (shift_mode == 3 && v >= 8)) {
+          throw std::runtime_error("ERROR: invalid digit");
         }
         Blop::shl<n_words>(result.base_, result.base_, shift_mode);
         result.base_[0] |= v;
@@ -493,6 +527,94 @@ public:
     return result;
   }
 
+  // get_mask_op(mask): copy the bits selected by `mask` into a new integer,
+  // packed LSB-first in their original order. Negative mask = "everything
+  // except the lowest |mask| bits". Mirrors Lconst::get_mask_op semantics for
+  // the non-string, non-unknown path.
+  Slop get_mask_op(const Slop &mask) const {
+    if (mask.has_unknowns()) return invalid();
+
+    bool mask_neg  = mask.is_negative();
+    int  mask_bits = mask.get_bits();
+    int  positive_mask_bits = mask_neg ? (mask_bits - 1) : mask_bits;
+    int  src_bits  = get_bits();
+
+    Slop result;
+    int  out_bit = 0;
+    for (int i = 0; i < positive_mask_bits; ++i) {
+      bool selected = mask_neg ? !mask.bit_test(i) : mask.bit_test(i);
+      if (!selected) continue;
+      bool b = (i < src_bits) && bit_test(i);
+      if (b) {
+        int word = out_bit / 64;
+        int bit  = out_bit % 64;
+        if (word < n_words) result.base_[word] |= int64_t(1) << bit;
+      }
+      ++out_bit;
+    }
+    if (mask_neg) {
+      for (int i = positive_mask_bits; i < src_bits; ++i) {
+        if (bit_test(i)) {
+          int word = out_bit / 64;
+          int bit  = out_bit % 64;
+          if (word < n_words) result.base_[word] |= int64_t(1) << bit;
+        }
+        ++out_bit;
+      }
+    }
+    return result;
+  }
+
+  // set_mask_op(mask, value): replace the bits selected by `mask` with bits
+  // taken LSB-first from `value`; bits not selected stay unchanged. Mirrors
+  // Lconst::set_mask_op for the non-string, non-unknown path.
+  Slop set_mask_op(const Slop &mask, const Slop &value) const {
+    if (mask.is_known_false()) return *this;
+    assert(!mask.has_unknowns());
+
+    bool mask_neg = mask.is_negative();
+    int  mask_bits = mask.get_bits();
+    int  positive_mask_bits = mask_neg ? (mask_bits - 1) : mask_bits;
+
+    int src_bits = get_bits();
+    int val_bits = value.get_bits();
+    int out_bits = std::max(src_bits, mask_bits);
+    if (mask_neg) out_bits = std::max(out_bits, positive_mask_bits + val_bits);
+    if (out_bits > N) out_bits = N;
+
+    Slop result;
+    int value_pos = 0;
+    for (int i = 0; i < out_bits; ++i) {
+      bool from_value;
+      if (i < positive_mask_bits) {
+        bool mb = mask.bit_test(i);
+        from_value = mask_neg ? !mb : mb;
+      } else {
+        from_value = mask_neg;
+      }
+      bool the_bit;
+      if (from_value) {
+        the_bit = value.bit_test(value_pos);
+        ++value_pos;
+      } else {
+        the_bit = bit_test(i);
+      }
+      if (the_bit) {
+        int word = i / 64;
+        int bit  = i % 64;
+        if (word < n_words) result.base_[word] |= int64_t(1) << bit;
+      }
+    }
+    return result;
+  }
+
+  // ror_op: OR-reduction with another operand to a single bit (1 if either
+  // side has any nonzero bit). Matches Lconst::ror_op.
+  Slop ror_op(const Slop &other) const {
+    bool any = is_known_true() || other.is_known_true();
+    return Slop(any ? int64_t(1) : int64_t(0));
+  }
+
   Slop concat_op(const Slop &other) const {
     int other_bits = other.get_bits();
     if (other_bits <= 0) return *this;
@@ -536,6 +658,16 @@ public:
     return !Blop::is_zero<n_words>(base_);
   }
   bool is_invalid() const { return type_ == Type::Invalid; }
+  // is_ref: encoded as Type::Invalid carrying a non-zero packed-string
+  // payload — mirrors Lconst::is_ref. `invalid()` (no value) has all-zero
+  // base; `from_ref` keeps the same Invalid tag but stores bytes there.
+  bool is_ref() const {
+    if (type_ != Type::Invalid) return false;
+    for (int i = 0; i < n_words; ++i) {
+      if (base_[i] != 0) return true;
+    }
+    return false;
+  }
   bool is_integer() const { return type_ == Type::Integer; }
   bool is_string() const  { return type_ == Type::String; }
 
@@ -570,7 +702,7 @@ public:
     }
   }
 
-  int get_bits() const { return Blop::get_bits<n_words>(base_); }
+  constexpr int get_bits() const { return Blop::get_bits<n_words>(base_); }
 
   bool bit_test(int pos) const {
     int word = pos / 64;
@@ -593,12 +725,12 @@ public:
     return Blop::ctz<n_words>(base_);
   }
 
-  bool is_i() const {
+  constexpr bool is_i() const {
     if (has_extra()) return false;
     return get_bits() <= 62;
   }
 
-  int64_t to_i() const {
+  constexpr int64_t to_i() const {
     assert(is_i());
     return base_[0];
   }
