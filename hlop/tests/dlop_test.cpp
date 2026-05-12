@@ -69,6 +69,32 @@ TEST_F(Dlop_test, from_pyrope_string) {
   EXPECT_EQ(s->to_string(), "hello");
 }
 
+TEST_F(Dlop_test, from_pyrope_nil) {
+  // Bare nil/null tokens are the Pyrope nil literal — case-insensitive.
+  for (auto* txt : {"nil", "Nil", "NIL", "NiL", "null", "Null", "NULL", "nUlL"}) {
+    auto n = Dlop::from_pyrope(txt);
+    EXPECT_TRUE(n->is_nil()) << "from_pyrope(\"" << txt << "\") should be nil";
+    EXPECT_FALSE(n->is_string()) << "from_pyrope(\"" << txt << "\") should not be string";
+  }
+
+  // Quoted form keeps the original token as a string.
+  auto q = Dlop::from_pyrope("'nil'");
+  EXPECT_FALSE(q->is_nil());
+  EXPECT_TRUE(q->is_string());
+  EXPECT_EQ(q->to_string(), "nil");
+}
+
+TEST_F(Dlop_test, from_pyrope_bool_case_insensitive) {
+  for (auto* txt : {"true", "True", "TRUE", "tRuE"}) {
+    auto t = Dlop::from_pyrope(txt);
+    EXPECT_TRUE(t->is_known_true()) << "from_pyrope(\"" << txt << "\") should be true";
+  }
+  for (auto* txt : {"false", "False", "FALSE", "fAlSe"}) {
+    auto f = Dlop::from_pyrope(txt);
+    EXPECT_TRUE(f->is_known_false()) << "from_pyrope(\"" << txt << "\") should be false";
+  }
+}
+
 // =========================================================================
 // Arithmetic tests
 // =========================================================================

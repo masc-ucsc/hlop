@@ -318,6 +318,10 @@ void Dlop::init_from_pyrope(std::string_view orig_txt) {
 
   if (eq_ci(orig_txt, "true"))  { init_bool(true);  return; }
   if (eq_ci(orig_txt, "false")) { init_bool(false); return; }
+  // Pyrope `nil` / `null` literals (case-insensitive) parse to Type::Nil.
+  // To represent the *string* "nil", use the quoted form `'nil'`, which
+  // takes the quoted-string branch below.
+  if (eq_ci(orig_txt, "nil") || eq_ci(orig_txt, "null")) { init_nil(); return; }
 
   bool   negative   = false;
   size_t skip_chars = 0;
