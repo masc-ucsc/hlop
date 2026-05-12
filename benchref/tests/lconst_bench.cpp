@@ -117,6 +117,22 @@ static void BM_dlop_add_reassign(benchmark::State& state) {
   state.counters["speed"] = benchmark::Counter(state.iterations() * state.range(0), benchmark::Counter::kIsRate);
 }
 
+static void BM_dlop_add_reassign2(benchmark::State& state) {
+  for (auto _ : state) {
+    Dlop total;
+    total.init_integer(0);
+
+    for (int j = 0; j < state.range(0); ++j) {
+      Dlop v;
+      v.init_integer(j);
+      total = total.add_op(v);
+    }
+
+    benchmark::DoNotOptimize(total);
+  }
+  state.counters["speed"] = benchmark::Counter(state.iterations() * state.range(0), benchmark::Counter::kIsRate);
+}
+
 static void BM_test(benchmark::State& state) {
   for (auto _ : state) {
     for (int j = 0; j < state.range(0); ++j) {
@@ -149,6 +165,7 @@ BENCHMARK(BM_blop_add2)->Arg(512);
 BENCHMARK(BM_dlop_create)->Arg(512);
 BENCHMARK(BM_dlop_add)->Arg(512);
 BENCHMARK(BM_dlop_add_reassign)->Arg(512);
+BENCHMARK(BM_dlop_add_reassign2)->Arg(512);
 BENCHMARK(BM_dlop_addi_reassign)->Arg(512);
 BENCHMARK(BM_test)->Arg(512);
 
