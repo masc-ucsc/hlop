@@ -389,6 +389,10 @@ public:
   bool has_unknowns() const { return has_extra(); }
   bool is_known_false() const;
   bool is_known_true() const;
+  // is_zero: numeric zero with no unknowns. Stricter than is_known_false (which
+  // also accepts nil/invalid/empty-string); use is_zero for `value == 0` checks
+  // on integer Dlops where the type is known.
+  bool is_zero() const;
   bool is_mask() const;
   bool is_power2() const;
   bool is_nil() const { return type == Type::Nil; }

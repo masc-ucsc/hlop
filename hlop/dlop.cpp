@@ -1252,6 +1252,18 @@ bool Dlop::is_known_false() const {
   return true;
 }
 
+bool Dlop::is_zero() const {
+  // Numeric zero: must be an Integer/Boolean (not Nil/Invalid/String), with no
+  // unknown bits, all words zero. Matches the semantic of `value == 0` in
+  // arithmetic contexts.
+  if (type != Type::Integer && type != Type::Boolean) return false;
+  if (has_unknowns()) return false;
+  for (int i = 0; i < size; ++i) {
+    if (base()[i] != 0) return false;
+  }
+  return true;
+}
+
 bool Dlop::is_known_true() const {
   if (has_unknowns()) {
     // If any known bit is 1, it's true

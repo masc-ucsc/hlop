@@ -281,6 +281,21 @@ TEST_F(Dlop_test, or_unknown) {
 // =========================================================================
 // Nil — tagged-unit
 // =========================================================================
+TEST_F(Dlop_test, is_zero_basic) {
+  // Integer zero is is_zero; nonzero, nil, invalid, string are not.
+  EXPECT_TRUE(Dlop::create_integer(0)->is_zero());
+  EXPECT_FALSE(Dlop::create_integer(1)->is_zero());
+  EXPECT_FALSE(Dlop::create_integer(-1)->is_zero());
+
+  EXPECT_FALSE(Dlop::nil()->is_zero());
+  EXPECT_FALSE(Dlop::invalid()->is_zero());
+  EXPECT_FALSE(Dlop::create_string("")->is_zero());
+  EXPECT_FALSE(Dlop::from_pyrope("0sb??")->is_zero());  // unknown bits
+  // Boolean false also reads as is_zero (numeric-context zero).
+  EXPECT_TRUE(Dlop::create_bool(false)->is_zero());
+  EXPECT_FALSE(Dlop::create_bool(true)->is_zero());
+}
+
 TEST_F(Dlop_test, nil_is_distinct) {
   auto n = Dlop::nil();
   EXPECT_TRUE(n->is_nil());
