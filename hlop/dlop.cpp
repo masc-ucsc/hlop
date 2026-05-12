@@ -3,8 +3,10 @@
 #include "dlop.hpp"
 
 #include <cstdlib>
+#include <cstring>
 #include <format>
 #include <print>
+#include <random>
 
 #include "likely.hpp"
 #include "str_tools.hpp"
@@ -1481,4 +1483,322 @@ void Dlop::dump() const {
     std::print("_{:016x}", (uint64_t)extra[i]);
   }
   std::print("\n");
+}
+
+// =========================================================================
+// Nil — Pyrope tagged unit
+// =========================================================================
+spool_ptr<Dlop> Dlop::nil() {
+  // Size 0 carries no payload; type tag is the discriminator
+  return spool_ptr<Dlop>::make(Type::Nil, 0);
+}
+
+// =========================================================================
+// Mask helpers (statics)
+// =========================================================================
+spool_ptr<Dlop> Dlop::get_mask_value(int bits) {
+  if (bits <= 0) {
+    return create_integer(1);
+  }
+  if (bits < 63) {
+    return create_integer((int64_t(1) << bits) - 1);
+  }
+  // Multi-word: lower `bits` ones, sign-extend zero
+  int words = (bits + 63) / 64 + 1;  // +1 to keep the sign bit clear
+  auto d = spool_ptr<Dlop>::make(Type::Integer, words);
+  int full_words = bits / 64;
+  for (int i = 0; i < full_words; ++i) {
+    d->base[i] = -1;
+  }
+  int leftover = bits % 64;
+  if (leftover > 0 && full_words < words) {
+    d->base[full_words] = (int64_t(1) << leftover) - 1;
+  }
+  d->normalize();
+  return d;
+}
+
+spool_ptr<Dlop> Dlop::get_mask_value(int h, int l) {
+  if (h == l) {
+    // Single-bit set at position h
+    int words = h / 64 + 1 + 1;
+    auto d = spool_ptr<Dlop>::make(Type::Integer, words);
+    int word = h / 64;
+    int bit  = h % 64;
+    d->base[word] = int64_t(1) << bit;
+    d->normalize();
+    return d;
+  }
+  assert(h > l);
+
+  // Bits [l..h] inclusive set; equivalent to ((1<<(h-l+1))-1) << l
+  auto width = get_mask_value(h - l + 1);
+  return width->lsh_op(l);
+}
+
+spool_ptr<Dlop> Dlop::get_neg_mask_value(int bits) {
+  if (bits <= 1) {
+    return create_integer(1);
+  }
+  // -1 << bits : sign-extended ones in high positions, zeros in low `bits`
+  auto neg_one = create_integer(-1);
+  return neg_one->lsh_op(bits);
+}
+
+// =========================================================================
+// Instance mask value
+// =========================================================================
+spool_ptr<Dlop> Dlop::get_mask_value() const {
+  if (size == 0) {
+    return create_integer(1);
+  }
+  bool all_zero = true;
+  for (int i = 0; i < size; ++i) {
+    if (base[i] != 0) { all_zero = false; break; }
+  }
+  if (all_zero) {
+    return create_integer(1);
+  }
+  return get_mask_value(get_bits() - 1);
+}
+
+// =========================================================================
+// Mask range helpers
+// Walk contiguous 1-runs in `base`. Negative numbers are treated as their
+// bit_flip companion (matches the prior Lconst behavior with Bits_max sentinel).
+// =========================================================================
+std::vector<std::pair<int, int>> Dlop::get_mask_range_pairs() const {
+  std::vector<std::pair<int, int>> pairs;
+  if (size == 0) {
+    return pairs;
+  }
+  // All-zero short circuit
+  bool all_zero = true;
+  for (int i = 0; i < size; ++i) {
+    if (base[i] != 0) { all_zero = false; break; }
+  }
+  if (all_zero) {
+    return pairs;
+  }
+
+  const bool neg_mask = is_negative();
+  const int  total_bits = size * 64;
+
+  // Build the working bit vector: for negatives, flip the lower get_bits() to
+  // mirror Lconst's bit_flip-of-(-num-1).
+  std::vector<uint64_t> work(size);
+  for (int i = 0; i < size; ++i) {
+    work[i] = static_cast<uint64_t>(base[i]);
+  }
+  if (neg_mask) {
+    int nbits = get_bits();
+    for (int b = 0; b < nbits; ++b) {
+      work[b / 64] ^= (uint64_t{1} << (b % 64));
+    }
+    // Higher bits become zero (sign was 1, flipped to 0)
+    for (int b = nbits; b < total_bits; ++b) {
+      work[b / 64] &= ~(uint64_t{1} << (b % 64));
+    }
+  }
+
+  auto bit_at = [&](int p) -> bool {
+    if (p < 0 || p >= total_bits) return false;
+    return (work[p / 64] >> (p % 64)) & 1;
+  };
+
+  int p = 0;
+  while (p < total_bits) {
+    // Skip zeros
+    while (p < total_bits && !bit_at(p)) ++p;
+    if (p >= total_bits) break;
+    int start = p;
+    while (p < total_bits && bit_at(p)) ++p;
+    int nones = p - start;
+
+    // Check remainder all-zero (final negative-extended run sentinel)
+    bool tail_zero = true;
+    for (int q = p; q < total_bits; ++q) {
+      if (bit_at(q)) { tail_zero = false; break; }
+    }
+    if (tail_zero && neg_mask) {
+      pairs.emplace_back(start, std::numeric_limits<int>::max() / 2);
+      break;
+    }
+    pairs.emplace_back(start, nones);
+  }
+  return pairs;
+}
+
+std::pair<int, int> Dlop::get_mask_range() const {
+  if (size == 0) {
+    return {-1, -1};
+  }
+  bool all_zero = true;
+  for (int i = 0; i < size; ++i) {
+    if (base[i] != 0) { all_zero = false; break; }
+  }
+  if (all_zero) {
+    return {-1, -1};
+  }
+
+  int range_end;
+  if (is_positive()) {
+    range_end = get_bits() - 1;
+  } else {
+    range_end = std::numeric_limits<int>::max() / 2;
+  }
+
+  if (is_mask()) {
+    return {0, range_end};
+  }
+
+  int trail = get_trailing_zeroes();
+  if (trail == 0) {
+    return {-1, -1};
+  }
+
+  auto shifted = rsh_op(trail);
+  if (shifted->is_mask()) {
+    return {trail, range_end};
+  }
+  return {-1, -1};
+}
+
+// =========================================================================
+// to_field — Pyrope tuple-field stringification
+// String values are emitted unquoted; integers in plain decimal.
+// =========================================================================
+std::string Dlop::to_field() const {
+  if (type == Type::String) {
+    assert(!has_unknowns());
+    return to_string();
+  }
+  if (is_negative()) {
+    auto pos = neg_op();
+    return std::string("-") + pos->to_pyrope().substr(pos->to_pyrope().starts_with("0x") ? 2 : 0);
+  }
+  if (is_i()) {
+    return std::to_string(to_i());
+  }
+  // Large unsigned: hex without "0x"
+  auto p = to_pyrope();
+  if (p.starts_with("0x")) return p.substr(2);
+  return p;
+}
+
+// =========================================================================
+// to_known_rand — replace unknown bits with random known bits.
+// Deterministic per-process via a thread-local Mersenne.
+// =========================================================================
+spool_ptr<Dlop> Dlop::to_known_rand() const {
+  if (!has_unknowns()) {
+    // Return a fresh copy with same payload
+    auto d = spool_ptr<Dlop>::make(type, size);
+    for (int i = 0; i < size; ++i) {
+      d->base[i]  = base[i];
+      d->extra[i] = 0;
+    }
+    return d;
+  }
+
+  static thread_local std::mt19937_64 rng{0xC0FFEEULL};
+
+  auto d = spool_ptr<Dlop>::make(type, size);
+  for (int i = 0; i < size; ++i) {
+    uint64_t rnd = rng();
+    // Known bits come from base (since base==base|extra, base already carries
+    // the existing known 1s in non-extra positions). For unknown positions
+    // (extra=1), substitute random bits.
+    uint64_t known_mask = ~static_cast<uint64_t>(extra[i]);
+    d->base[i]  = static_cast<int64_t>((static_cast<uint64_t>(base[i]) & known_mask)
+                                       | (rnd & static_cast<uint64_t>(extra[i])));
+    d->extra[i] = 0;
+  }
+  return d;
+}
+
+// =========================================================================
+// Serialization — native layout, no boost dependency.
+//   [1 B] type (signed, cast from Type)
+//   [2 B] size (big-endian)
+//   [size * 8 B] base words (little-endian within each 64-bit word)
+//   [size * 8 B] extra words
+// =========================================================================
+std::string Dlop::serialize() const {
+  std::string out;
+  out.reserve(3 + size * 16);
+  out.push_back(static_cast<char>(static_cast<int16_t>(type) & 0xFF));
+  out.push_back(static_cast<char>((static_cast<uint16_t>(size) >> 8) & 0xFF));
+  out.push_back(static_cast<char>(static_cast<uint16_t>(size) & 0xFF));
+  for (int i = 0; i < size; ++i) {
+    uint64_t w = static_cast<uint64_t>(base[i]);
+    for (int b = 0; b < 8; ++b) {
+      out.push_back(static_cast<char>((w >> (b * 8)) & 0xFF));
+    }
+  }
+  for (int i = 0; i < size; ++i) {
+    uint64_t w = static_cast<uint64_t>(extra[i]);
+    for (int b = 0; b < 8; ++b) {
+      out.push_back(static_cast<char>((w >> (b * 8)) & 0xFF));
+    }
+  }
+  return out;
+}
+
+spool_ptr<Dlop> Dlop::unserialize(std::string_view v) {
+  assert(v.size() >= 3);
+  int8_t  raw_type = static_cast<int8_t>(v[0]);
+  uint16_t sz      = (static_cast<uint8_t>(v[1]) << 8) | static_cast<uint8_t>(v[2]);
+  Type     tp      = static_cast<Type>(static_cast<int16_t>(raw_type));
+
+  if (sz == 0) {
+    return spool_ptr<Dlop>::make(tp, 0);
+  }
+  assert(v.size() >= 3u + sz * 16u);
+
+  auto d = spool_ptr<Dlop>::make(tp, static_cast<int16_t>(sz));
+  size_t off = 3;
+  for (int i = 0; i < sz; ++i) {
+    uint64_t w = 0;
+    for (int b = 0; b < 8; ++b) {
+      w |= static_cast<uint64_t>(static_cast<uint8_t>(v[off + b])) << (b * 8);
+    }
+    d->base[i] = static_cast<int64_t>(w);
+    off += 8;
+  }
+  for (int i = 0; i < sz; ++i) {
+    uint64_t w = 0;
+    for (int b = 0; b < 8; ++b) {
+      w |= static_cast<uint64_t>(static_cast<uint8_t>(v[off + b])) << (b * 8);
+    }
+    d->extra[i] = static_cast<int64_t>(w);
+    off += 8;
+  }
+  return d;
+}
+
+// =========================================================================
+// hash — 64-bit FNV-1a over (type, size, base words, extra words)
+// =========================================================================
+uint64_t Dlop::hash() const {
+  constexpr uint64_t FNV_OFFSET = 14695981039346656037ULL;
+  constexpr uint64_t FNV_PRIME  = 1099511628211ULL;
+  uint64_t           h          = FNV_OFFSET;
+
+  auto mix_u64 = [&](uint64_t w) {
+    for (int b = 0; b < 8; ++b) {
+      h ^= static_cast<uint8_t>(w >> (b * 8));
+      h *= FNV_PRIME;
+    }
+  };
+
+  mix_u64(static_cast<uint64_t>(static_cast<int16_t>(type)));
+  mix_u64(static_cast<uint64_t>(size));
+  for (int i = 0; i < size; ++i) {
+    mix_u64(static_cast<uint64_t>(base[i]));
+  }
+  for (int i = 0; i < size; ++i) {
+    mix_u64(static_cast<uint64_t>(extra[i]));
+  }
+  return h;
 }

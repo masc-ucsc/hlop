@@ -41,7 +41,11 @@ private:
     Integer  = 0,
     Boolean  = 1,
     String   = 2,
-    Bitwidth = 3
+    Bitwidth = 3,
+    // Nil is Pyrope's tagged unit ("absence of value") — distinct from Invalid
+    // (which means error / unset). All arithmetic and logical ops propagate Nil:
+    // any binary op with a Nil operand returns Nil.
+    Nil      = 4
   };
 
   static inline thread_local std::vector<raw_ptr_pool *> free_pool;
@@ -190,6 +194,21 @@ public:
   static spool_ptr<Dlop> unknown_positive(int nbits);
   static spool_ptr<Dlop> unknown_negative(int nbits);
 
+  // Pyrope nil literal — distinct from invalid()
+  static spool_ptr<Dlop> nil();
+
+  // Mask helpers (statics): (1<<bits)-1, contiguous slice [l..h], and ~((1<<bits)-1)
+  static spool_ptr<Dlop> get_mask_value(int bits);
+  static spool_ptr<Dlop> get_mask_value(int h, int l);
+  static spool_ptr<Dlop> get_neg_mask_value(int bits);
+
+  // Persistence: stable binary roundtrip. Layout (little-endian word order):
+  //   [1 B] type, [2 B] size, [size * 8 B] base words, [size * 8 B] extra words
+  std::string                  serialize() const;
+  static spool_ptr<Dlop>       unserialize(std::string_view v);
+
+  uint64_t hash() const;
+
 protected:
   // --- Mutating arithmetic ---
   void mut_add(spool_ptr<Dlop> other);
@@ -244,10 +263,23 @@ public:
   bool is_known_true() const;
   bool is_mask() const;
   bool is_power2() const;
+  bool is_nil() const { return type == Type::Nil; }
   // is_ref: encoded as Type::Invalid carrying a non-zero packed-string payload.
   // Invalid (no value) has Type::Invalid + zero/empty content; from_ref keeps
   // the same Invalid tag but stores the byte-packed identifier in `base`.
   bool is_ref() const;
+
+  // Bitwidth slice helpers (instance form): walk contiguous 1-runs in base.
+  // Returns (-1,-1) when no contiguous range exists (or empty for pairs).
+  spool_ptr<Dlop>                  get_mask_value() const;
+  std::vector<std::pair<int, int>> get_mask_range_pairs() const;
+  std::pair<int, int>              get_mask_range() const;
+
+  // Pyrope tuple-field stringification (subset of to_pyrope allowed as a field key)
+  std::string to_field() const;
+
+  // Resolve unknown bits to fresh random known bits (deterministic per-process seed)
+  spool_ptr<Dlop> to_known_rand() const;
   int  get_bits() const;
   bool bit_test(int pos) const;
   int  get_first_bit_set() const;
@@ -264,4 +296,29 @@ public:
   std::string to_string() const;
 
   void dump() const;
+};
+
+#include <format>
+
+// std::format integration. Renders via to_pyrope() for both the value-type
+// and the pool-pointer wrapper, so call sites can write:
+//   std::format("{}", dlop_value)
+//   std::format("{}", spool_ptr_to_dlop)
+template <>
+struct std::formatter<Dlop> : formatter<string_view> {
+  template <typename FormatContext>
+  auto format(const Dlop& d, FormatContext& ctx) const {
+    return formatter<string_view>::format(d.to_pyrope(), ctx);
+  }
+};
+
+template <>
+struct std::formatter<spool_ptr<Dlop>> : formatter<string_view> {
+  template <typename FormatContext>
+  auto format(const spool_ptr<Dlop>& d, FormatContext& ctx) const {
+    if (!d) {
+      return formatter<string_view>::format(std::string_view{}, ctx);
+    }
+    return formatter<string_view>::format(d->to_pyrope(), ctx);
+  }
 };

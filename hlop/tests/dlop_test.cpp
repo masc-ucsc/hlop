@@ -277,3 +277,172 @@ TEST_F(Dlop_test, or_unknown) {
   // bit 1: 1 OR ? = 1 (known 1)
   EXPECT_TRUE(c->has_unknowns());
 }
+
+// =========================================================================
+// Nil — tagged-unit
+// =========================================================================
+TEST_F(Dlop_test, nil_is_distinct) {
+  auto n = Dlop::nil();
+  EXPECT_TRUE(n->is_nil());
+  EXPECT_FALSE(n->is_invalid());
+  EXPECT_FALSE(n->is_integer());
+  auto inv = Dlop::invalid();
+  EXPECT_FALSE(inv->is_nil());
+  EXPECT_TRUE(inv->is_invalid());
+}
+
+// =========================================================================
+// Mask helpers
+// =========================================================================
+TEST_F(Dlop_test, get_mask_value_static) {
+  EXPECT_EQ(Dlop::get_mask_value(0)->to_i(), 1);   // bits==0 -> 1 per the contract
+  EXPECT_EQ(Dlop::get_mask_value(1)->to_i(), 1);
+  EXPECT_EQ(Dlop::get_mask_value(4)->to_i(), 0xF);
+  EXPECT_EQ(Dlop::get_mask_value(8)->to_i(), 0xFF);
+  EXPECT_EQ(Dlop::get_mask_value(16)->to_i(), 0xFFFF);
+}
+
+TEST_F(Dlop_test, get_mask_value_range) {
+  // bits [3..0] -> 0xF
+  EXPECT_EQ(Dlop::get_mask_value(3, 0)->to_i(), 0xF);
+  // bits [7..4] -> 0xF0
+  EXPECT_EQ(Dlop::get_mask_value(7, 4)->to_i(), 0xF0);
+  // single bit h==l
+  EXPECT_EQ(Dlop::get_mask_value(5, 5)->to_i(), 0x20);
+}
+
+TEST_F(Dlop_test, get_neg_mask_value_static) {
+  // -1 << 4 == -16
+  EXPECT_EQ(Dlop::get_neg_mask_value(4)->to_i(), -16);
+  // -1 << 0 == -1  (but bits<=1 returns 1 per legacy semantics)
+  EXPECT_EQ(Dlop::get_neg_mask_value(0)->to_i(), 1);
+  EXPECT_EQ(Dlop::get_neg_mask_value(1)->to_i(), 1);
+  EXPECT_EQ(Dlop::get_neg_mask_value(8)->to_i(), -256);
+}
+
+TEST_F(Dlop_test, get_mask_range_continuous) {
+  // 0b0000_1111 -> (0, range_end)
+  auto a = Dlop::create_integer(0xF);
+  auto r = a->get_mask_range();
+  EXPECT_EQ(r.first, 0);
+  EXPECT_GE(r.second, 3);
+}
+
+TEST_F(Dlop_test, get_mask_range_shifted) {
+  // 0b1111_0000 -> trailing 4 zeros + mask
+  auto a = Dlop::create_integer(0xF0);
+  auto r = a->get_mask_range();
+  EXPECT_EQ(r.first, 4);
+}
+
+TEST_F(Dlop_test, get_mask_range_pairs_two_runs) {
+  // 0b0011_0011 -> two runs of 2 ones each at positions 0 and 4
+  auto a = Dlop::create_integer(0x33);
+  auto pairs = a->get_mask_range_pairs();
+  ASSERT_EQ(pairs.size(), 2u);
+  EXPECT_EQ(pairs[0].first, 0);
+  EXPECT_EQ(pairs[0].second, 2);
+  EXPECT_EQ(pairs[1].first, 4);
+  EXPECT_EQ(pairs[1].second, 2);
+}
+
+// =========================================================================
+// Serialize / unserialize roundtrip
+// =========================================================================
+TEST_F(Dlop_test, serialize_roundtrip_int) {
+  auto a = Dlop::create_integer(0x12345678);
+  auto s = a->serialize();
+  auto b = Dlop::unserialize(s);
+  EXPECT_EQ(a->to_i(), b->to_i());
+  EXPECT_EQ(a->type, b->type);
+}
+
+TEST_F(Dlop_test, serialize_roundtrip_negative) {
+  auto a = Dlop::create_integer(-12345);
+  auto s = a->serialize();
+  auto b = Dlop::unserialize(s);
+  EXPECT_EQ(a->to_i(), b->to_i());
+}
+
+TEST_F(Dlop_test, serialize_roundtrip_unknown) {
+  auto a = Dlop::from_pyrope("0sb1?0?");
+  auto s = a->serialize();
+  auto b = Dlop::unserialize(s);
+  EXPECT_EQ(a->to_pyrope(), b->to_pyrope());
+}
+
+TEST_F(Dlop_test, serialize_roundtrip_invalid_nil) {
+  auto inv = Dlop::invalid();
+  auto s   = inv->serialize();
+  auto r   = Dlop::unserialize(s);
+  EXPECT_TRUE(r->is_invalid());
+
+  auto n  = Dlop::nil();
+  auto s2 = n->serialize();
+  auto r2 = Dlop::unserialize(s2);
+  EXPECT_TRUE(r2->is_nil());
+}
+
+// =========================================================================
+// Hash stability
+// =========================================================================
+TEST_F(Dlop_test, hash_consistency) {
+  auto a = Dlop::create_integer(42);
+  auto b = Dlop::create_integer(42);
+  EXPECT_EQ(a->hash(), b->hash());
+  auto c = Dlop::create_integer(43);
+  EXPECT_NE(a->hash(), c->hash());
+}
+
+TEST_F(Dlop_test, hash_distinguishes_types) {
+  auto i = Dlop::create_integer(0);
+  auto b = Dlop::create_bool(false);
+  // Different type tag -> different hash even when payload near-zero
+  EXPECT_NE(i->hash(), b->hash());
+}
+
+// =========================================================================
+// to_field
+// =========================================================================
+TEST_F(Dlop_test, to_field_integer) {
+  EXPECT_EQ(Dlop::create_integer(0)->to_field(), "0");
+  EXPECT_EQ(Dlop::create_integer(7)->to_field(), "7");
+  EXPECT_EQ(Dlop::create_integer(42)->to_field(), "42");
+}
+
+TEST_F(Dlop_test, to_field_string) {
+  auto s = Dlop::create_string("foo");
+  EXPECT_EQ(s->to_field(), "foo");
+}
+
+// =========================================================================
+// to_known_rand
+// =========================================================================
+TEST_F(Dlop_test, to_known_rand_no_unknowns_identity) {
+  auto a = Dlop::create_integer(0xA5);
+  auto b = a->to_known_rand();
+  EXPECT_FALSE(b->has_unknowns());
+  EXPECT_EQ(b->to_i(), 0xA5);
+}
+
+TEST_F(Dlop_test, to_known_rand_strips_unknowns) {
+  auto a = Dlop::from_pyrope("0sb1??1");
+  EXPECT_TRUE(a->has_unknowns());
+  auto b = a->to_known_rand();
+  EXPECT_FALSE(b->has_unknowns());
+}
+
+// =========================================================================
+// std::format integration
+// =========================================================================
+TEST_F(Dlop_test, format_integration_value) {
+  auto a = Dlop::create_integer(42);
+  EXPECT_EQ(std::format("{}", *a), "42");
+}
+
+TEST_F(Dlop_test, format_integration_spool_ptr) {
+  auto a = Dlop::create_integer(7);
+  EXPECT_EQ(std::format("{}", a), "7");
+  spool_ptr<Dlop> empty;
+  EXPECT_EQ(std::format("{}", empty), "");
+}
