@@ -69,6 +69,42 @@ TEST_F(Dlop_test, from_pyrope_string) {
   EXPECT_EQ(s->to_string(), "hello");
 }
 
+TEST_F(Dlop_test, concat_op_string) {
+  // String ++ string is text concat, not numeric bit-concat.
+  auto hello = Dlop::from_pyrope("'hello'");
+  auto world = Dlop::from_pyrope("' world'");
+  auto bang  = Dlop::from_pyrope("'!'");
+
+  auto hw = hello->concat_op(*world);
+  EXPECT_TRUE(hw->is_string());
+  EXPECT_EQ(hw->to_string(), "hello world");
+
+  auto hwb = hw->concat_op(*bang);
+  EXPECT_TRUE(hwb->is_string());
+  EXPECT_EQ(hwb->to_string(), "hello world!");
+
+  // Empty-string identity: "" ++ "x" = "x" ; "x" ++ "" = "x".
+  auto empty = Dlop::from_pyrope("''");
+  EXPECT_TRUE(empty->is_string());
+  auto a = empty->concat_op(*hello);
+  EXPECT_TRUE(a->is_string());
+  EXPECT_EQ(a->to_string(), "hello");
+  auto b = hello->concat_op(*empty);
+  EXPECT_TRUE(b->is_string());
+  EXPECT_EQ(b->to_string(), "hello");
+}
+
+TEST_F(Dlop_test, concat_op_integer_unchanged) {
+  // Integer ++ integer stays a numeric bit-concat (signed-positive
+  // integers carry a leading-zero sign bit; 0b1010 occupies 5 bits in
+  // pyrope, 0b11 occupies 3 bits, so the concat is (10 << 3) | 3 = 83).
+  auto a = Dlop::from_pyrope("0b1010");
+  auto b = Dlop::from_pyrope("0b11");
+  auto c = a->concat_op(*b);
+  EXPECT_FALSE(c->is_string());
+  EXPECT_EQ(c->to_i(), 83);
+}
+
 TEST_F(Dlop_test, from_pyrope_nil) {
   // Bare nil/null tokens are the Pyrope nil literal — case-insensitive.
   for (auto* txt : {"nil", "Nil", "NIL", "NiL", "null", "Null", "NULL", "nUlL"}) {

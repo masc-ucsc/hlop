@@ -1206,6 +1206,29 @@ spool_ptr<Dlop> Dlop::ror_op(const Dlop& other) const {
 }
 
 spool_ptr<Dlop> Dlop::concat_op(const Dlop& other) const {
+  // String ++ string is a *text* concat, not a numeric bit-concat.
+  // init_string stores the first character in the low byte (so "ab" is
+  // numerically `b'*256 + a` = 0x6261). To make "ab" ++ "cd" produce
+  // "abcd" = 0x64636261, the second operand's bytes have to occupy the
+  // HIGH region: result = (other << self_bits) | self — the opposite
+  // shift direction of integer ++. The result must also stay
+  // Type::String so subsequent passes don't misclassify the value as a
+  // bit-packed integer.
+  if (is_string() && other.is_string()) {
+    int  self_bits = get_bits();
+    if (self_bits <= 0) {
+      auto dlop = make_result(Type::String, other.size);
+      memcpy(dlop->base(), other.base(), other.size * sizeof(int64_t));
+      memcpy(dlop->extra(), other.extra(), other.size * sizeof(int64_t));
+      return dlop;
+    }
+    auto shifted = other.lsh_op(self_bits);
+    auto masked_self = get_mask_op();
+    auto r = shifted->or_op(masked_self);
+    r->type = Type::String;
+    return r;
+  }
+
   int other_bits = other.get_bits();
   if (other_bits <= 0) {
     auto dlop = make_result(Type::Integer, size);
