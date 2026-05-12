@@ -25,19 +25,19 @@ class EvalSlopTest : public ::testing::Test {};
 TEST_F(EvalSlopTest, eval_or) {
   std::array<V8, 3> ins{V8::from_pyrope("0b0011"), V8::from_pyrope("0b1000"), V8::from_pyrope("0b0100")};
   auto out = hlop::eval_or<V8>(ins);
-  EXPECT_EQ(out, V8::from_pyrope("0b1111"));
+  EXPECT_TRUE(out.is_known_eq(V8::from_pyrope("0b1111")));
 }
 
 TEST_F(EvalSlopTest, eval_and) {
   std::array<V8, 2> ins{V8::from_pyrope("0b1110"), V8::from_pyrope("0b1011")};
   auto out = hlop::eval_and<V8>(ins);
-  EXPECT_EQ(out, V8::from_pyrope("0b1010"));
+  EXPECT_TRUE(out.is_known_eq(V8::from_pyrope("0b1010")));
 }
 
 TEST_F(EvalSlopTest, eval_xor) {
   std::array<V8, 2> ins{V8::from_pyrope("0b1110"), V8::from_pyrope("0b1011")};
   auto out = hlop::eval_xor<V8>(ins);
-  EXPECT_EQ(out, V8::from_pyrope("0b0101"));
+  EXPECT_TRUE(out.is_known_eq(V8::from_pyrope("0b0101")));
 }
 
 TEST_F(EvalSlopTest, eval_ror_true) {
@@ -55,18 +55,18 @@ TEST_F(EvalSlopTest, eval_ror_false) {
 TEST_F(EvalSlopTest, eval_mult) {
   std::array<V32, 2> ins{V32::create_integer(6), V32::create_integer(7)};
   auto out = hlop::eval_mult<V32>(ins);
-  EXPECT_EQ(out, V32::create_integer(42));
+  EXPECT_TRUE(out.is_known_eq(V32::create_integer(42)));
 }
 
 TEST_F(EvalSlopTest, eval_not) {
   auto out = hlop::eval_not(V8::from_pyrope("0b1010"));
   // ~0b...1010 = 0b...0101 (sign-extended, so ~0x0a = 0xf5 in 8-bit = -11)
-  EXPECT_EQ(out, V8::create_integer(~0x0a));
+  EXPECT_TRUE(out.is_known_eq(V8::create_integer(~0x0a)));
 }
 
 TEST_F(EvalSlopTest, eval_div) {
   auto out = hlop::eval_div(V32::create_integer(42), V32::create_integer(6));
-  EXPECT_EQ(out, V32::create_integer(7));
+  EXPECT_TRUE(out.is_known_eq(V32::create_integer(7)));
 }
 
 TEST_F(EvalSlopTest, eval_lt_true) {
@@ -92,17 +92,17 @@ TEST_F(EvalSlopTest, eval_eq_false) {
 TEST_F(EvalSlopTest, eval_sext) {
   // 0b1010 sign-extended from bit 3 -> 0b...11111010 = -6
   auto out = hlop::eval_sext(V32::from_pyrope("0b1010"), 3);
-  EXPECT_EQ(out, V32::create_integer(-6));
+  EXPECT_TRUE(out.is_known_eq(V32::create_integer(-6)));
 }
 
 TEST_F(EvalSlopTest, eval_shl) {
   auto out = hlop::eval_shl(V32::create_integer(1), V32::create_integer(4));
-  EXPECT_EQ(out, V32::create_integer(16));
+  EXPECT_TRUE(out.is_known_eq(V32::create_integer(16)));
 }
 
 TEST_F(EvalSlopTest, eval_sra) {
   auto out = hlop::eval_sra(V32::create_integer(-16), V32::create_integer(2));
-  EXPECT_EQ(out, V32::create_integer(-4));
+  EXPECT_TRUE(out.is_known_eq(V32::create_integer(-4)));
 }
 
 TEST_F(EvalSlopTest, eval_set_mask_zero_mask) {
@@ -110,7 +110,7 @@ TEST_F(EvalSlopTest, eval_set_mask_zero_mask) {
   auto mask = V8::create_integer(0);
   auto val  = V8::create_integer(0xAA);
   auto out  = hlop::eval_set_mask(base, mask, val);
-  EXPECT_EQ(out, base);
+  EXPECT_TRUE(out.is_known_eq(base));
 }
 
 TEST_F(EvalSlopTest, eval_set_mask_low_nibble) {
@@ -118,7 +118,7 @@ TEST_F(EvalSlopTest, eval_set_mask_low_nibble) {
   auto mask = V32::from_pyrope("0x0F");
   auto val  = V32::from_pyrope("0xa");
   auto out  = hlop::eval_set_mask(base, mask, val);
-  EXPECT_EQ(out, V32::from_pyrope("0xFFa"));
+  EXPECT_TRUE(out.is_known_eq(V32::from_pyrope("0xFFa")));
 }
 
 // --- Multi-sink ops ---
@@ -127,14 +127,14 @@ TEST_F(EvalSlopTest, eval_sum) {
   std::array<V32, 2> plus{V32::create_integer(10), V32::create_integer(3)};
   std::array<V32, 1> minus{V32::create_integer(4)};
   auto out = hlop::eval_sum<V32>({.plus = plus, .minus = minus});
-  EXPECT_EQ(out, V32::create_integer(9));
+  EXPECT_TRUE(out.is_known_eq(V32::create_integer(9)));
 }
 
 TEST_F(EvalSlopTest, eval_sum_plus_only) {
   std::array<V32, 3> plus{V32::create_integer(1), V32::create_integer(2), V32::create_integer(3)};
   std::array<V32, 0> minus{};
   auto out = hlop::eval_sum<V32>({.plus = plus, .minus = minus});
-  EXPECT_EQ(out, V32::create_integer(6));
+  EXPECT_TRUE(out.is_known_eq(V32::create_integer(6)));
 }
 
 TEST_F(EvalSlopTest, eval_mux) {
@@ -142,14 +142,14 @@ TEST_F(EvalSlopTest, eval_mux) {
   SSel sel = SSel::create_integer(2);
   std::array<V32, 3> data{V32::from_pyrope("0x11"), V32::from_pyrope("0x22"), V32::from_pyrope("0x33")};
   auto out = hlop::eval_mux<SSel, V32>({.sel = sel, .data = data});
-  EXPECT_EQ(out, V32::from_pyrope("0x33"));
+  EXPECT_TRUE(out.is_known_eq(V32::from_pyrope("0x33")));
 }
 
 TEST_F(EvalSlopTest, eval_mux_first) {
   V32 sel = V32::create_integer(0);
   std::array<V32, 3> data{V32::from_pyrope("0x11"), V32::from_pyrope("0x22"), V32::from_pyrope("0x33")};
   auto out = hlop::eval_mux<V32, V32>({.sel = sel, .data = data});
-  EXPECT_EQ(out, V32::from_pyrope("0x11"));
+  EXPECT_TRUE(out.is_known_eq(V32::from_pyrope("0x11")));
 }
 
 TEST_F(EvalSlopTest, eval_lut_basic) {
@@ -175,14 +175,14 @@ TEST_F(EvalSlopTest, eval_flop_basic) {
 
   hlop::FlopArgs<V32> fargs{.din = din, .clock_pin = clk};
   auto q = hlop::eval_flop<V32>(regs, 0, fargs);
-  EXPECT_EQ(q, V32::create_integer(0));  // current is still 0
+  EXPECT_TRUE(q.is_known_eq(V32::create_integer(0)));  // current is still 0
 
   regs.advance_clock();
 
   V32 din2 = V32::create_integer(99);
   hlop::FlopArgs<V32> fargs2{.din = din2, .clock_pin = clk};
   auto q2 = hlop::eval_flop<V32>(regs, 0, fargs2);
-  EXPECT_EQ(q2, V32::create_integer(42));  // now visible after advance_clock
+  EXPECT_TRUE(q2.is_known_eq(V32::create_integer(42)));  // now visible after advance_clock
 }
 
 TEST_F(EvalSlopTest, eval_flop_enable_false) {
@@ -196,7 +196,7 @@ TEST_F(EvalSlopTest, eval_flop_enable_false) {
   regs.advance_clock();
 
   auto q = hlop::eval_flop<V32>(regs, 0, fargs);
-  EXPECT_EQ(q, V32::create_integer(0));  // enable was false, so no update
+  EXPECT_TRUE(q.is_known_eq(V32::create_integer(0)));  // enable was false, so no update
 }
 
 TEST_F(EvalSlopTest, eval_latch_transparent) {
@@ -206,7 +206,7 @@ TEST_F(EvalSlopTest, eval_latch_transparent) {
 
   hlop::LatchArgs<V32> largs{.din = din, .enable = en};
   auto q = hlop::eval_latch<V32>(regs, 0, largs);
-  EXPECT_EQ(q, V32::create_integer(42));  // transparent when enable is high
+  EXPECT_TRUE(q.is_known_eq(V32::create_integer(42)));  // transparent when enable is high
 }
 
 TEST_F(EvalSlopTest, eval_latch_opaque) {
@@ -221,7 +221,7 @@ TEST_F(EvalSlopTest, eval_latch_opaque) {
 
   hlop::LatchArgs<V32> largs2{.din = din2, .enable = en_low};
   auto q = hlop::eval_latch<V32>(regs, 0, largs2);
-  EXPECT_EQ(q, V32::create_integer(42));  // holds last value
+  EXPECT_TRUE(q.is_known_eq(V32::create_integer(42)));  // holds last value
 }
 
 // --- Memory ---
@@ -239,12 +239,12 @@ TEST_F(EvalSlopTest, eval_memory_write_read) {
   // Before advance_clock, read should see old value (fwd=false)
   hlop::MemoryReadArgs<V32> rargs{.addr = addr, .enable = en};
   auto rd = hlop::eval_memory_read<V32>(mem, rargs);
-  EXPECT_EQ(rd, V32::create_integer(0));
+  EXPECT_TRUE(rd.is_known_eq(V32::create_integer(0)));
 
   mem.advance_clock();
 
   auto rd2 = hlop::eval_memory_read<V32>(mem, rargs);
-  EXPECT_EQ(rd2, V32::from_pyrope("0xdeadbeef"));
+  EXPECT_TRUE(rd2.is_known_eq(V32::from_pyrope("0xdeadbeef")));
 }
 
 TEST_F(EvalSlopTest, eval_memory_fwd) {
@@ -261,7 +261,7 @@ TEST_F(EvalSlopTest, eval_memory_fwd) {
   // With fwd=true, read should see pending write
   hlop::MemoryReadArgs<V32> rargs{.addr = addr, .enable = en, .fwd = &fwd_flag};
   auto rd = hlop::eval_memory_read<V32>(mem, rargs);
-  EXPECT_EQ(rd, V32::from_pyrope("0xcafe"));
+  EXPECT_TRUE(rd.is_known_eq(V32::from_pyrope("0xcafe")));
 }
 
 // =========================================================================
@@ -286,7 +286,7 @@ TEST_F(EvalDlopTest, or_basic) {
       },
   };
   auto res = ctx.execute(call);
-  EXPECT_EQ(*res.outputs[0], *V("0b1111"));
+  EXPECT_TRUE(res.outputs[0]->is_known_eq(*V("0b1111")));
 }
 
 TEST_F(EvalDlopTest, and_basic) {
@@ -298,7 +298,7 @@ TEST_F(EvalDlopTest, and_basic) {
       },
   };
   auto res = ctx.execute(call);
-  EXPECT_EQ(*res.outputs[0], *V("0b1010"));
+  EXPECT_TRUE(res.outputs[0]->is_known_eq(*V("0b1010")));
 }
 
 TEST_F(EvalDlopTest, xor_basic) {
@@ -310,7 +310,7 @@ TEST_F(EvalDlopTest, xor_basic) {
       },
   };
   auto res = ctx.execute(call);
-  EXPECT_EQ(*res.outputs[0], *V("0b0101"));
+  EXPECT_TRUE(res.outputs[0]->is_known_eq(*V("0b0101")));
 }
 
 TEST_F(EvalDlopTest, sum_with_AB) {

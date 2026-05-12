@@ -5,7 +5,11 @@
 // Template class where bit-width N is known at compile time.
 // Stack-allocated value type — no dynamic memory allocation.
 // Uses Blop primitives for all operations.
-// Semantics match Dlop exactly (signed, unlimited-precision feel, unknowns via base/extra).
+// Slop is the runtime-only kernel: every bit is concrete. Unknown source
+// bits ('?'/'x'/'z') in pyrope/binary literals are resolved to random
+// concrete bits at parse time via a deterministic per-process PRNG. Ops
+// never propagate unknowns and assert on Nil inputs. For Dlop-style three-
+// valued semantics over symbolic unknowns, use Dlop instead.
 
 #pragma once
 
@@ -14,10 +18,12 @@
 #include <cstdint>
 #include <format>
 #include <print>
+#include <random>
 #include <string>
 #include <string_view>
 
 #include "blop.hpp"
+#include "iassert.hpp"
 
 template <int N>
 class Slop {
@@ -30,15 +36,17 @@ class Slop {
     Integer  = 0,
     Boolean  = 1,
     String   = 2,
-    Bitwidth = 3
+    Bitwidth = 3,
+    // Nil is Pyrope's tagged unit ("absence of value"). Slop intentionally does
+    // NOT propagate Nil through ops at runtime — every op asserts that no input
+    // is Nil. A Nil reaching an op is a caller bug, not a representable result.
+    Nil      = 4
   };
 
   Type                          type_;
   std::array<int64_t, n_words>  base_;
-  std::array<int64_t, n_words>  extra_;  // unknown mask (1 = unknown)
 
-  constexpr Slop(Type tp, std::array<int64_t, n_words> b, std::array<int64_t, n_words> e)
-      : type_(tp), base_(b), extra_(e) {}
+  constexpr Slop(Type tp, std::array<int64_t, n_words> b) : type_(tp), base_(b) {}
 
   static constexpr std::array<int64_t, n_words> zero_array() {
     std::array<int64_t, n_words> a{};
@@ -54,11 +62,13 @@ class Slop {
     return a;
   }
 
-  constexpr bool has_extra() const {
-    for (int i = 0; i < n_words; ++i) {
-      if (extra_[i] != 0) return true;
-    }
-    return false;
+  // Slop ops are not defined over Nil. Every binary/unary op asserts this on
+  // entry — Nil reaching an op is a caller bug. Compiles out under NDEBUG, so
+  // the hot path pays nothing in release builds.
+  constexpr void nil_check_() const { I(type_ != Type::Nil); }
+  constexpr void nil_check_(const Slop &other) const {
+    I(type_ != Type::Nil);
+    I(other.type_ != Type::Nil);
   }
 
   // Lookup tables (same as Dlop)
@@ -83,21 +93,21 @@ class Slop {
 
 public:
   // --- Constructors ---
-  constexpr Slop() : type_(Type::Integer), base_(zero_array()), extra_(zero_array()) {}
+  constexpr Slop() : type_(Type::Integer), base_(zero_array()) {}
 
-  constexpr Slop(int64_t val) : type_(Type::Integer), base_(fill_array(val)), extra_(zero_array()) {}
+  constexpr Slop(int64_t val) : type_(Type::Integer), base_(fill_array(val)) {}
 
   // --- Factory methods ---
   static constexpr Slop create_bool(bool val) {
-    return Slop(Type::Boolean, fill_array(val ? -1 : 0), zero_array());
+    return Slop(Type::Boolean, fill_array(val ? -1 : 0));
   }
 
   static constexpr Slop create_integer(int64_t val) {
-    return Slop(Type::Integer, fill_array(val), zero_array());
+    return Slop(Type::Integer, fill_array(val));
   }
 
   static constexpr Slop create_string(std::string_view txt) {
-    Slop s(Type::String, zero_array(), zero_array());
+    Slop s(Type::String, zero_array());
     for (int i = txt.size() - 1; i >= 0; --i) {
       Blop::shl<n_words>(s.base_, s.base_, 8);
       s.base_[0] |= static_cast<unsigned char>(txt[i]);
@@ -110,13 +120,17 @@ public:
   }
 
   static constexpr Slop invalid() {
-    return Slop(Type::Invalid, zero_array(), zero_array());
+    return Slop(Type::Invalid, zero_array());
+  }
+
+  static constexpr Slop nil() {
+    return Slop(Type::Nil, zero_array());
   }
 
   // ref shares the Invalid tag with `invalid()` — distinguished by carrying
   // a non-zero byte-packed payload. Mirrors Lconst::from_ref encoding.
   static constexpr Slop from_ref(std::string_view txt) {
-    Slop s(Type::Invalid, zero_array(), zero_array());
+    Slop s(Type::Invalid, zero_array());
     for (int i = txt.size() - 1; i >= 0; --i) {
       Blop::shl<n_words>(s.base_, s.base_, 8);
       s.base_[0] |= static_cast<unsigned char>(txt[i]);
@@ -124,43 +138,35 @@ public:
     return s;
   }
 
+  // unknown(nbits): factory exposed for eval.hpp template compatibility. Slop
+  // has no symbolic unknowns, so this returns an N-bit random concrete value
+  // drawn from the same PRNG used at parse time. In practice this is never
+  // called for Slop in the shared kernels — the `has_unknowns()` guards always
+  // take the known path — but the symbol must exist to compile.
   static Slop unknown(int nbits) {
     Slop s;
     if (nbits <= 0) return s;
-    if (nbits <= 63) {
-      int64_t mask = (int64_t(1) << nbits) - 1;
-      s.base_[0]  = mask;
-      s.extra_[0] = mask;
-    } else {
-      int words = (nbits + 63) / 64;
-      for (int i = 0; i < std::min(words, n_words); ++i) {
-        s.base_[i]  = -1;
-        s.extra_[i] = -1;
-      }
-      int leftover = nbits % 64;
-      if (leftover > 0 && words - 1 < n_words) {
-        int64_t mask = (int64_t(1) << leftover) - 1;
-        s.base_[words - 1]  = mask;
-        s.extra_[words - 1] = mask;
-      }
+    int words = std::min((nbits + 63) / 64, n_words);
+    for (int i = 0; i < words; ++i) {
+      static thread_local std::mt19937_64 rng{0xC0FFEEULL};
+      s.base_[i] = static_cast<int64_t>(rng());
+    }
+    int leftover = nbits % 64;
+    if (leftover > 0 && words - 1 < n_words) {
+      int64_t mask = (int64_t(1) << leftover) - 1;
+      s.base_[words - 1] &= mask;
     }
     return s;
   }
 
-  static Slop unknown_positive(int nbits) {
-    if (nbits <= 1) return create_integer(0);
-    return unknown(nbits - 1);
-  }
-
-  static Slop unknown_negative(int nbits) {
-    if (nbits <= 1) return create_integer(-1);
-    auto s = unknown(nbits);
-    int word = (nbits - 1) / 64;
-    int bit  = (nbits - 1) % 64;
-    if (word < n_words) {
-      s.extra_[word] &= ~(int64_t(1) << bit);
-    }
-    return s;
+  // Draw a single random bit from a deterministic per-process PRNG. Runtime
+  // only — constant-evaluated calls hit the constexpr branch below and throw
+  // (a '?' in a compile-time literal is not meaningful since the result would
+  // be non-deterministic). Slop has no notion of unknowns at runtime, so we
+  // randomize each '?'/'x'/'z' bit at parse time and store 0/1 in base_.
+  static int random_bit_() {
+    static thread_local std::mt19937_64 rng{0xC0FFEEULL};
+    return static_cast<int>(rng() & 1);
   }
 
   static constexpr Slop from_binary(std::string_view txt, bool unsigned_result) {
@@ -171,8 +177,12 @@ public:
         if (ch == '_') continue;
         if (ch == '1') {
           for (int w = 0; w < n_words; ++w) s.base_[w] = -1;
-        } else if (ch == '?') {
-          for (int w = 0; w < n_words; ++w) s.extra_[w] = -1;
+        } else if (ch == '?' || ch == 'x' || ch == 'z') {
+          if (std::is_constant_evaluated()) {
+            throw std::runtime_error("ERROR: '?' in binary literal cannot be constant-evaluated");
+          } else if (random_bit_()) {
+            for (int w = 0; w < n_words; ++w) s.base_[w] = -1;
+          }
         }
         break;
       }
@@ -183,10 +193,12 @@ public:
       if (ch == '_') continue;
 
       Blop::shl<n_words>(s.base_, s.base_, 1);
-      Blop::shl<n_words>(s.extra_, s.extra_, 1);
       if (ch == '?' || ch == 'x' || ch == 'z') {
-        s.extra_[0] |= 1;
-        s.base_[0]  |= 1;
+        if (std::is_constant_evaluated()) {
+          throw std::runtime_error("ERROR: '?' in binary literal cannot be constant-evaluated");
+        } else if (random_bit_()) {
+          s.base_[0] |= 1;
+        }
       } else if (ch == '1') {
         s.base_[0] |= 1;
       } else if (ch == '0') {
@@ -322,195 +334,133 @@ public:
 
   // --- Arithmetic ---
   Slop add_op(const Slop &other) const {
+    nil_check_(other);
     Slop result;
     if constexpr (n_words == 1) {
       result.base_[0] = base_[0] + other.base_[0];
-      if (extra_[0] == 0 && other.extra_[0] == 0) {
-        result.extra_[0] = 0;
-      } else {
-        result.extra_[0] = extra_[0] | other.extra_[0];
-        result.base_[0] |= result.extra_[0];
-      }
     } else {
       Blop::add<n_words>(result.base_, base_, other.base_);
-      if (!has_extra() && !other.has_extra()) {
-        result.extra_ = zero_array();
-      } else {
-        Blop::bor<n_words>(result.extra_, extra_, other.extra_);
-        Blop::bor<n_words>(result.base_, result.base_, result.extra_);
-      }
     }
     return result;
   }
 
   Slop sub_op(const Slop &other) const {
+    nil_check_(other);
     return add_op(other.neg_op());
   }
 
   Slop mult_op(const Slop &other) const {
+    nil_check_(other);
     Slop result;
-    if (has_extra() || other.has_extra()) {
-      // Conservative: all bits unknown
-      int nbits = get_bits() + other.get_bits();
-      bool neg1 = is_negative();
-      bool neg2 = other.is_negative();
-      if (neg1 != neg2) return unknown_negative(std::min(nbits, N));
-      return unknown_positive(std::min(nbits, N));
-    }
     Blop::mult<n_words>(result.base_, base_, other.base_);
-    result.extra_ = zero_array();
     return result;
   }
 
   Slop div_op(const Slop &other) const {
-    if (other.is_known_false()) {
-      if (is_negative()) return unknown_negative(2);
-      return unknown_positive(2);
-    }
-    if (has_extra() || other.has_extra()) {
-      int b = get_bits();
-      if (!other.has_extra()) {
-        b -= other.get_bits();
-        if (b <= 0) return Slop(0);
-      }
-      bool neg1 = is_negative();
-      bool neg2 = other.is_negative();
-      if (neg1 != neg2) return unknown_negative(b);
-      return unknown_positive(b);
-    }
+    nil_check_(other);
+    I(!other.is_known_false(), "Slop division by zero");
     Slop result;
     Blop::div<n_words>(result.base_, base_, other.base_);
-    result.extra_ = zero_array();
     return result;
   }
 
   Slop neg_op() const {
+    nil_check_();
     Slop result;
     Blop::neg<n_words>(result.base_, base_);
-    if (has_extra()) {
-      result.extra_ = extra_;
-      Blop::bor<n_words>(result.base_, result.base_, result.extra_);
-    } else {
-      result.extra_ = zero_array();
-    }
     return result;
   }
 
   // --- Bitwise ---
   Slop or_op(const Slop &other) const {
+    nil_check_(other);
     Slop result;
-    if (!has_extra() && !other.has_extra()) {
-      Blop::bor<n_words>(result.base_, base_, other.base_);
-      result.extra_ = zero_array();
-    } else {
-      for (int i = 0; i < n_words; ++i) {
-        int64_t known1_a = base_[i] & ~extra_[i];
-        int64_t known1_b = other.base_[i] & ~other.extra_[i];
-        int64_t known0_a = ~base_[i];
-        int64_t known0_b = ~other.base_[i];
-        int64_t result_known1 = known1_a | known1_b;
-        int64_t result_known0 = known0_a & known0_b;
-        result.extra_[i] = ~result_known1 & ~result_known0;
-        result.base_[i]  = result_known1 | result.extra_[i];
-      }
-    }
+    Blop::bor<n_words>(result.base_, base_, other.base_);
     return result;
   }
 
   Slop and_op(const Slop &other) const {
+    nil_check_(other);
     Slop result;
-    if (!has_extra() && !other.has_extra()) {
-      Blop::band<n_words>(result.base_, base_, other.base_);
-      result.extra_ = zero_array();
-    } else {
-      for (int i = 0; i < n_words; ++i) {
-        int64_t known0_a = ~base_[i];
-        int64_t known0_b = ~other.base_[i];
-        int64_t known1_a = base_[i] & ~extra_[i];
-        int64_t known1_b = other.base_[i] & ~other.extra_[i];
-        int64_t result_known0 = known0_a | known0_b;
-        int64_t result_known1 = known1_a & known1_b;
-        result.extra_[i] = ~result_known0 & ~result_known1;
-        result.base_[i]  = result_known1 | result.extra_[i];
-      }
-    }
+    Blop::band<n_words>(result.base_, base_, other.base_);
     return result;
   }
 
   Slop xor_op(const Slop &other) const {
+    nil_check_(other);
     Slop result;
     Blop::bxor<n_words>(result.base_, base_, other.base_);
-    if (!has_extra() && !other.has_extra()) {
-      result.extra_ = zero_array();
-    } else {
-      Blop::bor<n_words>(result.extra_, extra_, other.extra_);
-      Blop::bor<n_words>(result.base_, result.base_, result.extra_);
-    }
     return result;
   }
 
   Slop not_op() const {
+    nil_check_();
     Slop result;
     Blop::bnot<n_words>(result.base_, base_);
-    if (!has_extra()) {
-      result.extra_ = zero_array();
-    } else {
-      result.extra_ = extra_;
-      Blop::bor<n_words>(result.base_, result.base_, result.extra_);
-    }
     return result;
   }
 
   // --- Shift ---
   Slop lsh_op(int64_t amount) const {
+    nil_check_();
     if (amount == 0) return *this;
     Slop result;
     Blop::shl<n_words>(result.base_, base_, amount);
-    if (has_extra()) {
-      Blop::shl<n_words>(result.extra_, extra_, amount);
-    } else {
-      result.extra_ = zero_array();
-    }
     return result;
   }
 
   Slop rsh_op(int64_t amount) const {
+    nil_check_();
     if (amount == 0) return *this;
     Slop result;
     Blop::shr<n_words>(result.base_, base_, amount);
-    if (has_extra()) {
-      Blop::shr<n_words>(result.extra_, extra_, amount);
-    } else {
-      result.extra_ = zero_array();
-    }
     return result;
   }
 
   // --- Comparison ---
   Slop eq_op(const Slop &other) const {
-    if (has_extra() || other.has_extra()) return unknown(1);
+    nil_check_(other);
     return create_bool(Blop::eq<n_words>(base_, other.base_));
   }
 
-  bool operator==(const Slop &other) const {
-    if (has_extra() || other.has_extra()) return false;
-    return Blop::eq<n_words>(base_, other.base_);
+  // same_repr: structural compare of (type, base). Slop has no unknowns at
+  // runtime, so this is the natural form for containers, dedup, and hashing.
+  // Equivalent to is_known_eq for non-Nil values, but does not assert on Nil.
+  bool same_repr(const Slop &other) const {
+    if (type_ != other.type_) return false;
+    for (int i = 0; i < n_words; ++i) {
+      if (base_[i] != other.base_[i]) return false;
+    }
+    return true;
   }
-  bool operator!=(const Slop &other) const { return !(*this == other); }
-  bool operator<(const Slop &other) const  { return Blop::lt<n_words>(base_, other.base_); }
+
+  // is_known_eq: numeric equality. Asserts on Nil via eq_op. Kept for API
+  // symmetry with Dlop, where unknowns can collapse to "not known equal".
+  bool is_known_eq(const Slop &other) const {
+    return eq_op(other).is_known_true();
+  }
+
+  // No operator==/operator!=: callers pick same_repr (structural, Nil-safe)
+  // or is_known_eq (numeric, asserts on Nil) or eq_op (returns a Slop bool).
+  // Mirrors the Dlop API.
+  bool operator<(const Slop &other) const  {
+    nil_check_(other);
+    return Blop::lt<n_words>(base_, other.base_);
+  }
   bool operator<=(const Slop &other) const { return !(other < *this); }
   bool operator>(const Slop &other) const  { return other < *this; }
   bool operator>=(const Slop &other) const { return !(*this < other); }
 
   // --- Bit manipulation ---
   Slop sext_op(int from_bit) const {
+    nil_check_();
     Slop result;
     Blop::sext<n_words>(result.base_, base_, from_bit);
-    result.extra_ = extra_;
     return result;
   }
 
   Slop get_mask_op() const {
+    nil_check_();
     if (!is_negative()) return *this;
     Slop result;
     int nbits = get_bits();
@@ -523,16 +473,14 @@ public:
     for (int i = top_word + 1; i < n_words; ++i) {
       result.base_[i] = 0;
     }
-    result.extra_ = zero_array();
     return result;
   }
 
   // get_mask_op(mask): copy the bits selected by `mask` into a new integer,
   // packed LSB-first in their original order. Negative mask = "everything
-  // except the lowest |mask| bits". Mirrors Lconst::get_mask_op semantics for
-  // the non-string, non-unknown path.
+  // except the lowest |mask| bits". Mirrors Lconst::get_mask_op semantics.
   Slop get_mask_op(const Slop &mask) const {
-    if (mask.has_unknowns()) return invalid();
+    nil_check_(mask);
 
     bool mask_neg  = mask.is_negative();
     int  mask_bits = mask.get_bits();
@@ -569,8 +517,9 @@ public:
   // taken LSB-first from `value`; bits not selected stay unchanged. Mirrors
   // Lconst::set_mask_op for the non-string, non-unknown path.
   Slop set_mask_op(const Slop &mask, const Slop &value) const {
+    nil_check_(mask);
+    I(!value.is_nil());
     if (mask.is_known_false()) return *this;
-    assert(!mask.has_unknowns());
 
     bool mask_neg = mask.is_negative();
     int  mask_bits = mask.get_bits();
@@ -611,11 +560,13 @@ public:
   // ror_op: OR-reduction with another operand to a single bit (1 if either
   // side has any nonzero bit). Matches Lconst::ror_op.
   Slop ror_op(const Slop &other) const {
+    nil_check_(other);
     bool any = is_known_true() || other.is_known_true();
     return Slop(any ? int64_t(1) : int64_t(0));
   }
 
   Slop concat_op(const Slop &other) const {
+    nil_check_(other);
     int other_bits = other.get_bits();
     if (other_bits <= 0) return *this;
     auto shifted = lsh_op(other_bits);
@@ -627,7 +578,6 @@ public:
     assert(amount > 0);
     Slop result;
     result.base_ = base_;
-    result.extra_ = extra_;
     int top_word = amount / 64;
     int top_bit  = amount % 64;
     if (top_word < n_words && top_bit > 0) {
@@ -642,21 +592,12 @@ public:
   // --- Queries ---
   bool is_negative() const { return Blop::is_negative<n_words>(base_); }
   bool is_positive() const { return !is_negative(); }
-  bool has_unknowns() const { return has_extra(); }
-  bool is_known_false() const {
-    if (has_extra()) return false;
-    return Blop::is_zero<n_words>(base_);
-  }
-  bool is_known_true() const {
-    if (has_extra()) {
-      // Any known 1 bit?
-      for (int i = 0; i < n_words; ++i) {
-        if ((base_[i] & ~extra_[i]) != 0) return true;
-      }
-      return false;
-    }
-    return !Blop::is_zero<n_words>(base_);
-  }
+  bool is_known_false() const { return Blop::is_zero<n_words>(base_); }
+  bool is_known_true() const  { return !Blop::is_zero<n_words>(base_); }
+  // Slop never carries unknowns past parse — always false. Kept so templated
+  // kernels in eval.hpp (shared with Dlop) compile; their `if (has_unknowns())`
+  // branches are dead code for Slop.
+  constexpr bool has_unknowns() const { return false; }
   bool is_invalid() const { return type_ == Type::Invalid; }
   // is_ref: encoded as Type::Invalid carrying a non-zero packed-string
   // payload — mirrors Lconst::is_ref. `invalid()` (no value) has all-zero
@@ -670,9 +611,10 @@ public:
   }
   bool is_integer() const { return type_ == Type::Integer; }
   bool is_string() const  { return type_ == Type::String; }
+  bool is_nil() const     { return type_ == Type::Nil; }
 
   bool is_mask() const {
-    if (has_extra() || is_negative()) return false;
+    if (is_negative()) return false;
     if constexpr (n_words == 1) {
       return base_[0] > 0 && ((base_[0] + 1) & base_[0]) == 0;
     } else {
@@ -688,7 +630,7 @@ public:
   }
 
   bool is_power2() const {
-    if (has_extra() || is_negative()) return false;
+    if (is_negative()) return false;
     if constexpr (n_words == 1) {
       return base_[0] > 0 && ((base_[0] - 1) & base_[0]) == 0;
     } else {
@@ -726,7 +668,6 @@ public:
   }
 
   constexpr bool is_i() const {
-    if (has_extra()) return false;
     return get_bits() <= 62;
   }
 
@@ -765,14 +706,7 @@ public:
 
     std::string result;
     for (int i = nbits - 1; i >= 0; --i) {
-      int word = i / 64;
-      int bit  = i % 64;
-      bool is_unk = (word < n_words) ? ((extra_[word] >> bit) & 1) : false;
-      if (is_unk) {
-        result.push_back('?');
-      } else {
-        result.push_back(bit_test(i) ? '1' : '0');
-      }
+      result.push_back(bit_test(i) ? '1' : '0');
     }
     return result;
   }
@@ -788,12 +722,6 @@ public:
 
     if (type_ == Type::Boolean) {
       return is_known_true() ? "true" : "false";
-    }
-
-    if (has_extra()) {
-      auto bin = to_binary();
-      if (is_negative()) return std::format("0sb{}", bin);
-      return std::format("0b{}", bin);
     }
 
     if (is_i()) {
@@ -830,9 +758,6 @@ public:
 
   std::string to_verilog() const {
     if (is_known_false()) return "'sb0";
-    if (has_extra()) {
-      return std::format("{}'sb{}", get_bits(), to_binary());
-    }
     if (type_ == Type::String) {
       return std::format("\"{}\"", to_string());
     }
@@ -853,10 +778,6 @@ public:
     std::print("Slop<{}> base:0x", N);
     for (int i = n_words - 1; i >= 0; --i) {
       std::print("_{:016x}", static_cast<uint64_t>(base_[i]));
-    }
-    std::print("\n        extra:0x");
-    for (int i = n_words - 1; i >= 0; --i) {
-      std::print("_{:016x}", static_cast<uint64_t>(extra_[i]));
     }
     std::print("\n");
   }

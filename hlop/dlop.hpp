@@ -358,8 +358,14 @@ public:
   // --- Comparison operations ---
   spool_ptr<Dlop> eq_op(const Dlop& other) const;
   spool_ptr<Dlop> eq_op(spool_ptr<Dlop> other) const { return eq_op(*other); }
-  bool operator==(const Dlop &other) const;
-  bool operator!=(const Dlop &other) const;
+  // same_repr: structural compare of base AND extra. Two values with the same
+  // unknown pattern (e.g. 0sb?1 vs 0sb?1) are equal. Use for containers, dedup,
+  // and hashing where reflexivity is required.
+  bool same_repr(const Dlop &other) const;
+  // is_known_eq: three-valued equality collapsed to bool — true only when both
+  // sides are fully known and numerically equal; false if either side has any
+  // unknown bits. Use in asserts where "definitely equal" is the question.
+  bool is_known_eq(const Dlop &other) const;
   bool operator<(const Dlop &other) const;
   bool operator<=(const Dlop &other) const;
   bool operator>(const Dlop &other) const;
@@ -389,10 +395,10 @@ public:
   bool has_unknowns() const { return has_extra(); }
   bool is_known_false() const;
   bool is_known_true() const;
-  // is_zero: numeric zero with no unknowns. Stricter than is_known_false (which
-  // also accepts nil/invalid/empty-string); use is_zero for `value == 0` checks
-  // on integer Dlops where the type is known.
-  bool is_zero() const;
+  // is_known_zero: numeric zero with no unknowns. Stricter than is_known_false
+  // (which also accepts nil/invalid/empty-string); use is_known_zero for
+  // `value == 0` checks on integer Dlops where the type is known.
+  bool is_known_zero() const;
   bool is_mask() const;
   bool is_power2() const;
   bool is_nil() const { return type == Type::Nil; }

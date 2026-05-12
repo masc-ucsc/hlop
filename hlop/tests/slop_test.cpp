@@ -186,8 +186,8 @@ TEST_F(Slop_test, comparisons) {
   EXPECT_TRUE(a <= b);
   EXPECT_FALSE(a > b);
   EXPECT_FALSE(a >= b);
-  EXPECT_TRUE(a != b);
-  EXPECT_FALSE(a == b);
+  EXPECT_FALSE(a.is_known_eq(b));
+  EXPECT_FALSE(a.same_repr(b));
 }
 
 TEST_F(Slop_test, eq_op) {

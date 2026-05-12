@@ -959,18 +959,30 @@ spool_ptr<Dlop> Dlop::eq_op(const Dlop& other) const {
   return create_bool(true);
 }
 
-bool Dlop::operator==(const Dlop &other) const {
-  if (has_unknowns() || other.has_extra()) return false;
+// same_repr: structural/bitwise equality of (type, base, extra). Two values
+// with identical unknown patterns compare equal — required for use as a key in
+// hash maps, std::find, and dedup pools. This is NOT a semantic equality:
+// for "values that would be equal once unknowns are resolved" use eq_op (three-
+// valued) or is_known_eq (collapses unknowns to false).
+bool Dlop::same_repr(const Dlop &other) const {
+  if (type != other.type) return false;
   int16_t rsz = std::max(size, other.size);
+  bool self_ext  = has_extra();
+  bool other_ext = other.has_extra();
   for (int i = 0; i < rsz; ++i) {
-    int64_t v1 = (i < size) ? base()[i] : (base()[size - 1] < 0 ? -1 : 0);
-    int64_t v2 = (i < other.size) ? other.base()[i] : (other.base()[other.size - 1] < 0 ? -1 : 0);
-    if (v1 != v2) return false;
+    int64_t b1 = (i < size) ? base()[i] : (base()[size - 1] < 0 ? -1 : 0);
+    int64_t b2 = (i < other.size) ? other.base()[i] : (other.base()[other.size - 1] < 0 ? -1 : 0);
+    if (b1 != b2) return false;
+    int64_t e1 = self_ext  && i < size       ? extra()[i]       : 0;
+    int64_t e2 = other_ext && i < other.size ? other.extra()[i] : 0;
+    if (e1 != e2) return false;
   }
   return true;
 }
 
-bool Dlop::operator!=(const Dlop &other) const { return !(*this == other); }
+bool Dlop::is_known_eq(const Dlop &other) const {
+  return eq_op(other)->is_known_true();
+}
 
 bool Dlop::operator<(const Dlop &other) const {
   int16_t rsz = std::max(size, other.size);
@@ -1256,7 +1268,7 @@ bool Dlop::is_known_false() const {
   return true;
 }
 
-bool Dlop::is_zero() const {
+bool Dlop::is_known_zero() const {
   // Numeric zero: must be an Integer/Boolean (not Nil/Invalid/String), with no
   // unknown bits, all words zero. Matches the semantic of `value == 0` in
   // arithmetic contexts.

@@ -206,8 +206,8 @@ TEST_F(Dlop_test, comparisons) {
   EXPECT_TRUE(*a <= *b);
   EXPECT_FALSE(*a > *b);
   EXPECT_FALSE(*a >= *b);
-  EXPECT_TRUE(*a != *b);
-  EXPECT_FALSE(*a == *b);
+  EXPECT_FALSE(a->is_known_eq(*b));
+  EXPECT_FALSE(a->same_repr(*b));
 }
 
 TEST_F(Dlop_test, eq_op) {
@@ -307,19 +307,19 @@ TEST_F(Dlop_test, or_unknown) {
 // =========================================================================
 // Nil — tagged-unit
 // =========================================================================
-TEST_F(Dlop_test, is_zero_basic) {
-  // Integer zero is is_zero; nonzero, nil, invalid, string are not.
-  EXPECT_TRUE(Dlop::create_integer(0)->is_zero());
-  EXPECT_FALSE(Dlop::create_integer(1)->is_zero());
-  EXPECT_FALSE(Dlop::create_integer(-1)->is_zero());
+TEST_F(Dlop_test, is_known_zero_basic) {
+  // Integer zero is is_known_zero; nonzero, nil, invalid, string are not.
+  EXPECT_TRUE(Dlop::create_integer(0)->is_known_zero());
+  EXPECT_FALSE(Dlop::create_integer(1)->is_known_zero());
+  EXPECT_FALSE(Dlop::create_integer(-1)->is_known_zero());
 
-  EXPECT_FALSE(Dlop::nil()->is_zero());
-  EXPECT_FALSE(Dlop::invalid()->is_zero());
-  EXPECT_FALSE(Dlop::create_string("")->is_zero());
-  EXPECT_FALSE(Dlop::from_pyrope("0sb??")->is_zero());  // unknown bits
-  // Boolean false also reads as is_zero (numeric-context zero).
-  EXPECT_TRUE(Dlop::create_bool(false)->is_zero());
-  EXPECT_FALSE(Dlop::create_bool(true)->is_zero());
+  EXPECT_FALSE(Dlop::nil()->is_known_zero());
+  EXPECT_FALSE(Dlop::invalid()->is_known_zero());
+  EXPECT_FALSE(Dlop::create_string("")->is_known_zero());
+  EXPECT_FALSE(Dlop::from_pyrope("0sb??")->is_known_zero());  // unknown bits
+  // Boolean false also reads as is_known_zero (numeric-context zero).
+  EXPECT_TRUE(Dlop::create_bool(false)->is_known_zero());
+  EXPECT_FALSE(Dlop::create_bool(true)->is_known_zero());
 }
 
 TEST_F(Dlop_test, nil_is_distinct) {
