@@ -182,10 +182,10 @@ TEST_F(Slop_test, comparisons) {
   auto a = S::from_pyrope("10");
   auto b = S::from_pyrope("20");
 
-  EXPECT_TRUE(a < b);
-  EXPECT_TRUE(a <= b);
-  EXPECT_FALSE(a > b);
-  EXPECT_FALSE(a >= b);
+  EXPECT_TRUE(a.lt_op(b).is_known_true());
+  EXPECT_TRUE(a.le_op(b).is_known_true());
+  EXPECT_TRUE(a.gt_op(b).is_known_false());
+  EXPECT_TRUE(a.ge_op(b).is_known_false());
   EXPECT_FALSE(a.is_known_eq(b));
   EXPECT_FALSE(a.same_repr(b));
 }

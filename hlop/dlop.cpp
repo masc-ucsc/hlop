@@ -348,6 +348,12 @@ void Dlop::init_from_pyrope(std::string_view orig_txt) {
           throw std::runtime_error(std::format("ERROR: {} unknown pyrope encoding only binary can be signed 0sb...\n", orig_txt));
         }
         assert(!unsigned_result);
+      } else if (sel_ch == 'u') {
+        // Explicit `0u` prefix: unsigned, then a base selector (x/b/d/o)
+        // follows. Matches pyrope syntax `0ub10101`, `0ux3F`, …
+        ++skip_chars;
+        sel_ch          = lower(orig_txt[skip_chars]);
+        unsigned_result = true;
       } else {
         unsigned_result = true;
       }
@@ -984,7 +990,7 @@ bool Dlop::is_known_eq(const Dlop &other) const {
   return eq_op(other)->is_known_true();
 }
 
-bool Dlop::operator<(const Dlop &other) const {
+bool Dlop::cmp_less_known(const Dlop &other) const {
   int16_t rsz = std::max(size, other.size);
   // Signed comparison from MSW down
   int64_t v1_top = (rsz - 1 < size) ? base()[rsz - 1] : (base()[size - 1] < 0 ? -1 : 0);
@@ -999,9 +1005,33 @@ bool Dlop::operator<(const Dlop &other) const {
   return false;
 }
 
-bool Dlop::operator<=(const Dlop &other) const { return !(other < *this); }
-bool Dlop::operator>(const Dlop &other) const  { return other < *this; }
-bool Dlop::operator>=(const Dlop &other) const { return !(*this < other); }
+// Three-valued comparison ops: unknown bits on either side produce a 1-bit
+// unknown Dlop (mirrors eq_op). When both sides are fully known we defer to
+// the private cmp_less_known helper.
+spool_ptr<Dlop> Dlop::lt_op(const Dlop& other) const {
+  if (has_unknowns() || other.has_unknowns()) {
+    return unknown(1);
+  }
+  return create_bool(cmp_less_known(other));
+}
+spool_ptr<Dlop> Dlop::le_op(const Dlop& other) const {
+  if (has_unknowns() || other.has_unknowns()) {
+    return unknown(1);
+  }
+  return create_bool(!other.cmp_less_known(*this));
+}
+spool_ptr<Dlop> Dlop::gt_op(const Dlop& other) const {
+  if (has_unknowns() || other.has_unknowns()) {
+    return unknown(1);
+  }
+  return create_bool(other.cmp_less_known(*this));
+}
+spool_ptr<Dlop> Dlop::ge_op(const Dlop& other) const {
+  if (has_unknowns() || other.has_unknowns()) {
+    return unknown(1);
+  }
+  return create_bool(!cmp_less_known(other));
+}
 
 // =========================================================================
 // Bit manipulation
@@ -1205,6 +1235,46 @@ spool_ptr<Dlop> Dlop::ror_op(const Dlop& other) const {
   return create_integer(any ? int64_t(1) : int64_t(0));
 }
 
+// ror_op (unary): OR-reduce this operand's bits, returning a Bool Dlop.
+// Known-true if any bit is set; known-false only when every bit is provably
+// zero. Pure unknowns collapse to a 1-bit unknown.
+spool_ptr<Dlop> Dlop::ror_op() const {
+  if (is_invalid() || is_nil() || is_string()) {
+    return invalid();
+  }
+  if (is_known_true()) {
+    return create_bool(true);
+  }
+  if (has_unknowns()) {
+    return unknown(1);
+  }
+  return create_bool(false);
+}
+
+// rand_op: AND-reduction (single operand). True iff every bit is set
+// (i.e., the value is a 2^n-1 mask). Unknown bits → 1-bit unknown.
+spool_ptr<Dlop> Dlop::rand_op() const {
+  if (has_unknowns()) {
+    return unknown(1);
+  }
+  if (is_invalid() || is_nil() || is_string()) {
+    return invalid();
+  }
+  return create_bool(is_mask());
+}
+
+// rxor_op: XOR-reduction (single operand). True iff popcount is odd.
+// Unknown bits → 1-bit unknown.
+spool_ptr<Dlop> Dlop::rxor_op() const {
+  if (has_unknowns()) {
+    return unknown(1);
+  }
+  if (is_invalid() || is_nil() || is_string()) {
+    return invalid();
+  }
+  return create_bool((popcount() & 1) == 1);
+}
+
 spool_ptr<Dlop> Dlop::concat_op(const Dlop& other) const {
   // String ++ string is a *text* concat, not a numeric bit-concat.
   // init_string stores the first character in the low byte (so "ab" is
@@ -1215,7 +1285,25 @@ spool_ptr<Dlop> Dlop::concat_op(const Dlop& other) const {
   // Type::String so subsequent passes don't misclassify the value as a
   // bit-packed integer.
   if (is_string() && other.is_string()) {
-    int  self_bits = get_bits();
+    // String width must be byte-aligned, not the generic signed-bit
+    // count: a string like "hello " has 6*8=48 significant bits, but
+    // get_bits() returns 47 (it doesn't know the value is byte-packed
+    // and reserves a sign bit). Using the signed count here would
+    // shift the second operand by 47 instead of 48 and corrupt the
+    // bytes. Find the highest non-zero byte to recover the byte count.
+    auto byte_count = [](const Dlop& s) -> int {
+      for (int w = s.size - 1; w >= 0; --w) {
+        uint64_t v = static_cast<uint64_t>(s.base()[w]);
+        if (v == 0) continue;
+        for (int b = 7; b >= 0; --b) {
+          if (((v >> (b * 8)) & 0xFF) != 0) {
+            return w * 8 + b + 1;
+          }
+        }
+      }
+      return 0;
+    };
+    int self_bits = byte_count(*this) * 8;
     if (self_bits <= 0) {
       auto dlop = make_result(Type::String, other.size);
       memcpy(dlop->base(), other.base(), other.size * sizeof(int64_t));

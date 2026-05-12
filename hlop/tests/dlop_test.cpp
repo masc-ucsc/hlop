@@ -94,6 +94,44 @@ TEST_F(Dlop_test, concat_op_string) {
   EXPECT_EQ(b->to_string(), "hello");
 }
 
+TEST_F(Dlop_test, concat_op_string_byte_aligned) {
+  // Regression for a get_bits()-vs-byte_count mismatch: `"hello "` packs
+  // into 48 bits but get_bits() returns 47 (it reserves a sign bit).
+  // Concat must shift by the byte-aligned width, otherwise the second
+  // operand's bytes end up offset by one bit and the round-trip via
+  // to_string returns garbage. The cases below all have the property
+  // that the top byte's MSB is 0, which is where the off-by-one bites.
+  struct Case { const char* lhs; const char* rhs; const char* expected; };
+  for (const auto& [lhs, rhs, expected] : std::vector<Case>{
+           {"'a'", "'b'", "ab"},
+           {"'hello '", "'world'", "hello world"},
+           {"'hello '", "'world '", "hello world "},
+           {"' '", "' '", "  "},
+       }) {
+    auto a = Dlop::from_pyrope(lhs);
+    auto b = Dlop::from_pyrope(rhs);
+    auto c = a->concat_op(*b);
+    EXPECT_TRUE(c->is_string()) << lhs << " ++ " << rhs;
+    EXPECT_EQ(c->to_string(), expected) << lhs << " ++ " << rhs;
+  }
+}
+
+TEST_F(Dlop_test, from_pyrope_unsigned_prefix) {
+  // `0u<base>...` is explicit-unsigned with a following base selector.
+  auto ub = Dlop::from_pyrope("0ub10101");
+  EXPECT_FALSE(ub->is_string());
+  EXPECT_EQ(ub->to_i(), 0b10101);
+
+  auto ux = Dlop::from_pyrope("0uxFF");
+  EXPECT_EQ(ux->to_i(), 0xFF);
+
+  auto uo = Dlop::from_pyrope("0uo17");
+  EXPECT_EQ(uo->to_i(), 017);
+
+  auto ud = Dlop::from_pyrope("0ud42");
+  EXPECT_EQ(ud->to_i(), 42);
+}
+
 TEST_F(Dlop_test, concat_op_integer_unchanged) {
   // Integer ++ integer stays a numeric bit-concat (signed-positive
   // integers carry a leading-zero sign bit; 0b1010 occupies 5 bits in
@@ -238,10 +276,10 @@ TEST_F(Dlop_test, comparisons) {
   auto a = Dlop::from_pyrope("10");
   auto b = Dlop::from_pyrope("20");
 
-  EXPECT_TRUE(*a < *b);
-  EXPECT_TRUE(*a <= *b);
-  EXPECT_FALSE(*a > *b);
-  EXPECT_FALSE(*a >= *b);
+  EXPECT_TRUE(a->lt_op(b)->is_known_true());
+  EXPECT_TRUE(a->le_op(b)->is_known_true());
+  EXPECT_TRUE(a->gt_op(b)->is_known_false());
+  EXPECT_TRUE(a->ge_op(b)->is_known_false());
   EXPECT_FALSE(a->is_known_eq(*b));
   EXPECT_FALSE(a->same_repr(*b));
 }

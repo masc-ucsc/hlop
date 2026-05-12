@@ -237,10 +237,7 @@ V eval_div(const V& a, const V& b) {
 // --- LT: signed less-than (binary) -> boolean ---
 template <class V>
 V eval_lt(const V& a, const V& b) {
-  if (a.has_unknowns() || b.has_unknowns()) {
-    return V::unknown(1);
-  }
-  return V::create_bool(a < b);
+  return a.lt_op(b);
 }
 
 // --- EQ: equality (binary) -> boolean ---

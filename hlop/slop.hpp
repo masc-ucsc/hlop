@@ -440,16 +440,20 @@ public:
     return eq_op(other).is_known_true();
   }
 
-  // No operator==/operator!=: callers pick same_repr (structural, Nil-safe)
-  // or is_known_eq (numeric, asserts on Nil) or eq_op (returns a Slop bool).
-  // Mirrors the Dlop API.
-  bool operator<(const Slop &other) const  {
-    nil_check_(other);
-    return Blop::lt<n_words>(base_, other.base_);
-  }
-  bool operator<=(const Slop &other) const { return !(other < *this); }
-  bool operator>(const Slop &other) const  { return other < *this; }
-  bool operator>=(const Slop &other) const { return !(*this < other); }
+  // No operator==/operator!=, and no operator</<=/>/>=: callers pick same_repr
+  // (structural, Nil-safe) or is_known_eq (numeric, asserts on Nil) or
+  // eq_op/lt_op/le_op/gt_op/ge_op (return a Slop bool). Mirrors the Dlop API,
+  // which hides comparison operators to keep unknown-propagation semantics
+  // explicit at the call site (Slop has no unknowns, but staying symmetric
+  // with Dlop avoids subtle behavior changes when code migrates between them).
+
+  // Comparison ops returning a Bool Slop. Slop has no runtime unknowns, so
+  // these always produce a concrete known-true/false (unlike Dlop, which
+  // collapses to a 1-bit unknown when either side has unknown bits).
+  Slop lt_op(const Slop &other) const { nil_check_(other); return create_bool( Blop::lt<n_words>(base_, other.base_)); }
+  Slop le_op(const Slop &other) const { nil_check_(other); return create_bool(!Blop::lt<n_words>(other.base_, base_)); }
+  Slop gt_op(const Slop &other) const { nil_check_(other); return create_bool( Blop::lt<n_words>(other.base_, base_)); }
+  Slop ge_op(const Slop &other) const { nil_check_(other); return create_bool(!Blop::lt<n_words>(base_, other.base_)); }
 
   // --- Bit manipulation ---
   Slop sext_op(int from_bit) const {
@@ -563,6 +567,26 @@ public:
     nil_check_(other);
     bool any = is_known_true() || other.is_known_true();
     return Slop(any ? int64_t(1) : int64_t(0));
+  }
+
+  // ror_op (unary): OR-reduction over this operand's bits, returning a Bool
+  // Slop. Slop has no runtime unknowns, so the result is always known.
+  Slop ror_op() const {
+    nil_check_();
+    return create_bool(is_known_true());
+  }
+
+  // rand_op: AND-reduction (single operand). True iff every bit is set
+  // (the value is a 2^n-1 mask).
+  Slop rand_op() const {
+    nil_check_();
+    return create_bool(is_mask());
+  }
+
+  // rxor_op: XOR-reduction (single operand). True iff popcount is odd.
+  Slop rxor_op() const {
+    nil_check_();
+    return create_bool((popcount() & 1) == 1);
   }
 
   Slop concat_op(const Slop &other) const {

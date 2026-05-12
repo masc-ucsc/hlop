@@ -179,10 +179,7 @@ DResult DContext::exec_lt(const DCall& call) {
   assert(call.inputs.size() >= 2);
   auto a = call.inputs[0].value;
   auto b = call.inputs[1].value;
-  if (a->has_unknowns() || b->has_unknowns()) {
-    return {.outputs = {Dlop::unknown(1)}};
-  }
-  return {.outputs = {Dlop::create_bool(*a < *b)}};
+  return {.outputs = {a->lt_op(b)}};
 }
 
 DResult DContext::exec_eq(const DCall& call) {

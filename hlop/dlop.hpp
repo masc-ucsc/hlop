@@ -188,6 +188,12 @@ public:
     return false;
   }
 
+  // Signed less-than on base words. Callers must guarantee both sides are
+  // fully known (no unknown bits); used by the three-valued lt/le/gt/ge ops
+  // after they short-circuit on unknowns. Not exposed as operator< because
+  // hiding unknown-propagation behind `a < b` invites silent miscompares.
+  bool cmp_less_known(const Dlop &other) const;
+
 public:
   Dlop() noexcept : type(Type::Invalid), size(0), shared_count(0), data{0, 0} {}
 
@@ -366,15 +372,34 @@ public:
   // sides are fully known and numerically equal; false if either side has any
   // unknown bits. Use in asserts where "definitely equal" is the question.
   bool is_known_eq(const Dlop &other) const;
-  bool operator<(const Dlop &other) const;
-  bool operator<=(const Dlop &other) const;
-  bool operator>(const Dlop &other) const;
-  bool operator>=(const Dlop &other) const;
+
+  // Three-valued comparison ops returning a Bool Dlop (or a 1-bit unknown
+  // when either side has unknown bits). Mirror eq_op's unknown handling so
+  // pass code can propagate `0sb?` through compares without special-casing.
+  spool_ptr<Dlop> lt_op(const Dlop& other) const;
+  spool_ptr<Dlop> lt_op(spool_ptr<Dlop> other) const { return lt_op(*other); }
+  spool_ptr<Dlop> le_op(const Dlop& other) const;
+  spool_ptr<Dlop> le_op(spool_ptr<Dlop> other) const { return le_op(*other); }
+  spool_ptr<Dlop> gt_op(const Dlop& other) const;
+  spool_ptr<Dlop> gt_op(spool_ptr<Dlop> other) const { return gt_op(*other); }
+  spool_ptr<Dlop> ge_op(const Dlop& other) const;
+  spool_ptr<Dlop> ge_op(spool_ptr<Dlop> other) const { return ge_op(*other); }
 
   // --- Reduction operations ---
   // ror_op: OR-reduction with another operand (1-bit result, 1 if any nonzero).
   spool_ptr<Dlop> ror_op(const Dlop& other) const;
   spool_ptr<Dlop> ror_op(spool_ptr<Dlop> other) const { return ror_op(*other); }
+  // ror_op (unary): OR-reduction over the single operand's bits, returning
+  // a Bool Dlop. True if any bit is set (known or unknown); known-false only
+  // when every bit is provably zero. Distinct from the binary form above,
+  // which returns an Integer Dlop for the Lconst::ror_op semantics.
+  spool_ptr<Dlop> ror_op() const;
+  // rand_op: AND-reduction (single operand). Returns bool true iff every bit
+  // is set (i.e., value is a 2^n-1 mask). Unknown bits → 1-bit unknown.
+  spool_ptr<Dlop> rand_op() const;
+  // rxor_op: XOR-reduction (single operand). Returns bool true iff popcount
+  // is odd. Unknown bits → 1-bit unknown.
+  spool_ptr<Dlop> rxor_op() const;
 
   // --- Bit manipulation ---
   spool_ptr<Dlop> sext_op(int bits) const;
