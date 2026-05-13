@@ -89,3 +89,14 @@ cc_test(
         "@com_google_googletest//:gtest_main",
     ],
 )
+
+cc_test(
+    name = "slop_sint_diff_test",
+    srcs = ["tests/slop_sint_diff_test.cpp"],
+    copts = CPP23_COPTS,
+    deps = [
+        ":hlop",
+        "//benchref:benchref",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
