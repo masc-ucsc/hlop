@@ -801,6 +801,20 @@ spool_ptr<Dlop> Dlop::neg_op() const {
 // Bitwise operations
 // =========================================================================
 spool_ptr<Dlop> Dlop::or_op(const Dlop& other) const {
+  // Nil propagates, with a boolean short-circuit: a known-true non-nil
+  // operand folds the result to 1 (true OR anything = true), otherwise the
+  // unset operand poisons the result back to nil. Mirrors `and_op`'s
+  // symmetric handling and avoids the size=0 UB that the bitwise paths below
+  // would hit when one side has Type::Nil.
+  if (is_nil() || other.is_nil()) {
+    const bool self_nil  = is_nil();
+    const bool other_nil = other.is_nil();
+    if ((!self_nil && is_known_true()) || (!other_nil && other.is_known_true())) {
+      return create_integer(1);
+    }
+    return nil();
+  }
+
   int16_t rsz = std::max(size, other.size);
   auto dlop = make_result(Type::Integer, rsz);
 
@@ -870,6 +884,19 @@ spool_ptr<Dlop> Dlop::or_op(const Dlop& other) const {
 }
 
 spool_ptr<Dlop> Dlop::and_op(const Dlop& other) const {
+  // Nil propagates, with a boolean short-circuit: a known-false non-nil
+  // operand folds the result to 0 (false AND anything = false), otherwise
+  // the unset operand poisons the result back to nil. Without this guard the
+  // size=0 nil falls into the bitwise path below and yields a UB zero.
+  if (is_nil() || other.is_nil()) {
+    const bool self_nil  = is_nil();
+    const bool other_nil = other.is_nil();
+    if ((!self_nil && is_known_false()) || (!other_nil && other.is_known_false())) {
+      return create_integer(0);
+    }
+    return nil();
+  }
+
   int16_t rsz = std::max(size, other.size);
   auto dlop = make_result(Type::Integer, rsz);
 
@@ -938,6 +965,12 @@ spool_ptr<Dlop> Dlop::and_op(const Dlop& other) const {
 }
 
 spool_ptr<Dlop> Dlop::xor_op(const Dlop& other) const {
+  // Nil propagates. XOR has no short-circuit identity (no value of the
+  // non-nil operand can resolve the result), so any nil operand yields nil.
+  if (is_nil() || other.is_nil()) {
+    return nil();
+  }
+
   int16_t rsz = std::max(size, other.size);
   auto dlop = make_result(Type::Integer, rsz);
 
@@ -985,6 +1018,11 @@ spool_ptr<Dlop> Dlop::xor_op(const Dlop& other) const {
 }
 
 spool_ptr<Dlop> Dlop::not_op() const {
+  // Nil propagates: NOT of an unset value is still unset.
+  if (is_nil()) {
+    return nil();
+  }
+
   auto dlop = make_result(Type::Integer, size);
 
   if (size == 1) {

@@ -254,6 +254,36 @@ TEST_F(Dlop_test, not_op) {
   EXPECT_EQ(d->to_i(), -6);
 }
 
+// Nil propagates through bitwise/logical ops, with the boolean short-circuit
+// identities (false AND _, true OR _) still folding to a concrete result.
+TEST_F(Dlop_test, and_or_xor_not_propagate_nil) {
+  auto t = Dlop::create_bool(true);
+  auto f = Dlop::create_bool(false);
+  auto n = Dlop::nil();
+
+  // and_op: false short-circuits, everything else with a nil → nil
+  EXPECT_TRUE(n->and_op(*n)->is_nil());
+  EXPECT_TRUE(n->and_op(*t)->is_nil());
+  EXPECT_TRUE(t->and_op(*n)->is_nil());
+  EXPECT_TRUE(n->and_op(*f)->is_known_false());
+  EXPECT_TRUE(f->and_op(*n)->is_known_false());
+
+  // or_op: true short-circuits, everything else with a nil → nil
+  EXPECT_TRUE(n->or_op(*n)->is_nil());
+  EXPECT_TRUE(n->or_op(*f)->is_nil());
+  EXPECT_TRUE(f->or_op(*n)->is_nil());
+  EXPECT_TRUE(n->or_op(*t)->is_known_true());
+  EXPECT_TRUE(t->or_op(*n)->is_known_true());
+
+  // xor_op: no short-circuit identity → any nil operand poisons the result
+  EXPECT_TRUE(n->xor_op(*n)->is_nil());
+  EXPECT_TRUE(n->xor_op(*t)->is_nil());
+  EXPECT_TRUE(t->xor_op(*n)->is_nil());
+
+  // not_op: unset stays unset
+  EXPECT_TRUE(n->not_op()->is_nil());
+}
+
 // =========================================================================
 // Shift tests
 // =========================================================================
