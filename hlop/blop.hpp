@@ -648,7 +648,7 @@ public:
     return (src >> pos) & 1;
   }
 
-  static bool bit_testn(const int64_t *src, size_t sz, int pos) {
+  static bool bit_testn(const int64_t *src, [[maybe_unused]] size_t sz, int pos) {
     int word = pos / 64;
     int bit  = pos % 64;
     assert(word >= 0 && static_cast<size_t>(word) < sz);
