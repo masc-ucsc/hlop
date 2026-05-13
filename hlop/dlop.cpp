@@ -247,6 +247,17 @@ spool_ptr<Dlop> Dlop::unknown_negative(int nbits) {
   return dlop;
 }
 
+spool_ptr<Dlop> Dlop::unknown_bool() {
+  // Boolean unknown: type=Boolean, base=-1, extra=-1. Either resolves to
+  // create_bool(true) (-1 across all bits) or create_bool(false) (0 across
+  // all bits); the full-width unknown mask keeps the value sign-extending
+  // for any consumer that walks bit positions beyond word 0.
+  auto dlop = spool_ptr<Dlop>::make(Type::Boolean, 1);
+  dlop->base()[0]  = -1;
+  dlop->extra()[0] = -1;
+  return dlop;
+}
+
 // =========================================================================
 // from_binary
 // =========================================================================
@@ -259,6 +270,9 @@ void Dlop::init_from_binary(std::string_view txt, bool unsigned_result) {
       if (ch2 == '1') {
         extend_base(-1);
       } else if (ch2 == '?') {
+        // Unknown sign: extend both base and extra so the sign-extended
+        // bits maintain the invariant (unknown bits have base = 1).
+        extend_base(-1);
         extend_extra(-1);
       }
       break;
@@ -485,22 +499,24 @@ void Dlop::mut_add(int64_t other) {
 // =========================================================================
 // Arithmetic operations
 // =========================================================================
+// Carry-chain-conservative unknown propagation: any unknown bit at position
+// `i` in either operand can affect every bit at or above `i` in the sum (via
+// the ripple carry). So the result's extra mask sets every bit at or above
+// the lowest unknown bit across both operands. Above that position we also
+// force base bits to 1 to maintain the invariant `base == base | extra`.
 spool_ptr<Dlop> Dlop::add_op(const Dlop& other) const {
   int16_t rsz = std::max(size, other.size);
   auto dlop = make_result(Type::Integer, rsz);
 
   if (rsz == 1 && size == 1 && other.size == 1) {
     // Fast path
-    if (extra()[0] == 0 && other.extra()[0] == 0) {
-      dlop->base()[0]  = base()[0] + other.base()[0];
-      dlop->extra()[0] = 0;
-    } else {
-      // Unknown propagation for addition (conservative)
-      // Result bits where either input has unknowns become unknown
-      dlop->base()[0]  = base()[0] + other.base()[0];
-      dlop->extra()[0] = extra()[0] | other.extra()[0]; // conservative
-      dlop->base()[0] |= dlop->extra()[0]; // maintain invariant
-    }
+    uint64_t combined = static_cast<uint64_t>(extra()[0]) | static_cast<uint64_t>(other.extra()[0]);
+    dlop->base()[0]  = base()[0] + other.base()[0];
+    // hi_fill: all bits at or above the lowest set bit of combined. Zero if
+    // combined is zero. Equivalent to `~(combined - 1) & ~0` when combined>0.
+    uint64_t hi_fill = 0u - (combined & (0u - combined));
+    dlop->extra()[0] = static_cast<int64_t>(hi_fill);
+    dlop->base()[0] |= dlop->extra()[0];  // maintain invariant
   } else {
     // Multi-word: sign-extend shorter operand
     const int64_t *s1 = base();
@@ -534,12 +550,37 @@ spool_ptr<Dlop> Dlop::add_op(const Dlop& other) const {
     Blop::addn(dlop->base(), rsz, s1, s2);
 
     if (!has_extra() && !other.has_extra()) {
-      // No unknowns
       memset(dlop->extra(), 0, rsz * sizeof(int64_t));
     } else {
-      // Conservative: unknown bits propagate
-      Blop::orn(dlop->extra(), rsz, e1, e2);
-      Blop::orn(dlop->base(), rsz, dlop->base(), dlop->extra());
+      // Find the lowest unknown bit across all words of (e1 | e2).
+      int lowest_word = -1;
+      int lowest_bit  = 0;
+      for (int w = 0; w < rsz; ++w) {
+        uint64_t c = static_cast<uint64_t>(e1[w]) | static_cast<uint64_t>(e2[w]);
+        if (c != 0) {
+          lowest_word = w;
+          lowest_bit  = __builtin_ctzll(c);
+          break;
+        }
+      }
+      if (lowest_word < 0) {
+        memset(dlop->extra(), 0, rsz * sizeof(int64_t));
+      } else {
+        for (int w = 0; w < rsz; ++w) {
+          if (w < lowest_word) {
+            dlop->extra()[w] = 0;
+          } else if (w == lowest_word) {
+            uint64_t lowmask = static_cast<uint64_t>(1) << lowest_bit;
+            dlop->extra()[w] = static_cast<int64_t>(0u - lowmask);
+          } else {
+            dlop->extra()[w] = -1;  // every bit above is unknown
+          }
+        }
+        // Maintain invariant: unknown bits have base = 1.
+        for (int w = 0; w < rsz; ++w) {
+          dlop->base()[w] |= dlop->extra()[w];
+        }
+      }
     }
 
     if (s1_ext) { free(rsz, s1_ext); free(rsz, e1_ext); }
@@ -578,31 +619,66 @@ spool_ptr<Dlop> Dlop::sub_op(int64_t other) const {
   return add_op(-other);
 }
 
+// Unknown propagation for multiply: bit k of (a*b) depends on every (i,j)
+// with i+j ≤ k. The lowest output bit that can be tainted by an unknown is
+// `min(lu_a, lu_b)`, the lowest unknown across both operands — for any k
+// below that, every contributing a_i, b_j is known. From that bit up, mark
+// unknown (the carry chain mirrors add).
 spool_ptr<Dlop> Dlop::mult_op(const Dlop& other) const {
-  if (has_unknowns() || other.has_unknowns()) {
-    int nbits = get_bits() + other.get_bits();
-    bool neg1 = is_negative();
-    bool neg2 = other.is_negative();
-    if (neg1 != neg2) {
-      return unknown_negative(nbits);
-    }
-    return unknown_positive(nbits);
-  }
-
   int16_t rsz = size + other.size;
   auto dlop = make_result(Type::Integer, rsz);
 
+  // Compute the multiplication on base() unconditionally. For known low bits
+  // this is correct; for unknown-tainted upper bits we overwrite extra/base
+  // below.
   if (size == 1 && other.size == 1) {
-    // Fast path: result might need 2 words
     __int128 prod = static_cast<__int128>(base()[0]) * other.base()[0];
     dlop->base()[0] = static_cast<int64_t>(prod);
     if (rsz > 1) {
       dlop->base()[1] = static_cast<int64_t>(prod >> 64);
     }
-    memset(dlop->extra(), 0, rsz * sizeof(int64_t));
   } else {
     Blop::multn(dlop->base(), rsz, base(), size, other.base(), other.size);
+  }
+
+  if (!has_unknowns() && !other.has_unknowns()) {
     memset(dlop->extra(), 0, rsz * sizeof(int64_t));
+    dlop->normalize();
+    return dlop;
+  }
+
+  auto lowest_unk = [](const int64_t *e, int sz) -> int {
+    for (int w = 0; w < sz; ++w) {
+      if (e[w] != 0) return w * 64 + __builtin_ctzll(static_cast<uint64_t>(e[w]));
+    }
+    return -1;
+  };
+  int lu_a = lowest_unk(extra(),       size);
+  int lu_b = lowest_unk(other.extra(), other.size);
+  int lu   = (lu_a < 0)   ? lu_b
+           : (lu_b < 0)   ? lu_a
+                          : std::min(lu_a, lu_b);
+
+  // lu < 0 is unreachable here (at least one operand has unknowns), but
+  // guard anyway.
+  if (lu < 0) {
+    memset(dlop->extra(), 0, rsz * sizeof(int64_t));
+  } else {
+    int lu_word = lu / 64;
+    int lu_bit  = lu % 64;
+    for (int w = 0; w < rsz; ++w) {
+      if (w < lu_word) {
+        dlop->extra()[w] = 0;
+      } else if (w == lu_word) {
+        uint64_t lowmask = static_cast<uint64_t>(1) << lu_bit;
+        dlop->extra()[w] = static_cast<int64_t>(0u - lowmask);
+      } else {
+        dlop->extra()[w] = -1;
+      }
+    }
+    for (int w = 0; w < rsz; ++w) {
+      dlop->base()[w] |= dlop->extra()[w];
+    }
   }
 
   dlop->normalize();
@@ -643,19 +719,69 @@ spool_ptr<Dlop> Dlop::div_op(const Dlop& other) const {
   return dlop;
 }
 
+// mod_op: integer remainder. Returns invalid on mod-by-zero (undefined), a
+// 1-bit unknown when either operand has unknowns, and the integer remainder
+// otherwise. Only the single-word fast path is implemented; multi-word
+// callers currently fall through to invalid.
+spool_ptr<Dlop> Dlop::mod_op(const Dlop& other) const {
+  // Type guards first: a nil/invalid/string operand has zero words and would
+  // otherwise be misclassified as "mod by zero" by the is_known_false() check.
+  if (is_invalid() || other.is_invalid() || is_nil() || other.is_nil() || is_string() || other.is_string()) {
+    return invalid();
+  }
+  if (has_unknowns() || other.has_unknowns()) {
+    return unknown(1);
+  }
+  if (other.is_known_false()) {
+    return invalid();
+  }
+  if (size == 1 && other.size == 1) {
+    return create_integer(base()[0] % other.base()[0]);
+  }
+  return invalid();
+}
+
+// neg = ~x + 1; the "+1" has a carry chain identical to add. So bits at or
+// above the lowest unknown become unknown; bits below stay deterministic.
 spool_ptr<Dlop> Dlop::neg_op() const {
   auto dlop = make_result(Type::Integer, size);
 
   if (has_unknowns()) {
-    // neg with unknowns: ~x + 1, unknown bits stay unknown
     if (size == 1) {
-      dlop->base()[0]  = -base()[0];
-      dlop->extra()[0] = extra()[0];
+      dlop->base()[0] = -base()[0];
+      uint64_t e      = static_cast<uint64_t>(extra()[0]);
+      uint64_t hi     = 0u - (e & (0u - e));
+      dlop->extra()[0] = static_cast<int64_t>(hi);
       dlop->base()[0] |= dlop->extra()[0];
     } else {
       Blop::negn(dlop->base(), size, base());
-      memcpy(dlop->extra(), extra(), size * sizeof(int64_t));
-      Blop::orn(dlop->base(), size, dlop->base(), dlop->extra());
+      // Find lowest unknown across all words.
+      int lu_word = -1;
+      int lu_bit  = 0;
+      for (int w = 0; w < size; ++w) {
+        if (extra()[w] != 0) {
+          lu_word = w;
+          lu_bit  = __builtin_ctzll(static_cast<uint64_t>(extra()[w]));
+          break;
+        }
+      }
+      if (lu_word < 0) {
+        memset(dlop->extra(), 0, size * sizeof(int64_t));
+      } else {
+        for (int w = 0; w < size; ++w) {
+          if (w < lu_word) {
+            dlop->extra()[w] = 0;
+          } else if (w == lu_word) {
+            uint64_t lowmask = static_cast<uint64_t>(1) << lu_bit;
+            dlop->extra()[w] = static_cast<int64_t>(0u - lowmask);
+          } else {
+            dlop->extra()[w] = -1;
+          }
+        }
+        for (int w = 0; w < size; ++w) {
+          dlop->base()[w] |= dlop->extra()[w];
+        }
+      }
     }
     return dlop;
   }
@@ -943,12 +1069,37 @@ spool_ptr<Dlop> Dlop::rsh_op(int64_t amount) const {
   return dlop;
 }
 
+// Dlop-typed shift wrappers: forward to the int64 form once the amount is
+// confirmed numeric and known. Unknown-amount widths follow eval.hpp's
+// convention — left shift widens conservatively by 64 (could grow), right
+// shift keeps the source width (cannot grow). Non-numeric / nil amount is
+// invalid.
+spool_ptr<Dlop> Dlop::lsh_op(const Dlop& amount) const {
+  if (amount.has_unknowns()) {
+    return unknown(get_bits() + 64);
+  }
+  if (!amount.is_i()) {
+    return invalid();
+  }
+  return lsh_op(amount.to_i());
+}
+
+spool_ptr<Dlop> Dlop::rsh_op(const Dlop& amount) const {
+  if (amount.has_unknowns()) {
+    return unknown(get_bits());
+  }
+  if (!amount.is_i()) {
+    return invalid();
+  }
+  return rsh_op(amount.to_i());
+}
+
 // =========================================================================
 // Comparison operations
 // =========================================================================
 spool_ptr<Dlop> Dlop::eq_op(const Dlop& other) const {
   if (has_unknowns() || other.has_unknowns()) {
-    return unknown(1);
+    return unknown_bool();
   }
 
   if (size == 1 && other.size == 1) {
@@ -1010,25 +1161,25 @@ bool Dlop::cmp_less_known(const Dlop &other) const {
 // the private cmp_less_known helper.
 spool_ptr<Dlop> Dlop::lt_op(const Dlop& other) const {
   if (has_unknowns() || other.has_unknowns()) {
-    return unknown(1);
+    return unknown_bool();
   }
   return create_bool(cmp_less_known(other));
 }
 spool_ptr<Dlop> Dlop::le_op(const Dlop& other) const {
   if (has_unknowns() || other.has_unknowns()) {
-    return unknown(1);
+    return unknown_bool();
   }
   return create_bool(!other.cmp_less_known(*this));
 }
 spool_ptr<Dlop> Dlop::gt_op(const Dlop& other) const {
   if (has_unknowns() || other.has_unknowns()) {
-    return unknown(1);
+    return unknown_bool();
   }
   return create_bool(other.cmp_less_known(*this));
 }
 spool_ptr<Dlop> Dlop::ge_op(const Dlop& other) const {
   if (has_unknowns() || other.has_unknowns()) {
-    return unknown(1);
+    return unknown_bool();
   }
   return create_bool(!cmp_less_known(other));
 }
@@ -1038,12 +1189,21 @@ spool_ptr<Dlop> Dlop::ge_op(const Dlop& other) const {
 // =========================================================================
 spool_ptr<Dlop> Dlop::sext_op(int from_bit) const {
   auto dlop = make_result(Type::Integer, size);
-  memcpy(dlop->extra(), extra(), size * sizeof(int64_t));
 
+  // Sign-extend both base AND extra from `from_bit`. If the sign bit is
+  // unknown (extra bit set) the extension must also be unknown — copying
+  // extra verbatim would leave bits above from_bit holding whatever the
+  // source had, instead of the sign-extended unknown.
   if (size == 1) {
-    Blop::sext64(dlop->base()[0], base()[0], from_bit);
+    Blop::sext64(dlop->base()[0],  base()[0],  from_bit);
+    Blop::sext64(dlop->extra()[0], extra()[0], from_bit);
   } else {
-    Blop::sextn(dlop->base(), size, base(), from_bit);
+    Blop::sextn(dlop->base(),  size, base(),  from_bit);
+    Blop::sextn(dlop->extra(), size, extra(), from_bit);
+  }
+  // Maintain invariant: unknown bits have base = 1.
+  for (int i = 0; i < size; ++i) {
+    dlop->base()[i] |= dlop->extra()[i];
   }
 
   dlop->normalize();
@@ -1100,6 +1260,11 @@ spool_ptr<Dlop> Dlop::get_mask_op() const {
 //   get_mask(0xfeed, 0xff)  -> 0xed
 //   get_mask(0xfeed, -16)   -> 0     (all bits beyond bit 15)
 //   get_mask(0xfeed, 0xf00) -> 0xe
+//
+// Single-bit result: when exactly one bit is selected, the result is the
+// signed 1-bit integer -1 (bit set) or 0 (bit clear) — not 0sb01. This
+// matches Pyrope's `x#[i]` semantics. We detect this from the selected-bit
+// count after the loop, so no separate popcount/bit-find pass is needed.
 spool_ptr<Dlop> Dlop::get_mask_op(const Dlop& mask) const {
   // mask == -1 falls back to the no-arg, sign-strip version.
   if (mask.is_negative() && mask.is_known_true()) {
@@ -1113,7 +1278,13 @@ spool_ptr<Dlop> Dlop::get_mask_op(const Dlop& mask) const {
   }
 
   if (mask.has_unknowns()) {
-    return invalid();
+    // Mask itself has unknown bits: every output bit is potentially unknown
+    // because we can't tell which source bits get extracted. Width is bounded
+    // by the mask's bit count (positive mask) — return a sound unknown of
+    // that width rather than collapsing to Invalid.
+    int w = mask.get_bits();
+    if (w <= 0) w = 1;
+    return unknown(w);
   }
 
   // Determine effective range: positive mask uses its bit width; a negative
@@ -1132,22 +1303,40 @@ spool_ptr<Dlop> Dlop::get_mask_op(const Dlop& mask) const {
     result->extra()[i] = 0;
   }
 
+  // copy_bit: write source bit at position `i` into result at `out_bit`,
+  // carrying the unknown flag from extra() so an unknown source bit stays
+  // unknown in the output (invariant: unknown bits have base=1).
+  auto copy_bit = [&](int i, int out) {
+    if (i >= end_pos) return;
+    int sword = i / 64;
+    int sbit  = i % 64;
+    int oword = out / 64;
+    int obit  = out % 64;
+    bool b = (sword < size) ? ((base()[sword]  >> sbit) & 1) : false;
+    bool u = (sword < size) ? ((extra()[sword] >> sbit) & 1) : false;
+    if (b || u) result->base()[oword]  |= int64_t(1) << obit;
+    if (u)      result->extra()[oword] |= int64_t(1) << obit;
+  };
+
   int out_bit = 0;
   for (int i = 0; i < positive_mask_bits; ++i) {
     bool selected = mask_neg ? !mask.bit_test(i) : mask.bit_test(i);
     if (!selected) continue;
-    if (i < end_pos && bit_test(i)) {
-      result->base()[out_bit / 64] |= int64_t(1) << (out_bit % 64);
-    }
+    copy_bit(i, out_bit);
     ++out_bit;
   }
   if (mask_neg) {
     for (int i = positive_mask_bits; i < src_bits; ++i) {
-      if (bit_test(i)) {
-        result->base()[out_bit / 64] |= int64_t(1) << (out_bit % 64);
-      }
+      copy_bit(i, out_bit);
       ++out_bit;
     }
+  }
+  // Exactly one bit selected → return the signed 1-bit integer -1 or 0
+  // (or a 1-bit unknown if that bit was ?), not the unsigned 1 / 0 the
+  // loop just packed.
+  if (out_bit == 1) {
+    if (result->extra()[0] & 1) return unknown(1);
+    return create_integer((result->base()[0] & 1) ? -1 : 0);
   }
   result->normalize();
   return result;
@@ -1198,10 +1387,30 @@ spool_ptr<Dlop> Dlop::set_mask_op(const Dlop& mask, const Dlop& value) const {
 
   int out_words = std::max(1, (out_bits + 63) / 64);
   auto result   = make_result(Type::Integer, static_cast<int16_t>(out_words));
+  // Start from `this`, sign-extended to out_words. Bits not selected by the
+  // mask (including the sign-extension region beyond get_bits()) flow through
+  // unchanged; the loop overwrites only the mask-selected positions.
+  int64_t base_sign  = (size > 0 && base()[size - 1]  < 0) ? -1 : 0;
+  int64_t extra_sign = (size > 0 && extra()[size - 1] < 0) ? -1 : 0;
   for (int i = 0; i < out_words; ++i) {
-    result->base()[i]  = 0;
-    result->extra()[i] = 0;
+    result->base()[i]  = (i < size) ? base()[i]  : base_sign;
+    result->extra()[i] = (i < size) ? extra()[i] : extra_sign;
   }
+
+  // tri_bit: returns (base_bit, extra_bit) at position `p` from a Dlop.
+  auto tri_bit = [](const Dlop &d, int p) -> std::pair<bool, bool> {
+    int word = p / 64;
+    int bit  = p % 64;
+    bool b, u;
+    if (word >= d.size) {
+      b = d.base()[d.size - 1] < 0;
+      u = d.extra()[d.size - 1] < 0;
+    } else {
+      b = (d.base()[word]  >> bit) & 1;
+      u = (d.extra()[word] >> bit) & 1;
+    }
+    return {b, u};
+  };
 
   int value_pos = 0;
   for (int i = 0; i < out_bits; ++i) {
@@ -1212,16 +1421,16 @@ spool_ptr<Dlop> Dlop::set_mask_op(const Dlop& mask, const Dlop& value) const {
     } else {
       from_value = mask_neg;
     }
-    bool the_bit;
-    if (from_value) {
-      the_bit = value.bit_test(value_pos);
-      ++value_pos;
-    } else {
-      the_bit = bit_test(i);
-    }
-    if (the_bit) {
-      result->base()[i / 64] |= int64_t(1) << (i % 64);
-    }
+    if (!from_value) continue;  // bit stays from `this` (already in result).
+    auto p = tri_bit(value, value_pos);
+    ++value_pos;
+    int w = i / 64;
+    int s = i % 64;
+    int64_t bit_mask = int64_t(1) << s;
+    if (p.first || p.second) result->base()[w]  |=  bit_mask;
+    else                     result->base()[w]  &= ~bit_mask;
+    if (p.second)            result->extra()[w] |=  bit_mask;
+    else                     result->extra()[w] &= ~bit_mask;
   }
 
   result->normalize();
@@ -1246,7 +1455,7 @@ spool_ptr<Dlop> Dlop::ror_op() const {
     return create_bool(true);
   }
   if (has_unknowns()) {
-    return unknown(1);
+    return unknown_bool();
   }
   return create_bool(false);
 }
@@ -1255,7 +1464,7 @@ spool_ptr<Dlop> Dlop::ror_op() const {
 // (i.e., the value is a 2^n-1 mask). Unknown bits → 1-bit unknown.
 spool_ptr<Dlop> Dlop::rand_op() const {
   if (has_unknowns()) {
-    return unknown(1);
+    return unknown_bool();
   }
   if (is_invalid() || is_nil() || is_string()) {
     return invalid();
@@ -1267,7 +1476,7 @@ spool_ptr<Dlop> Dlop::rand_op() const {
 // Unknown bits → 1-bit unknown.
 spool_ptr<Dlop> Dlop::rxor_op() const {
   if (has_unknowns()) {
-    return unknown(1);
+    return unknown_bool();
   }
   if (is_invalid() || is_nil() || is_string()) {
     return invalid();
@@ -1456,8 +1665,30 @@ bool Dlop::is_power2() const {
 
 int Dlop::get_bits() const {
   if (size <= 0) return 0;
-  if (size == 1) return Blop::get_bits64(base()[0]);
-  return Blop::get_bitsn(base(), size);
+  int base_bits = (size == 1) ? Blop::get_bits64(base()[0])
+                              : Blop::get_bitsn(base(), size);
+  if (!has_unknowns()) return base_bits;
+
+  // With unknowns: an unknown bit at position k can resolve to a value that
+  // differs from the known sign extension, forcing the value to need k+2
+  // bits (k+1 for the resolved bit plus 1 for the sign). Return an upper
+  // bound across all concretizations so width-sensitive ops (concat,
+  // set_mask, get_mask) agree with what Slop would compute on any
+  // concretization.
+  if (extra()[size - 1] < 0) {
+    // Top stored bit is unknown → sign itself is unknown → conservative
+    // upper bound from the stored width.
+    return std::max(base_bits, size * 64 + 1);
+  }
+  int highest_unk = -1;
+  for (int w = size - 1; w >= 0; --w) {
+    if (extra()[w] != 0) {
+      highest_unk = w * 64 + 63 - __builtin_clzll(static_cast<uint64_t>(extra()[w]));
+      break;
+    }
+  }
+  if (highest_unk < 0) return base_bits;
+  return std::max(base_bits, highest_unk + 2);
 }
 
 bool Dlop::bit_test(int pos) const {

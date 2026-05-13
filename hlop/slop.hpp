@@ -364,6 +364,15 @@ public:
     return result;
   }
 
+  // mod_op: integer remainder. Asserts on mod-by-zero. Single-word only (the
+  // common case in Slop's runtime kernel); multi-word callers should fall
+  // back to Dlop.
+  Slop mod_op(const Slop &other) const {
+    nil_check_(other);
+    I(!other.is_known_false(), "Slop modulo by zero");
+    return create_integer(base_[0] % other.base_[0]);
+  }
+
   Slop neg_op() const {
     nil_check_();
     Slop result;
@@ -416,6 +425,11 @@ public:
     Blop::shr<n_words>(result.base_, base_, amount);
     return result;
   }
+
+  // Slop-typed shift wrappers — forward to the int64 form after extracting
+  // the amount. Slop has no runtime unknowns.
+  Slop lsh_op(const Slop &amount) const { return lsh_op(amount.base_[0]); }
+  Slop rsh_op(const Slop &amount) const { return rsh_op(amount.base_[0]); }
 
   // --- Comparison ---
   Slop eq_op(const Slop &other) const {
@@ -483,6 +497,10 @@ public:
   // get_mask_op(mask): copy the bits selected by `mask` into a new integer,
   // packed LSB-first in their original order. Negative mask = "everything
   // except the lowest |mask| bits". Mirrors Lconst::get_mask_op semantics.
+  //
+  // Single-bit result: when exactly one bit is selected, the result is the
+  // signed 1-bit integer -1 (bit set) or 0 (bit clear), not 0sb01. Detected
+  // from the selected-bit count after the loop — no popcount needed.
   Slop get_mask_op(const Slop &mask) const {
     nil_check_(mask);
 
@@ -514,6 +532,9 @@ public:
         ++out_bit;
       }
     }
+    if (out_bit == 1) {
+      return create_integer((result.base_[0] & 1) ? -1 : 0);
+    }
     return result;
   }
 
@@ -535,7 +556,10 @@ public:
     if (mask_neg) out_bits = std::max(out_bits, positive_mask_bits + val_bits);
     if (out_bits > N) out_bits = N;
 
-    Slop result;
+    // Start from `this` so bits not selected by the mask — including the
+    // sign-extension region beyond src_bits — carry through unchanged. The
+    // loop then overwrites just the bits the mask selects.
+    Slop result = *this;
     int value_pos = 0;
     for (int i = 0; i < out_bits; ++i) {
       bool from_value;
@@ -545,17 +569,14 @@ public:
       } else {
         from_value = mask_neg;
       }
-      bool the_bit;
-      if (from_value) {
-        the_bit = value.bit_test(value_pos);
-        ++value_pos;
-      } else {
-        the_bit = bit_test(i);
-      }
-      if (the_bit) {
-        int word = i / 64;
-        int bit  = i % 64;
-        if (word < n_words) result.base_[word] |= int64_t(1) << bit;
+      if (!from_value) continue;
+      bool the_bit = value.bit_test(value_pos);
+      ++value_pos;
+      int word = i / 64;
+      int bit  = i % 64;
+      if (word < n_words) {
+        if (the_bit) result.base_[word] |=  (int64_t(1) << bit);
+        else         result.base_[word] &= ~(int64_t(1) << bit);
       }
     }
     return result;

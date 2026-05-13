@@ -461,6 +461,64 @@ TEST_F(Dlop_test, get_mask_range_pairs_two_runs) {
   EXPECT_EQ(pairs[1].second, 2);
 }
 
+// get_mask_op(mask) — multi-bit mask packs the selected bits LSB-first.
+TEST_F(Dlop_test, get_mask_op_multibit_packed) {
+  auto v = Dlop::create_integer(0xfeed);
+  // mask 0xff selects the low byte → 0xed
+  EXPECT_EQ(v->get_mask_op(Dlop::create_integer(0xff))->to_i(), 0xed);
+  // non-contiguous mask 0xf00 selects nibble [11..8] → 0xe (packed low)
+  EXPECT_EQ(v->get_mask_op(Dlop::create_integer(0xf00))->to_i(), 0xe);
+}
+
+// get_mask_op(mask) — single-bit mask returns the signed 1-bit integer
+// (-1 if the bit is set, 0 if clear), not the unsigned 1/0.
+TEST_F(Dlop_test, get_mask_op_single_bit_set_is_neg_one) {
+  // 0b1010, bit 1 mask → bit is set → -1
+  auto v = Dlop::create_integer(0b1010);
+  auto r = v->get_mask_op(Dlop::create_integer(0b0010));
+  EXPECT_EQ(r->to_i(), -1);
+  EXPECT_TRUE(r->is_negative());
+}
+
+TEST_F(Dlop_test, get_mask_op_single_bit_clear_is_zero) {
+  // 0b1010, bit 0 mask → bit clear → 0
+  auto v = Dlop::create_integer(0b1010);
+  auto r = v->get_mask_op(Dlop::create_integer(0b0001));
+  EXPECT_EQ(r->to_i(), 0);
+  EXPECT_FALSE(r->is_negative());
+}
+
+// get_mask_op(mask) — when the selected bit is an unknown, the result is
+// a 1-bit unknown (0sb?), not 0 or -1.
+TEST_F(Dlop_test, get_mask_op_single_bit_unknown) {
+  // 0sb10?0: bit 0 = 0, bit 1 = ?, bit 2 = 0, bit 3 = 1.
+  auto v = Dlop::from_pyrope("0sb10?0");
+
+  // Selecting bit 1 (the ?) → 1-bit unknown (structurally equal to unknown(1)).
+  auto r_unk = v->get_mask_op(Dlop::create_integer(0b0010));
+  EXPECT_TRUE(r_unk->has_unknowns());
+  EXPECT_EQ(r_unk->to_pyrope(), Dlop::unknown(1)->to_pyrope());
+
+  // Selecting bit 3 (known 1) → -1.
+  auto r_set = v->get_mask_op(Dlop::create_integer(0b1000));
+  EXPECT_FALSE(r_set->has_unknowns());
+  EXPECT_EQ(r_set->to_i(), -1);
+
+  // Selecting bit 0 (known 0) → 0.
+  auto r_clr = v->get_mask_op(Dlop::create_integer(0b0001));
+  EXPECT_FALSE(r_clr->has_unknowns());
+  EXPECT_EQ(r_clr->to_i(), 0);
+}
+
+// Unknown bits inside a multi-bit selection propagate to the packed result.
+TEST_F(Dlop_test, get_mask_op_multibit_unknown_propagates) {
+  // 0sb10?0, mask 0b1110 → bits 3,2,1 → 1,0,? → packed LSB-first: ?,0,1
+  auto v = Dlop::from_pyrope("0sb10?0");
+  auto r = v->get_mask_op(Dlop::create_integer(0b1110));
+  EXPECT_TRUE(r->has_unknowns());
+  EXPECT_GE(r->get_bits(), 3);
+}
+
 // =========================================================================
 // Serialize / unserialize roundtrip
 // =========================================================================

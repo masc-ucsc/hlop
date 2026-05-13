@@ -308,6 +308,10 @@ public:
   static spool_ptr<Dlop> unknown(int nbits);
   static spool_ptr<Dlop> unknown_positive(int nbits);
   static spool_ptr<Dlop> unknown_negative(int nbits);
+  // Boolean with an unknown value: type=Boolean with every bit unknown so
+  // the result can collapse to either -1 (true) or 0 (false) and stays
+  // sign-extending across any width consumer.
+  static spool_ptr<Dlop> unknown_bool();
 
   // Pyrope nil literal — distinct from invalid()
   static spool_ptr<Dlop> nil();
@@ -346,6 +350,11 @@ public:
   spool_ptr<Dlop> mult_op(spool_ptr<Dlop> other) const { return mult_op(*other); }
   spool_ptr<Dlop> div_op(const Dlop& other) const;
   spool_ptr<Dlop> div_op(spool_ptr<Dlop> other) const { return div_op(*other); }
+  // mod_op: integer modulo. Returns invalid for mod-by-zero (undefined),
+  // a 1-bit unknown when either operand has unknowns, and the integer
+  // remainder otherwise.
+  spool_ptr<Dlop> mod_op(const Dlop& other) const;
+  spool_ptr<Dlop> mod_op(spool_ptr<Dlop> other) const { return mod_op(*other); }
   spool_ptr<Dlop> neg_op() const;
 
   // --- Bitwise operations ---
@@ -360,6 +369,11 @@ public:
   // --- Shift operations ---
   spool_ptr<Dlop> lsh_op(int64_t amount) const;
   spool_ptr<Dlop> rsh_op(int64_t amount) const;
+  // Dlop-typed shift overloads: forward to the int64 form once the amount is
+  // confirmed numeric. Unknown shift amount → 1-bit unknown result (the bit
+  // pattern is unrecoverable). Invalid / nil / string amount → invalid.
+  spool_ptr<Dlop> lsh_op(const Dlop& amount) const;
+  spool_ptr<Dlop> rsh_op(const Dlop& amount) const;
 
   // --- Comparison operations ---
   spool_ptr<Dlop> eq_op(const Dlop& other) const;
