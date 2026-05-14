@@ -45,14 +45,14 @@ private:
     // Nil is Pyrope's tagged unit ("absence of value") — distinct from Invalid
     // (which means error / unset). All arithmetic and logical ops propagate Nil:
     // any binary op with a Nil operand returns Nil.
-    Nil      = 4
+    Nil = 4
   };
 
-  static inline thread_local std::vector<raw_ptr_pool *> free_pool;
+  static inline thread_local std::vector<raw_ptr_pool*> free_pool;
 
 public:
-  static void     free(size_t sz, int64_t *ptr);
-  static int64_t *alloc(size_t sz);
+  static void     free(size_t sz, int64_t* ptr);
+  static int64_t* alloc(size_t sz);
 
   // Layout: type+size+shared_count packs into 8 bytes; storage union is 16 bytes.
   // For size <= 1 the value bits live inline in `data[]`; for size > 1 the
@@ -62,18 +62,21 @@ public:
   int16_t  size;          // bucket size in 64-bit words
   uint32_t shared_count;  // touched only by spool_ptr_pool<Dlop>
   union {
-    int64_t data[2];                       // size <= 1: data[0]=base word, data[1]=extra word
-    struct { int64_t *bp; int64_t *ep; } big;  // size  > 1: pool buffers
+    int64_t data[2];  // size <= 1: data[0]=base word, data[1]=extra word
+    struct {
+      int64_t* bp;
+      int64_t* ep;
+    } big;  // size  > 1: pool buffers
   };
 
   // --- Storage accessors ---
   // base()/extra() return the value-bit / unknown-bit word pointer regardless
   // of inline vs pool storage. One predictable branch; the compiler hoists it
   // out of loops in most callers.
-  int64_t       *base()        noexcept { return size > 1 ? big.bp : &data[0]; }
-  int64_t       *extra()       noexcept { return size > 1 ? big.ep : &data[1]; }
-  const int64_t *base()  const noexcept { return size > 1 ? big.bp : &data[0]; }
-  const int64_t *extra() const noexcept { return size > 1 ? big.ep : &data[1]; }
+  int64_t*       base() noexcept { return size > 1 ? big.bp : &data[0]; }
+  int64_t*       extra() noexcept { return size > 1 ? big.ep : &data[1]; }
+  const int64_t* base() const noexcept { return size > 1 ? big.bp : &data[0]; }
+  const int64_t* extra() const noexcept { return size > 1 ? big.ep : &data[1]; }
 
   // Release pool-allocated word buffers, if any. Leaves size unchanged; the
   // caller is expected to reset size/type next (or destruct).
@@ -92,7 +95,7 @@ public:
     if (size == 1) {
       data[0] *= v;
     } else {
-      int64_t *tmp = alloc(size);
+      int64_t* tmp = alloc(size);
       memcpy(tmp, big.bp, size * sizeof(int64_t));
       Blop::multn(big.bp, size, tmp, size, v);
       free(size, tmp);
@@ -106,7 +109,7 @@ public:
     if (size == 1) {
       data[0] += v;
     } else {
-      int64_t *tmp = alloc(size);
+      int64_t* tmp = alloc(size);
       Blop::extend(tmp, size, v);
       Blop::addn(big.bp, size, big.bp, tmp);
       free(size, tmp);
@@ -178,12 +181,16 @@ public:
   friend spool_ptr_pool<Dlop>;
 
   // Align operand sizes for binary operations
-  static void align_sizes(spool_ptr<Dlop> &a, spool_ptr<Dlop> &b);
+  static void align_sizes(spool_ptr<Dlop>& a, spool_ptr<Dlop>& b);
 
   bool has_extra() const {
-    if (size <= 1) return data[1] != 0;
+    if (size <= 1) {
+      return data[1] != 0;
+    }
     for (int i = 0; i < size; ++i) {
-      if (big.ep[i] != 0) return true;
+      if (big.ep[i] != 0) {
+        return true;
+      }
     }
     return false;
   }
@@ -192,7 +199,7 @@ public:
   // fully known (no unknown bits); used by the three-valued lt/le/gt/ge ops
   // after they short-circuit on unknowns. Not exposed as operator< because
   // hiding unknown-propagation behind `a < b` invites silent miscompares.
-  bool cmp_less_known(const Dlop &other) const;
+  bool cmp_less_known(const Dlop& other) const;
 
 public:
   Dlop() noexcept : type(Type::Invalid), size(0), shared_count(0), data{0, 0} {}
@@ -323,8 +330,8 @@ public:
 
   // Persistence: stable binary roundtrip. Layout (little-endian word order):
   //   [1 B] type, [2 B] size, [size * 8 B] base words, [size * 8 B] extra words
-  std::string                  serialize() const;
-  static spool_ptr<Dlop>       unserialize(std::string_view v);
+  std::string            serialize() const;
+  static spool_ptr<Dlop> unserialize(std::string_view v);
 
   uint64_t hash() const;
 
@@ -381,11 +388,11 @@ public:
   // same_repr: structural compare of base AND extra. Two values with the same
   // unknown pattern (e.g. 0sb?1 vs 0sb?1) are equal. Use for containers, dedup,
   // and hashing where reflexivity is required.
-  bool same_repr(const Dlop &other) const;
+  bool same_repr(const Dlop& other) const;
   // is_known_eq: three-valued equality collapsed to bool — true only when both
   // sides are fully known and numerically equal; false if either side has any
   // unknown bits. Use in asserts where "definitely equal" is the question.
-  bool is_known_eq(const Dlop &other) const;
+  bool is_known_eq(const Dlop& other) const;
 
   // Three-valued comparison ops returning a Bool Dlop (or a 1-bit unknown
   // when either side has unknown bits). Mirror eq_op's unknown handling so
@@ -421,9 +428,7 @@ public:
   spool_ptr<Dlop> get_mask_op(const Dlop& mask) const;
   spool_ptr<Dlop> get_mask_op(spool_ptr<Dlop> mask) const { return get_mask_op(*mask); }
   spool_ptr<Dlop> set_mask_op(const Dlop& mask, const Dlop& value) const;
-  spool_ptr<Dlop> set_mask_op(spool_ptr<Dlop> mask, spool_ptr<Dlop> value) const {
-    return set_mask_op(*mask, *value);
-  }
+  spool_ptr<Dlop> set_mask_op(spool_ptr<Dlop> mask, spool_ptr<Dlop> value) const { return set_mask_op(*mask, *value); }
   spool_ptr<Dlop> concat_op(const Dlop& other) const;
   spool_ptr<Dlop> concat_op(spool_ptr<Dlop> other) const { return concat_op(*other); }
   spool_ptr<Dlop> adjust_bits(int amount) const;
@@ -457,14 +462,14 @@ public:
 
   // Resolve unknown bits to fresh random known bits (deterministic per-process seed)
   spool_ptr<Dlop> to_known_rand() const;
-  int  get_bits() const;
-  bool bit_test(int pos) const;
-  int  get_first_bit_set() const;
-  int  get_last_bit_set() const;
-  int  popcount() const;
-  int  get_trailing_zeroes() const;
-  bool is_i() const;
-  int64_t to_i() const;
+  int             get_bits() const;
+  bool            bit_test(int pos) const;
+  int             get_first_bit_set() const;
+  int             get_last_bit_set() const;
+  int             popcount() const;
+  int             get_trailing_zeroes() const;
+  bool            is_i() const;
+  int64_t         to_i() const;
 
   // --- Conversion ---
   std::string to_pyrope() const;

@@ -14,21 +14,29 @@
 // =========================================================================
 // Memory management
 // =========================================================================
-void Dlop::free(size_t sz, int64_t *ptr) {
-  assert(free_pool.size() > (sz >> 3));
+void Dlop::free(size_t sz, int64_t* ptr) {
+  // Grow the per-thread pool on demand. `free` can be called for a size whose
+  // pool slot was never populated on this thread — e.g. during late teardown
+  // of long-lived bundles whose Dlops were allocated through a different
+  // execution path. The growth mirrors `alloc` so released buffers always
+  // have a home to return to.
+  while ((sz >> 3) >= free_pool.size()) {
+    auto* p = new raw_ptr_pool((free_pool.size() + 1) << 6);
+    free_pool.emplace_back(p);
+  }
   free_pool[sz >> 3]->release_ptr(ptr);
 }
 
-int64_t *Dlop::alloc(size_t sz) {
+int64_t* Dlop::alloc(size_t sz) {
   assert(sz >= 1);
   if (likely(free_pool.size() > (sz >> 3))) {
-    return static_cast<int64_t *>(free_pool[sz >> 3]->get_ptr());
+    return static_cast<int64_t*>(free_pool[sz >> 3]->get_ptr());
   }
   while ((sz >> 3) >= free_pool.size()) {
-    auto *ptr = new raw_ptr_pool((free_pool.size() + 1) << 6);
+    auto* ptr = new raw_ptr_pool((free_pool.size() + 1) << 6);
     free_pool.emplace_back(ptr);
   }
-  return static_cast<int64_t *>(free_pool[sz >> 3]->get_ptr());
+  return static_cast<int64_t*>(free_pool[sz >> 3]->get_ptr());
 }
 
 spool_ptr<Dlop> Dlop::make_result(Type tp, int16_t sz) {
@@ -37,11 +45,13 @@ spool_ptr<Dlop> Dlop::make_result(Type tp, int16_t sz) {
 }
 
 void Dlop::grow_to(int16_t new_size) {
-  if (new_size <= size) return;
+  if (new_size <= size) {
+    return;
+  }
 
   // Read existing payload through accessors before mutating size/layout. When
   // size == 0 there is no payload — treat the value as 0 (non-negative).
-  int64_t base_sign  = (size > 0 && base()[size - 1] < 0)  ? -1 : 0;
+  int64_t base_sign  = (size > 0 && base()[size - 1] < 0) ? -1 : 0;
   int64_t extra_sign = (size > 0 && extra()[size - 1] < 0) ? -1 : 0;
 
   if (new_size <= 1) {
@@ -52,8 +62,8 @@ void Dlop::grow_to(int16_t new_size) {
     return;
   }
 
-  int64_t *new_base  = alloc(new_size);
-  int64_t *new_extra = alloc(new_size);
+  int64_t* new_base  = alloc(new_size);
+  int64_t* new_extra = alloc(new_size);
 
   for (int i = 0; i < size; ++i) {
     new_base[i]  = base()[i];
@@ -74,9 +84,11 @@ void Dlop::grow_to(int16_t new_size) {
 }
 
 void Dlop::normalize() {
-  if (size <= 1) return;
+  if (size <= 1) {
+    return;
+  }
 
-  int min_size = 1;
+  int     min_size   = 1;
   int64_t base_sign  = big.bp[size - 1] < 0 ? -1 : 0;
   int64_t extra_sign = big.ep[size - 1] < 0 ? -1 : 0;
 
@@ -92,19 +104,21 @@ void Dlop::normalize() {
     }
   }
 
-  if (min_size >= size) return;
+  if (min_size >= size) {
+    return;
+  }
 
   if (min_size == 1) {
     // Switching from pool-backed `big` to inline `data` — must read old
     // pointer values out before overwriting the union members.
     int64_t  b      = big.bp[0];
     int64_t  e      = big.ep[0];
-    int64_t *old_bp = big.bp;
-    int64_t *old_ep = big.ep;
+    int64_t* old_bp = big.bp;
+    int64_t* old_ep = big.ep;
     int16_t  old_sz = size;
-    size    = 1;
-    data[0] = b;
-    data[1] = e;
+    size            = 1;
+    data[0]         = b;
+    data[1]         = e;
     free(old_sz, old_bp);
     free(old_sz, old_ep);
   }
@@ -153,12 +167,14 @@ void Dlop::init_nil() { reconstruct(Type::Nil, 0); }
 
 void Dlop::init_unknown(int nbits) {
   init_integer(0);
-  if (nbits <= 0) return;
+  if (nbits <= 0) {
+    return;
+  }
 
   if (nbits <= 63) {
     int64_t mask = (int64_t(1) << nbits) - 1;
-    data[0] = mask;
-    data[1] = mask;
+    data[0]      = mask;
+    data[1]      = mask;
   } else {
     int words = (nbits + 63) / 64;
     grow_to(static_cast<int16_t>(words));
@@ -168,7 +184,7 @@ void Dlop::init_unknown(int nbits) {
     }
     int leftover = nbits % 64;
     if (leftover > 0) {
-      int64_t mask = (int64_t(1) << leftover) - 1;
+      int64_t mask       = (int64_t(1) << leftover) - 1;
       base()[words - 1]  = mask;
       extra()[words - 1] = mask;
     }
@@ -252,7 +268,7 @@ spool_ptr<Dlop> Dlop::unknown_bool() {
   // create_bool(true) (-1 across all bits) or create_bool(false) (0 across
   // all bits); the full-width unknown mask keeps the value sign-extending
   // for any consumer that walks bit positions beyond word 0.
-  auto dlop = spool_ptr<Dlop>::make(Type::Boolean, 1);
+  auto dlop        = spool_ptr<Dlop>::make(Type::Boolean, 1);
   dlop->base()[0]  = -1;
   dlop->extra()[0] = -1;
   return dlop;
@@ -266,7 +282,9 @@ void Dlop::init_from_binary(std::string_view txt, bool unsigned_result) {
   if (!unsigned_result) {
     for (size_t i = 0; i < txt.size(); ++i) {
       const auto ch2 = txt[i];
-      if (ch2 == '_') continue;
+      if (ch2 == '_') {
+        continue;
+      }
       if (ch2 == '1') {
         extend_base(-1);
       } else if (ch2 == '?') {
@@ -281,7 +299,9 @@ void Dlop::init_from_binary(std::string_view txt, bool unsigned_result) {
 
   for (size_t i = 0; i < txt.size(); ++i) {
     const auto ch2 = txt[i];
-    if (ch2 == '_') continue;
+    if (ch2 == '_') {
+      continue;
+    }
 
     shl_base(1);
     shl_extra(1);
@@ -319,23 +339,34 @@ void Dlop::init_from_pyrope(std::string_view orig_txt) {
   // Operate directly on the input string_view — avoids the std::string copy
   // that `str_tools::to_lower` did. Per-character lowercasing is local; the
   // hex char_to_val table already accepts both cases for `[a-fA-F]`.
-  auto lower = [](char c) -> char {
-    return (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c;
-  };
+  auto lower = [](char c) -> char { return (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c; };
   auto eq_ci = [&](std::string_view a, std::string_view b) {
-    if (a.size() != b.size()) return false;
+    if (a.size() != b.size()) {
+      return false;
+    }
     for (size_t i = 0; i < a.size(); ++i) {
-      if (lower(a[i]) != b[i]) return false;
+      if (lower(a[i]) != b[i]) {
+        return false;
+      }
     }
     return true;
   };
 
-  if (eq_ci(orig_txt, "true"))  { init_bool(true);  return; }
-  if (eq_ci(orig_txt, "false")) { init_bool(false); return; }
+  if (eq_ci(orig_txt, "true")) {
+    init_bool(true);
+    return;
+  }
+  if (eq_ci(orig_txt, "false")) {
+    init_bool(false);
+    return;
+  }
   // Pyrope `nil` / `null` literals (case-insensitive) parse to Type::Nil.
   // To represent the *string* "nil", use the quoted form `'nil'`, which
   // takes the quoted-string branch below.
-  if (eq_ci(orig_txt, "nil") || eq_ci(orig_txt, "null")) { init_nil(); return; }
+  if (eq_ci(orig_txt, "nil") || eq_ci(orig_txt, "null")) {
+    init_nil();
+    return;
+  }
 
   bool   negative   = false;
   size_t skip_chars = 0;
@@ -413,7 +444,9 @@ void Dlop::init_from_pyrope(std::string_view orig_txt) {
         mult_base(10);
         add_base(v);
       } else {
-        if (c == '_') continue;
+        if (c == '_') {
+          continue;
+        }
         throw std::runtime_error(std::format("ERROR: {} encoding could not use {}\n", orig_txt, c));
       }
     }
@@ -428,7 +461,9 @@ void Dlop::init_from_pyrope(std::string_view orig_txt) {
 
     for (size_t i = skip_chars; i < orig_txt.size(); ++i) {
       char c = orig_txt[i];
-      if (c == '_') continue;
+      if (c == '_') {
+        continue;
+      }
 
       auto v = char_to_val[static_cast<uint8_t>(c)];
       if (unlikely(v < 0)) {
@@ -437,8 +472,7 @@ void Dlop::init_from_pyrope(std::string_view orig_txt) {
 
       auto char_sa = char_to_bits[static_cast<uint8_t>(c)];
       if (unlikely(char_sa > shift_mode)) {
-        throw std::runtime_error(
-            std::format("ERROR: {} invalid syntax for number {} bits needed for '{}'", orig_txt, char_sa, c));
+        throw std::runtime_error(std::format("ERROR: {} invalid syntax for number {} bits needed for '{}'", orig_txt, char_sa, c));
       }
       shl_base(shift_mode);
       or_base(v);
@@ -471,7 +505,7 @@ void Dlop::mut_add(const Dlop& other) {
     extra()[0] |= other.extra()[0];
     base()[0] |= extra()[0];
   } else {
-    int64_t *tmp = alloc(size);
+    int64_t* tmp = alloc(size);
     memcpy(tmp, other.base(), other.size * sizeof(int64_t));
     int64_t sign = (other.base()[other.size - 1] < 0) ? -1 : 0;
     for (int i = other.size; i < size; ++i) {
@@ -488,7 +522,7 @@ void Dlop::mut_add(int64_t other) {
     base()[0] += other;
     base()[0] |= extra()[0];
   } else {
-    int64_t *tmp = alloc(size);
+    int64_t* tmp = alloc(size);
     Blop::extend(tmp, size, other);
     Blop::addn(base(), size, base(), tmp);
     Blop::orn(base(), size, base(), extra());
@@ -505,13 +539,13 @@ void Dlop::mut_add(int64_t other) {
 // the lowest unknown bit across both operands. Above that position we also
 // force base bits to 1 to maintain the invariant `base == base | extra`.
 spool_ptr<Dlop> Dlop::add_op(const Dlop& other) const {
-  int16_t rsz = std::max(size, other.size);
-  auto dlop = make_result(Type::Integer, rsz);
+  int16_t rsz  = std::max(size, other.size);
+  auto    dlop = make_result(Type::Integer, rsz);
 
   if (rsz == 1 && size == 1 && other.size == 1) {
     // Fast path
     uint64_t combined = static_cast<uint64_t>(extra()[0]) | static_cast<uint64_t>(other.extra()[0]);
-    dlop->base()[0]  = base()[0] + other.base()[0];
+    dlop->base()[0]   = base()[0] + other.base()[0];
     // hi_fill: all bits at or above the lowest set bit of combined. Zero if
     // combined is zero. Equivalent to `~(combined - 1) & ~0` when combined>0.
     uint64_t hi_fill = 0u - (combined & (0u - combined));
@@ -519,32 +553,40 @@ spool_ptr<Dlop> Dlop::add_op(const Dlop& other) const {
     dlop->base()[0] |= dlop->extra()[0];  // maintain invariant
   } else {
     // Multi-word: sign-extend shorter operand
-    const int64_t *s1 = base();
-    const int64_t *s2 = other.base();
-    const int64_t *e1 = extra();
-    const int64_t *e2 = other.extra();
+    const int64_t* s1 = base();
+    const int64_t* s2 = other.base();
+    const int64_t* e1 = extra();
+    const int64_t* e2 = other.extra();
 
     // Use temp arrays for sign extension if needed
-    int64_t *s1_ext = nullptr;
-    int64_t *s2_ext = nullptr;
-    int64_t *e1_ext = nullptr;
-    int64_t *e2_ext = nullptr;
+    int64_t* s1_ext = nullptr;
+    int64_t* s2_ext = nullptr;
+    int64_t* e1_ext = nullptr;
+    int64_t* e2_ext = nullptr;
 
     if (size < rsz) {
       s1_ext = alloc(rsz);
       e1_ext = alloc(rsz);
       Blop::extend(s1_ext, rsz, base()[size - 1] < 0 ? -1 : 0);
       Blop::extend(e1_ext, rsz, extra()[size - 1] < 0 ? -1 : 0);
-      for (int i = 0; i < size; ++i) { s1_ext[i] = base()[i]; e1_ext[i] = extra()[i]; }
-      s1 = s1_ext; e1 = e1_ext;
+      for (int i = 0; i < size; ++i) {
+        s1_ext[i] = base()[i];
+        e1_ext[i] = extra()[i];
+      }
+      s1 = s1_ext;
+      e1 = e1_ext;
     }
     if (other.size < rsz) {
       s2_ext = alloc(rsz);
       e2_ext = alloc(rsz);
       Blop::extend(s2_ext, rsz, other.base()[other.size - 1] < 0 ? -1 : 0);
       Blop::extend(e2_ext, rsz, other.extra()[other.size - 1] < 0 ? -1 : 0);
-      for (int i = 0; i < other.size; ++i) { s2_ext[i] = other.base()[i]; e2_ext[i] = other.extra()[i]; }
-      s2 = s2_ext; e2 = e2_ext;
+      for (int i = 0; i < other.size; ++i) {
+        s2_ext[i] = other.base()[i];
+        e2_ext[i] = other.extra()[i];
+      }
+      s2 = s2_ext;
+      e2 = e2_ext;
     }
 
     Blop::addn(dlop->base(), rsz, s1, s2);
@@ -583,8 +625,14 @@ spool_ptr<Dlop> Dlop::add_op(const Dlop& other) const {
       }
     }
 
-    if (s1_ext) { free(rsz, s1_ext); free(rsz, e1_ext); }
-    if (s2_ext) { free(rsz, s2_ext); free(rsz, e2_ext); }
+    if (s1_ext) {
+      free(rsz, s1_ext);
+      free(rsz, e1_ext);
+    }
+    if (s2_ext) {
+      free(rsz, s2_ext);
+      free(rsz, e2_ext);
+    }
   }
 
   return dlop;
@@ -598,7 +646,7 @@ spool_ptr<Dlop> Dlop::add_op(int64_t other) const {
     dlop->extra()[0] = extra()[0];
     dlop->base()[0] |= dlop->extra()[0];
   } else {
-    int64_t *tmp = alloc(size);
+    int64_t* tmp = alloc(size);
     Blop::extend(tmp, size, other);
     Blop::addn(dlop->base(), size, base(), tmp);
     memcpy(dlop->extra(), extra(), size * sizeof(int64_t));
@@ -615,9 +663,7 @@ spool_ptr<Dlop> Dlop::sub_op(const Dlop& other) const {
   return add_op(neg_other);
 }
 
-spool_ptr<Dlop> Dlop::sub_op(int64_t other) const {
-  return add_op(-other);
-}
+spool_ptr<Dlop> Dlop::sub_op(int64_t other) const { return add_op(-other); }
 
 // Unknown propagation for multiply: bit k of (a*b) depends on every (i,j)
 // with i+j ≤ k. The lowest output bit that can be tainted by an unknown is
@@ -625,14 +671,14 @@ spool_ptr<Dlop> Dlop::sub_op(int64_t other) const {
 // below that, every contributing a_i, b_j is known. From that bit up, mark
 // unknown (the carry chain mirrors add).
 spool_ptr<Dlop> Dlop::mult_op(const Dlop& other) const {
-  int16_t rsz = size + other.size;
-  auto dlop = make_result(Type::Integer, rsz);
+  int16_t rsz  = size + other.size;
+  auto    dlop = make_result(Type::Integer, rsz);
 
   // Compute the multiplication on base() unconditionally. For known low bits
   // this is correct; for unknown-tainted upper bits we overwrite extra/base
   // below.
   if (size == 1 && other.size == 1) {
-    __int128 prod = static_cast<__int128>(base()[0]) * other.base()[0];
+    __int128 prod   = static_cast<__int128>(base()[0]) * other.base()[0];
     dlop->base()[0] = static_cast<int64_t>(prod);
     if (rsz > 1) {
       dlop->base()[1] = static_cast<int64_t>(prod >> 64);
@@ -647,17 +693,17 @@ spool_ptr<Dlop> Dlop::mult_op(const Dlop& other) const {
     return dlop;
   }
 
-  auto lowest_unk = [](const int64_t *e, int sz) -> int {
+  auto lowest_unk = [](const int64_t* e, int sz) -> int {
     for (int w = 0; w < sz; ++w) {
-      if (e[w] != 0) return w * 64 + __builtin_ctzll(static_cast<uint64_t>(e[w]));
+      if (e[w] != 0) {
+        return w * 64 + __builtin_ctzll(static_cast<uint64_t>(e[w]));
+      }
     }
     return -1;
   };
-  int lu_a = lowest_unk(extra(),       size);
+  int lu_a = lowest_unk(extra(), size);
   int lu_b = lowest_unk(other.extra(), other.size);
-  int lu   = (lu_a < 0)   ? lu_b
-           : (lu_b < 0)   ? lu_a
-                          : std::min(lu_a, lu_b);
+  int lu   = (lu_a < 0) ? lu_b : (lu_b < 0) ? lu_a : std::min(lu_a, lu_b);
 
   // lu < 0 is unreachable here (at least one operand has unknowns), but
   // guard anyway.
@@ -688,7 +734,9 @@ spool_ptr<Dlop> Dlop::mult_op(const Dlop& other) const {
 spool_ptr<Dlop> Dlop::div_op(const Dlop& other) const {
   if (other.is_known_false()) {
     // Division by zero
-    if (is_negative()) return unknown_negative(2);
+    if (is_negative()) {
+      return unknown_negative(2);
+    }
     return unknown_positive(2);
   }
 
@@ -696,11 +744,15 @@ spool_ptr<Dlop> Dlop::div_op(const Dlop& other) const {
     int b = get_bits();
     if (!other.has_unknowns()) {
       b -= other.get_bits();
-      if (b <= 0) return create_integer(0);
+      if (b <= 0) {
+        return create_integer(0);
+      }
     }
     bool neg1 = is_negative();
     bool neg2 = other.is_negative();
-    if (neg1 != neg2) return unknown_negative(b);
+    if (neg1 != neg2) {
+      return unknown_negative(b);
+    }
     return unknown_positive(b);
   }
 
@@ -748,9 +800,9 @@ spool_ptr<Dlop> Dlop::neg_op() const {
 
   if (has_unknowns()) {
     if (size == 1) {
-      dlop->base()[0] = -base()[0];
-      uint64_t e      = static_cast<uint64_t>(extra()[0]);
-      uint64_t hi     = 0u - (e & (0u - e));
+      dlop->base()[0]  = -base()[0];
+      uint64_t e       = static_cast<uint64_t>(extra()[0]);
+      uint64_t hi      = 0u - (e & (0u - e));
       dlop->extra()[0] = static_cast<int64_t>(hi);
       dlop->base()[0] |= dlop->extra()[0];
     } else {
@@ -815,8 +867,8 @@ spool_ptr<Dlop> Dlop::or_op(const Dlop& other) const {
     return nil();
   }
 
-  int16_t rsz = std::max(size, other.size);
-  auto dlop = make_result(Type::Integer, rsz);
+  int16_t rsz  = std::max(size, other.size);
+  auto    dlop = make_result(Type::Integer, rsz);
 
   // For OR with unknowns (base/extra encoding where unknown bits have base=1):
   //   known_1 = base() & ~extra  (definitely 1)
@@ -827,37 +879,47 @@ spool_ptr<Dlop> Dlop::or_op(const Dlop& other) const {
 
   if (rsz == 1 && size == 1 && other.size == 1) {
     if (extra()[0] == 0 && other.extra()[0] == 0) {
-      dlop->base()[0] = base()[0] | other.base()[0];
+      dlop->base()[0]  = base()[0] | other.base()[0];
       dlop->extra()[0] = 0;
     } else {
-      int64_t known1_a = base()[0] & ~extra()[0];
-      int64_t known1_b = other.base()[0] & ~other.extra()[0];
-      int64_t known0_a = ~base()[0];
-      int64_t known0_b = ~other.base()[0];
+      int64_t known1_a      = base()[0] & ~extra()[0];
+      int64_t known1_b      = other.base()[0] & ~other.extra()[0];
+      int64_t known0_a      = ~base()[0];
+      int64_t known0_b      = ~other.base()[0];
       int64_t result_known1 = known1_a | known1_b;
       int64_t result_known0 = known0_a & known0_b;
-      dlop->extra()[0] = ~result_known1 & ~result_known0;
-      dlop->base()[0]  = result_known1 | dlop->extra()[0];  // unknown bits have base=1
+      dlop->extra()[0]      = ~result_known1 & ~result_known0;
+      dlop->base()[0]       = result_known1 | dlop->extra()[0];  // unknown bits have base=1
     }
   } else {
     // Sign-extend shorter operand
     const int64_t *s1 = base(), *s2 = other.base();
     const int64_t *e1 = extra(), *e2 = other.extra();
-    int64_t *s1_ext = nullptr, *s2_ext = nullptr, *e1_ext = nullptr, *e2_ext = nullptr;
+    int64_t *      s1_ext = nullptr, *s2_ext = nullptr, *e1_ext = nullptr, *e2_ext = nullptr;
 
     if (size < rsz) {
-      s1_ext = alloc(rsz); e1_ext = alloc(rsz);
+      s1_ext = alloc(rsz);
+      e1_ext = alloc(rsz);
       Blop::extend(s1_ext, rsz, base()[size - 1] < 0 ? -1 : 0);
       Blop::extend(e1_ext, rsz, extra()[size - 1] < 0 ? -1 : 0);
-      for (int i = 0; i < size; ++i) { s1_ext[i] = base()[i]; e1_ext[i] = extra()[i]; }
-      s1 = s1_ext; e1 = e1_ext;
+      for (int i = 0; i < size; ++i) {
+        s1_ext[i] = base()[i];
+        e1_ext[i] = extra()[i];
+      }
+      s1 = s1_ext;
+      e1 = e1_ext;
     }
     if (other.size < rsz) {
-      s2_ext = alloc(rsz); e2_ext = alloc(rsz);
+      s2_ext = alloc(rsz);
+      e2_ext = alloc(rsz);
       Blop::extend(s2_ext, rsz, other.base()[other.size - 1] < 0 ? -1 : 0);
       Blop::extend(e2_ext, rsz, other.extra()[other.size - 1] < 0 ? -1 : 0);
-      for (int i = 0; i < other.size; ++i) { s2_ext[i] = other.base()[i]; e2_ext[i] = other.extra()[i]; }
-      s2 = s2_ext; e2 = e2_ext;
+      for (int i = 0; i < other.size; ++i) {
+        s2_ext[i] = other.base()[i];
+        e2_ext[i] = other.extra()[i];
+      }
+      s2 = s2_ext;
+      e2 = e2_ext;
     }
 
     if (!has_extra() && !other.has_extra()) {
@@ -865,19 +927,25 @@ spool_ptr<Dlop> Dlop::or_op(const Dlop& other) const {
       memset(dlop->extra(), 0, rsz * sizeof(int64_t));
     } else {
       for (int i = 0; i < rsz; ++i) {
-        int64_t known1_a = s1[i] & ~e1[i];
-        int64_t known1_b = s2[i] & ~e2[i];
-        int64_t known0_a = ~s1[i];
-        int64_t known0_b = ~s2[i];
+        int64_t known1_a      = s1[i] & ~e1[i];
+        int64_t known1_b      = s2[i] & ~e2[i];
+        int64_t known0_a      = ~s1[i];
+        int64_t known0_b      = ~s2[i];
         int64_t result_known1 = known1_a | known1_b;
         int64_t result_known0 = known0_a & known0_b;
-        dlop->extra()[i] = ~result_known1 & ~result_known0;
-        dlop->base()[i]  = result_known1 | dlop->extra()[i];
+        dlop->extra()[i]      = ~result_known1 & ~result_known0;
+        dlop->base()[i]       = result_known1 | dlop->extra()[i];
       }
     }
 
-    if (s1_ext) { free(rsz, s1_ext); free(rsz, e1_ext); }
-    if (s2_ext) { free(rsz, s2_ext); free(rsz, e2_ext); }
+    if (s1_ext) {
+      free(rsz, s1_ext);
+      free(rsz, e1_ext);
+    }
+    if (s2_ext) {
+      free(rsz, s2_ext);
+      free(rsz, e2_ext);
+    }
   }
 
   return dlop;
@@ -897,8 +965,8 @@ spool_ptr<Dlop> Dlop::and_op(const Dlop& other) const {
     return nil();
   }
 
-  int16_t rsz = std::max(size, other.size);
-  auto dlop = make_result(Type::Integer, rsz);
+  int16_t rsz  = std::max(size, other.size);
+  auto    dlop = make_result(Type::Integer, rsz);
 
   // For AND with unknowns (base/extra encoding where unknown bits have base=1):
   //   known_0 = ~base          (definitely 0)
@@ -909,36 +977,46 @@ spool_ptr<Dlop> Dlop::and_op(const Dlop& other) const {
 
   if (rsz == 1 && size == 1 && other.size == 1) {
     if (extra()[0] == 0 && other.extra()[0] == 0) {
-      dlop->base()[0] = base()[0] & other.base()[0];
+      dlop->base()[0]  = base()[0] & other.base()[0];
       dlop->extra()[0] = 0;
     } else {
-      int64_t known0_a = ~base()[0];
-      int64_t known0_b = ~other.base()[0];
-      int64_t known1_a = base()[0] & ~extra()[0];
-      int64_t known1_b = other.base()[0] & ~other.extra()[0];
+      int64_t known0_a      = ~base()[0];
+      int64_t known0_b      = ~other.base()[0];
+      int64_t known1_a      = base()[0] & ~extra()[0];
+      int64_t known1_b      = other.base()[0] & ~other.extra()[0];
       int64_t result_known0 = known0_a | known0_b;
       int64_t result_known1 = known1_a & known1_b;
-      dlop->extra()[0] = ~result_known0 & ~result_known1;
-      dlop->base()[0]  = result_known1 | dlop->extra()[0];
+      dlop->extra()[0]      = ~result_known0 & ~result_known1;
+      dlop->base()[0]       = result_known1 | dlop->extra()[0];
     }
   } else {
     const int64_t *s1 = base(), *s2 = other.base();
     const int64_t *e1 = extra(), *e2 = other.extra();
-    int64_t *s1_ext = nullptr, *s2_ext = nullptr, *e1_ext = nullptr, *e2_ext = nullptr;
+    int64_t *      s1_ext = nullptr, *s2_ext = nullptr, *e1_ext = nullptr, *e2_ext = nullptr;
 
     if (size < rsz) {
-      s1_ext = alloc(rsz); e1_ext = alloc(rsz);
+      s1_ext = alloc(rsz);
+      e1_ext = alloc(rsz);
       Blop::extend(s1_ext, rsz, base()[size - 1] < 0 ? -1 : 0);
       Blop::extend(e1_ext, rsz, extra()[size - 1] < 0 ? -1 : 0);
-      for (int i = 0; i < size; ++i) { s1_ext[i] = base()[i]; e1_ext[i] = extra()[i]; }
-      s1 = s1_ext; e1 = e1_ext;
+      for (int i = 0; i < size; ++i) {
+        s1_ext[i] = base()[i];
+        e1_ext[i] = extra()[i];
+      }
+      s1 = s1_ext;
+      e1 = e1_ext;
     }
     if (other.size < rsz) {
-      s2_ext = alloc(rsz); e2_ext = alloc(rsz);
+      s2_ext = alloc(rsz);
+      e2_ext = alloc(rsz);
       Blop::extend(s2_ext, rsz, other.base()[other.size - 1] < 0 ? -1 : 0);
       Blop::extend(e2_ext, rsz, other.extra()[other.size - 1] < 0 ? -1 : 0);
-      for (int i = 0; i < other.size; ++i) { s2_ext[i] = other.base()[i]; e2_ext[i] = other.extra()[i]; }
-      s2 = s2_ext; e2 = e2_ext;
+      for (int i = 0; i < other.size; ++i) {
+        s2_ext[i] = other.base()[i];
+        e2_ext[i] = other.extra()[i];
+      }
+      s2 = s2_ext;
+      e2 = e2_ext;
     }
 
     if (!has_extra() && !other.has_extra()) {
@@ -946,19 +1024,25 @@ spool_ptr<Dlop> Dlop::and_op(const Dlop& other) const {
       memset(dlop->extra(), 0, rsz * sizeof(int64_t));
     } else {
       for (int i = 0; i < rsz; ++i) {
-        int64_t known0_a = ~s1[i];
-        int64_t known0_b = ~s2[i];
-        int64_t known1_a = s1[i] & ~e1[i];
-        int64_t known1_b = s2[i] & ~e2[i];
+        int64_t known0_a      = ~s1[i];
+        int64_t known0_b      = ~s2[i];
+        int64_t known1_a      = s1[i] & ~e1[i];
+        int64_t known1_b      = s2[i] & ~e2[i];
         int64_t result_known0 = known0_a | known0_b;
         int64_t result_known1 = known1_a & known1_b;
-        dlop->extra()[i] = ~result_known0 & ~result_known1;
-        dlop->base()[i]  = result_known1 | dlop->extra()[i];
+        dlop->extra()[i]      = ~result_known0 & ~result_known1;
+        dlop->base()[i]       = result_known1 | dlop->extra()[i];
       }
     }
 
-    if (s1_ext) { free(rsz, s1_ext); free(rsz, e1_ext); }
-    if (s2_ext) { free(rsz, s2_ext); free(rsz, e2_ext); }
+    if (s1_ext) {
+      free(rsz, s1_ext);
+      free(rsz, e1_ext);
+    }
+    if (s2_ext) {
+      free(rsz, s2_ext);
+      free(rsz, e2_ext);
+    }
   }
 
   return dlop;
@@ -971,8 +1055,8 @@ spool_ptr<Dlop> Dlop::xor_op(const Dlop& other) const {
     return nil();
   }
 
-  int16_t rsz = std::max(size, other.size);
-  auto dlop = make_result(Type::Integer, rsz);
+  int16_t rsz  = std::max(size, other.size);
+  auto    dlop = make_result(Type::Integer, rsz);
 
   if (rsz == 1 && size == 1 && other.size == 1) {
     dlop->base()[0] = base()[0] ^ other.base()[0];
@@ -985,21 +1069,31 @@ spool_ptr<Dlop> Dlop::xor_op(const Dlop& other) const {
   } else {
     const int64_t *s1 = base(), *s2 = other.base();
     const int64_t *e1 = extra(), *e2 = other.extra();
-    int64_t *s1_ext = nullptr, *s2_ext = nullptr, *e1_ext = nullptr, *e2_ext = nullptr;
+    int64_t *      s1_ext = nullptr, *s2_ext = nullptr, *e1_ext = nullptr, *e2_ext = nullptr;
 
     if (size < rsz) {
-      s1_ext = alloc(rsz); e1_ext = alloc(rsz);
+      s1_ext = alloc(rsz);
+      e1_ext = alloc(rsz);
       Blop::extend(s1_ext, rsz, base()[size - 1] < 0 ? -1 : 0);
       Blop::extend(e1_ext, rsz, extra()[size - 1] < 0 ? -1 : 0);
-      for (int i = 0; i < size; ++i) { s1_ext[i] = base()[i]; e1_ext[i] = extra()[i]; }
-      s1 = s1_ext; e1 = e1_ext;
+      for (int i = 0; i < size; ++i) {
+        s1_ext[i] = base()[i];
+        e1_ext[i] = extra()[i];
+      }
+      s1 = s1_ext;
+      e1 = e1_ext;
     }
     if (other.size < rsz) {
-      s2_ext = alloc(rsz); e2_ext = alloc(rsz);
+      s2_ext = alloc(rsz);
+      e2_ext = alloc(rsz);
       Blop::extend(s2_ext, rsz, other.base()[other.size - 1] < 0 ? -1 : 0);
       Blop::extend(e2_ext, rsz, other.extra()[other.size - 1] < 0 ? -1 : 0);
-      for (int i = 0; i < other.size; ++i) { s2_ext[i] = other.base()[i]; e2_ext[i] = other.extra()[i]; }
-      s2 = s2_ext; e2 = e2_ext;
+      for (int i = 0; i < other.size; ++i) {
+        s2_ext[i] = other.base()[i];
+        e2_ext[i] = other.extra()[i];
+      }
+      s2 = s2_ext;
+      e2 = e2_ext;
     }
 
     Blop::xorn(dlop->base(), rsz, s1, s2);
@@ -1010,8 +1104,14 @@ spool_ptr<Dlop> Dlop::xor_op(const Dlop& other) const {
       Blop::orn(dlop->base(), rsz, dlop->base(), dlop->extra());
     }
 
-    if (s1_ext) { free(rsz, s1_ext); free(rsz, e1_ext); }
-    if (s2_ext) { free(rsz, s2_ext); free(rsz, e2_ext); }
+    if (s1_ext) {
+      free(rsz, s1_ext);
+      free(rsz, e1_ext);
+    }
+    if (s2_ext) {
+      free(rsz, s2_ext);
+      free(rsz, e2_ext);
+    }
   }
 
   return dlop;
@@ -1058,17 +1158,17 @@ spool_ptr<Dlop> Dlop::lsh_op(int64_t amount) const {
     return dlop;
   }
 
-  int extra_words = (amount + 63) / 64;
-  int16_t rsz = size + extra_words;
-  auto dlop = make_result(Type::Integer, rsz);
+  int     extra_words = (amount + 63) / 64;
+  int16_t rsz         = size + extra_words;
+  auto    dlop        = make_result(Type::Integer, rsz);
 
   // Sign-extend source into larger buffer, then shift
-  int64_t *tmp_base = alloc(rsz);
-  int64_t *tmp_extra = alloc(rsz);
+  int64_t* tmp_base  = alloc(rsz);
+  int64_t* tmp_extra = alloc(rsz);
   Blop::extend(tmp_base, rsz, base()[size - 1] < 0 ? -1 : 0);
   Blop::extend(tmp_extra, rsz, extra()[size - 1] < 0 ? -1 : 0);
   for (int i = 0; i < size; ++i) {
-    tmp_base[i] = base()[i];
+    tmp_base[i]  = base()[i];
     tmp_extra[i] = extra()[i];
   }
 
@@ -1149,7 +1249,9 @@ spool_ptr<Dlop> Dlop::eq_op(const Dlop& other) const {
   for (int i = 0; i < rsz; ++i) {
     int64_t v1 = (i < size) ? base()[i] : (base()[size - 1] < 0 ? -1 : 0);
     int64_t v2 = (i < other.size) ? other.base()[i] : (other.base()[other.size - 1] < 0 ? -1 : 0);
-    if (v1 != v2) return create_bool(false);
+    if (v1 != v2) {
+      return create_bool(false);
+    }
   }
   return create_bool(true);
 }
@@ -1159,37 +1261,45 @@ spool_ptr<Dlop> Dlop::eq_op(const Dlop& other) const {
 // hash maps, std::find, and dedup pools. This is NOT a semantic equality:
 // for "values that would be equal once unknowns are resolved" use eq_op (three-
 // valued) or is_known_eq (collapses unknowns to false).
-bool Dlop::same_repr(const Dlop &other) const {
-  if (type != other.type) return false;
-  int16_t rsz = std::max(size, other.size);
-  bool self_ext  = has_extra();
-  bool other_ext = other.has_extra();
+bool Dlop::same_repr(const Dlop& other) const {
+  if (type != other.type) {
+    return false;
+  }
+  int16_t rsz       = std::max(size, other.size);
+  bool    self_ext  = has_extra();
+  bool    other_ext = other.has_extra();
   for (int i = 0; i < rsz; ++i) {
     int64_t b1 = (i < size) ? base()[i] : (base()[size - 1] < 0 ? -1 : 0);
     int64_t b2 = (i < other.size) ? other.base()[i] : (other.base()[other.size - 1] < 0 ? -1 : 0);
-    if (b1 != b2) return false;
-    int64_t e1 = self_ext  && i < size       ? extra()[i]       : 0;
+    if (b1 != b2) {
+      return false;
+    }
+    int64_t e1 = self_ext && i < size ? extra()[i] : 0;
     int64_t e2 = other_ext && i < other.size ? other.extra()[i] : 0;
-    if (e1 != e2) return false;
+    if (e1 != e2) {
+      return false;
+    }
   }
   return true;
 }
 
-bool Dlop::is_known_eq(const Dlop &other) const {
-  return eq_op(other)->is_known_true();
-}
+bool Dlop::is_known_eq(const Dlop& other) const { return eq_op(other)->is_known_true(); }
 
-bool Dlop::cmp_less_known(const Dlop &other) const {
+bool Dlop::cmp_less_known(const Dlop& other) const {
   int16_t rsz = std::max(size, other.size);
   // Signed comparison from MSW down
   int64_t v1_top = (rsz - 1 < size) ? base()[rsz - 1] : (base()[size - 1] < 0 ? -1 : 0);
   int64_t v2_top = (rsz - 1 < other.size) ? other.base()[rsz - 1] : (other.base()[other.size - 1] < 0 ? -1 : 0);
-  if (v1_top != v2_top) return v1_top < v2_top;
+  if (v1_top != v2_top) {
+    return v1_top < v2_top;
+  }
 
   for (int i = rsz - 2; i >= 0; --i) {
     uint64_t v1 = (i < size) ? static_cast<uint64_t>(base()[i]) : (base()[size - 1] < 0 ? ~uint64_t(0) : 0);
     uint64_t v2 = (i < other.size) ? static_cast<uint64_t>(other.base()[i]) : (other.base()[other.size - 1] < 0 ? ~uint64_t(0) : 0);
-    if (v1 != v2) return v1 < v2;
+    if (v1 != v2) {
+      return v1 < v2;
+    }
   }
   return false;
 }
@@ -1233,10 +1343,10 @@ spool_ptr<Dlop> Dlop::sext_op(int from_bit) const {
   // extra verbatim would leave bits above from_bit holding whatever the
   // source had, instead of the sign-extended unknown.
   if (size == 1) {
-    Blop::sext64(dlop->base()[0],  base()[0],  from_bit);
+    Blop::sext64(dlop->base()[0], base()[0], from_bit);
     Blop::sext64(dlop->extra()[0], extra()[0], from_bit);
   } else {
-    Blop::sextn(dlop->base(),  size, base(),  from_bit);
+    Blop::sextn(dlop->base(), size, base(), from_bit);
     Blop::sextn(dlop->extra(), size, extra(), from_bit);
   }
   // Maintain invariant: unknown bits have base = 1.
@@ -1260,7 +1370,9 @@ spool_ptr<Dlop> Dlop::get_mask_op() const {
   // Negative: mask = (1 << get_bits()) + value
   int nbits = get_bits();
   int words = (nbits + 63) / 64;
-  if (words < 1) words = 1;
+  if (words < 1) {
+    words = 1;
+  }
   auto dlop = make_result(Type::Integer, words);
 
   // Compute (1 << nbits) - 1 & value  (clear sign extension)
@@ -1308,7 +1420,10 @@ spool_ptr<Dlop> Dlop::get_mask_op(const Dlop& mask) const {
   if (mask.is_negative() && mask.is_known_true()) {
     bool all_ones = true;
     for (int i = 0; i < mask.size; ++i) {
-      if (mask.base()[i] != -1) { all_ones = false; break; }
+      if (mask.base()[i] != -1) {
+        all_ones = false;
+        break;
+      }
     }
     if (all_ones) {
       return get_mask_op();
@@ -1321,7 +1436,9 @@ spool_ptr<Dlop> Dlop::get_mask_op(const Dlop& mask) const {
     // by the mask's bit count (positive mask) — return a sound unknown of
     // that width rather than collapsing to Invalid.
     int w = mask.get_bits();
-    if (w <= 0) w = 1;
+    if (w <= 0) {
+      w = 1;
+    }
     return unknown(w);
   }
 
@@ -1334,8 +1451,8 @@ spool_ptr<Dlop> Dlop::get_mask_op(const Dlop& mask) const {
   int  end_pos            = mask_neg ? src_bits : std::min(src_bits, positive_mask_bits);
 
   // Pre-size the output: at most src_bits selected (when all bits pass).
-  int out_words = std::max(1, (src_bits + 63) / 64);
-  auto result   = make_result(Type::Integer, static_cast<int16_t>(out_words));
+  int  out_words = std::max(1, (src_bits + 63) / 64);
+  auto result    = make_result(Type::Integer, static_cast<int16_t>(out_words));
   for (int i = 0; i < out_words; ++i) {
     result->base()[i]  = 0;
     result->extra()[i] = 0;
@@ -1345,21 +1462,29 @@ spool_ptr<Dlop> Dlop::get_mask_op(const Dlop& mask) const {
   // carrying the unknown flag from extra() so an unknown source bit stays
   // unknown in the output (invariant: unknown bits have base=1).
   auto copy_bit = [&](int i, int out) {
-    if (i >= end_pos) return;
-    int sword = i / 64;
-    int sbit  = i % 64;
-    int oword = out / 64;
-    int obit  = out % 64;
-    bool b = (sword < size) ? ((base()[sword]  >> sbit) & 1) : false;
-    bool u = (sword < size) ? ((extra()[sword] >> sbit) & 1) : false;
-    if (b || u) result->base()[oword]  |= int64_t(1) << obit;
-    if (u)      result->extra()[oword] |= int64_t(1) << obit;
+    if (i >= end_pos) {
+      return;
+    }
+    int  sword = i / 64;
+    int  sbit  = i % 64;
+    int  oword = out / 64;
+    int  obit  = out % 64;
+    bool b     = (sword < size) ? ((base()[sword] >> sbit) & 1) : false;
+    bool u     = (sword < size) ? ((extra()[sword] >> sbit) & 1) : false;
+    if (b || u) {
+      result->base()[oword] |= int64_t(1) << obit;
+    }
+    if (u) {
+      result->extra()[oword] |= int64_t(1) << obit;
+    }
   };
 
   int out_bit = 0;
   for (int i = 0; i < positive_mask_bits; ++i) {
     bool selected = mask_neg ? !mask.bit_test(i) : mask.bit_test(i);
-    if (!selected) continue;
+    if (!selected) {
+      continue;
+    }
     copy_bit(i, out_bit);
     ++out_bit;
   }
@@ -1373,7 +1498,9 @@ spool_ptr<Dlop> Dlop::get_mask_op(const Dlop& mask) const {
   // (or a 1-bit unknown if that bit was ?), not the unsigned 1 / 0 the
   // loop just packed.
   if (out_bit == 1) {
-    if (result->extra()[0] & 1) return unknown(1);
+    if (result->extra()[0] & 1) {
+      return unknown(1);
+    }
     return create_integer((result->base()[0] & 1) ? -1 : 0);
   }
   result->normalize();
@@ -1400,7 +1527,10 @@ spool_ptr<Dlop> Dlop::set_mask_op(const Dlop& mask, const Dlop& value) const {
   if (mask.is_negative()) {
     bool all_ones = true;
     for (int i = 0; i < mask.size; ++i) {
-      if (mask.base()[i] != -1) { all_ones = false; break; }
+      if (mask.base()[i] != -1) {
+        all_ones = false;
+        break;
+      }
     }
     if (all_ones) {
       auto dlop = make_result(Type::Integer, value.size);
@@ -1412,8 +1542,8 @@ spool_ptr<Dlop> Dlop::set_mask_op(const Dlop& mask, const Dlop& value) const {
 
   assert(!mask.has_unknowns());
 
-  bool mask_neg          = mask.is_negative();
-  int  mask_bits         = mask.get_bits();
+  bool mask_neg           = mask.is_negative();
+  int  mask_bits          = mask.get_bits();
   int  positive_mask_bits = mask_neg ? (mask_bits - 1) : mask_bits;
 
   // out_bits: enough to hold base bits and (for negative masks) the value
@@ -1423,28 +1553,28 @@ spool_ptr<Dlop> Dlop::set_mask_op(const Dlop& mask, const Dlop& value) const {
     out_bits = std::max(out_bits, positive_mask_bits + value.get_bits());
   }
 
-  int out_words = std::max(1, (out_bits + 63) / 64);
-  auto result   = make_result(Type::Integer, static_cast<int16_t>(out_words));
+  int  out_words = std::max(1, (out_bits + 63) / 64);
+  auto result    = make_result(Type::Integer, static_cast<int16_t>(out_words));
   // Start from `this`, sign-extended to out_words. Bits not selected by the
   // mask (including the sign-extension region beyond get_bits()) flow through
   // unchanged; the loop overwrites only the mask-selected positions.
-  int64_t base_sign  = (size > 0 && base()[size - 1]  < 0) ? -1 : 0;
+  int64_t base_sign  = (size > 0 && base()[size - 1] < 0) ? -1 : 0;
   int64_t extra_sign = (size > 0 && extra()[size - 1] < 0) ? -1 : 0;
   for (int i = 0; i < out_words; ++i) {
-    result->base()[i]  = (i < size) ? base()[i]  : base_sign;
+    result->base()[i]  = (i < size) ? base()[i] : base_sign;
     result->extra()[i] = (i < size) ? extra()[i] : extra_sign;
   }
 
   // tri_bit: returns (base_bit, extra_bit) at position `p` from a Dlop.
-  auto tri_bit = [](const Dlop &d, int p) -> std::pair<bool, bool> {
-    int word = p / 64;
-    int bit  = p % 64;
+  auto tri_bit = [](const Dlop& d, int p) -> std::pair<bool, bool> {
+    int  word = p / 64;
+    int  bit  = p % 64;
     bool b, u;
     if (word >= d.size) {
       b = d.base()[d.size - 1] < 0;
       u = d.extra()[d.size - 1] < 0;
     } else {
-      b = (d.base()[word]  >> bit) & 1;
+      b = (d.base()[word] >> bit) & 1;
       u = (d.extra()[word] >> bit) & 1;
     }
     return {b, u};
@@ -1454,21 +1584,29 @@ spool_ptr<Dlop> Dlop::set_mask_op(const Dlop& mask, const Dlop& value) const {
   for (int i = 0; i < out_bits; ++i) {
     bool from_value;
     if (i < positive_mask_bits) {
-      bool mb = mask.bit_test(i);
+      bool mb    = mask.bit_test(i);
       from_value = mask_neg ? !mb : mb;
     } else {
       from_value = mask_neg;
     }
-    if (!from_value) continue;  // bit stays from `this` (already in result).
+    if (!from_value) {
+      continue;  // bit stays from `this` (already in result).
+    }
     auto p = tri_bit(value, value_pos);
     ++value_pos;
-    int w = i / 64;
-    int s = i % 64;
+    int     w        = i / 64;
+    int     s        = i % 64;
     int64_t bit_mask = int64_t(1) << s;
-    if (p.first || p.second) result->base()[w]  |=  bit_mask;
-    else                     result->base()[w]  &= ~bit_mask;
-    if (p.second)            result->extra()[w] |=  bit_mask;
-    else                     result->extra()[w] &= ~bit_mask;
+    if (p.first || p.second) {
+      result->base()[w] |= bit_mask;
+    } else {
+      result->base()[w] &= ~bit_mask;
+    }
+    if (p.second) {
+      result->extra()[w] |= bit_mask;
+    } else {
+      result->extra()[w] &= ~bit_mask;
+    }
   }
 
   result->normalize();
@@ -1541,7 +1679,9 @@ spool_ptr<Dlop> Dlop::concat_op(const Dlop& other) const {
     auto byte_count = [](const Dlop& s) -> int {
       for (int w = s.size - 1; w >= 0; --w) {
         uint64_t v = static_cast<uint64_t>(s.base()[w]);
-        if (v == 0) continue;
+        if (v == 0) {
+          continue;
+        }
         for (int b = 7; b >= 0; --b) {
           if (((v >> (b * 8)) & 0xFF) != 0) {
             return w * 8 + b + 1;
@@ -1557,10 +1697,10 @@ spool_ptr<Dlop> Dlop::concat_op(const Dlop& other) const {
       memcpy(dlop->extra(), other.extra(), other.size * sizeof(int64_t));
       return dlop;
     }
-    auto shifted = other.lsh_op(self_bits);
+    auto shifted     = other.lsh_op(self_bits);
     auto masked_self = get_mask_op();
-    auto r = shifted->or_op(masked_self);
-    r->type = Type::String;
+    auto r           = shifted->or_op(masked_self);
+    r->type          = Type::String;
     return r;
   }
 
@@ -1572,7 +1712,7 @@ spool_ptr<Dlop> Dlop::concat_op(const Dlop& other) const {
     return dlop;
   }
 
-  auto shifted = lsh_op(other_bits);
+  auto shifted      = lsh_op(other_bits);
   auto masked_other = other.get_mask_op();
   return shifted->or_op(masked_other);
 }
@@ -1609,19 +1749,27 @@ spool_ptr<Dlop> Dlop::adjust_bits(int amount) const {
 // Queries
 // =========================================================================
 bool Dlop::is_negative() const {
-  if (size <= 0) return false;
+  if (size <= 0) {
+    return false;
+  }
   return base()[size - 1] < 0;
 }
 
 bool Dlop::is_positive() const {
-  if (size <= 0) return false;
+  if (size <= 0) {
+    return false;
+  }
   return base()[size - 1] >= 0;
 }
 
 bool Dlop::is_known_false() const {
-  if (has_unknowns()) return false;
+  if (has_unknowns()) {
+    return false;
+  }
   for (int i = 0; i < size; ++i) {
-    if (base()[i] != 0) return false;
+    if (base()[i] != 0) {
+      return false;
+    }
   }
   return true;
 }
@@ -1630,10 +1778,16 @@ bool Dlop::is_known_zero() const {
   // Numeric zero: must be an Integer/Boolean (not Nil/Invalid/String), with no
   // unknown bits, all words zero. Matches the semantic of `value == 0` in
   // arithmetic contexts.
-  if (type != Type::Integer && type != Type::Boolean) return false;
-  if (has_unknowns()) return false;
+  if (type != Type::Integer && type != Type::Boolean) {
+    return false;
+  }
+  if (has_unknowns()) {
+    return false;
+  }
   for (int i = 0; i < size; ++i) {
-    if (base()[i] != 0) return false;
+    if (base()[i] != 0) {
+      return false;
+    }
   }
   return true;
 }
@@ -1642,27 +1796,39 @@ bool Dlop::is_known_true() const {
   if (has_unknowns()) {
     // If any known bit is 1, it's true
     for (int i = 0; i < size; ++i) {
-      if ((base()[i] & ~extra()[i]) != 0) return true;
+      if ((base()[i] & ~extra()[i]) != 0) {
+        return true;
+      }
     }
     return false;
   }
   for (int i = 0; i < size; ++i) {
-    if (base()[i] != 0) return true;
+    if (base()[i] != 0) {
+      return true;
+    }
   }
   return false;
 }
 
 bool Dlop::is_ref() const {
-  if (type != Type::Invalid) return false;
-  if (size <= 0) return false;
+  if (type != Type::Invalid) {
+    return false;
+  }
+  if (size <= 0) {
+    return false;
+  }
   for (int i = 0; i < size; ++i) {
-    if (base()[i] != 0) return true;
+    if (base()[i] != 0) {
+      return true;
+    }
   }
   return false;
 }
 
 bool Dlop::is_mask() const {
-  if (has_unknowns() || is_negative()) return false;
+  if (has_unknowns() || is_negative()) {
+    return false;
+  }
   // Check if value is (2^n - 1) for some n: all lower bits 1, rest 0
   // Equivalent to: (v + 1) & v == 0 and v != 0
   if (size == 1) {
@@ -1671,41 +1837,56 @@ bool Dlop::is_mask() const {
   // Multi-word: add 1 and check if result & original == 0
   // For simplicity, use the bit pattern check
   int top = size - 1;
-  while (top > 0 && base()[top] == 0) --top;
-  if (base()[top] <= 0) return false;
+  while (top > 0 && base()[top] == 0) {
+    --top;
+  }
+  if (base()[top] <= 0) {
+    return false;
+  }
 
   // Check top word: must be (2^k - 1)
-  if (((base()[top] + 1) & base()[top]) != 0) return false;
+  if (((base()[top] + 1) & base()[top]) != 0) {
+    return false;
+  }
   // All lower words must be all-ones
   for (int i = 0; i < top; ++i) {
-    if (base()[i] != -1) return false;
+    if (base()[i] != -1) {
+      return false;
+    }
   }
   return true;
 }
 
 bool Dlop::is_power2() const {
-  if (has_unknowns() || is_negative()) return false;
+  if (has_unknowns() || is_negative()) {
+    return false;
+  }
   if (size == 1) {
     return base()[0] > 0 && ((base()[0] - 1) & base()[0]) == 0;
   }
   // Exactly one bit set
   int nonzero_count = 0;
-  int nonzero_idx = -1;
+  int nonzero_idx   = -1;
   for (int i = 0; i < size; ++i) {
     if (base()[i] != 0) {
       ++nonzero_count;
       nonzero_idx = i;
     }
   }
-  if (nonzero_count != 1) return false;
+  if (nonzero_count != 1) {
+    return false;
+  }
   return ((base()[nonzero_idx] - 1) & base()[nonzero_idx]) == 0;
 }
 
 int Dlop::get_bits() const {
-  if (size <= 0) return 0;
-  int base_bits = (size == 1) ? Blop::get_bits64(base()[0])
-                              : Blop::get_bitsn(base(), size);
-  if (!has_unknowns()) return base_bits;
+  if (size <= 0) {
+    return 0;
+  }
+  int base_bits = (size == 1) ? Blop::get_bits64(base()[0]) : Blop::get_bitsn(base(), size);
+  if (!has_unknowns()) {
+    return base_bits;
+  }
 
   // With unknowns: an unknown bit at position k can resolve to a value that
   // differs from the known sign extension, forcing the value to need k+2
@@ -1725,7 +1906,9 @@ int Dlop::get_bits() const {
       break;
     }
   }
-  if (highest_unk < 0) return base_bits;
+  if (highest_unk < 0) {
+    return base_bits;
+  }
   return std::max(base_bits, highest_unk + 2);
 }
 
@@ -1765,7 +1948,9 @@ int Dlop::popcount() const {
 }
 
 int Dlop::get_trailing_zeroes() const {
-  if (is_known_false()) return 0;
+  if (is_known_false()) {
+    return 0;
+  }
   for (int i = 0; i < size; ++i) {
     if (base()[i] != 0) {
       return i * 64 + __builtin_ctzll(static_cast<uint64_t>(base()[i]));
@@ -1775,7 +1960,9 @@ int Dlop::get_trailing_zeroes() const {
 }
 
 bool Dlop::is_i() const {
-  if (has_unknowns()) return false;
+  if (has_unknowns()) {
+    return false;
+  }
   return get_bits() <= 62;
 }
 
@@ -1801,7 +1988,9 @@ std::string Dlop::to_string() const {
       uint64_t tmp = static_cast<uint64_t>(base()[w]);
       for (int b = 0; b < 8; ++b) {
         auto ch = static_cast<char>(tmp & 0xFF);
-        if (ch == 0 && w == size - 1) break;
+        if (ch == 0 && w == size - 1) {
+          break;
+        }
         str.push_back(ch);
         tmp >>= 8;
       }
@@ -1818,12 +2007,14 @@ std::string Dlop::to_binary() const {
   if (has_unknowns()) {
     // Emit binary with ? for unknown bits
     int nbits = get_bits();
-    if (nbits <= 0) nbits = 1;
+    if (nbits <= 0) {
+      nbits = 1;
+    }
     std::string result;
     for (int i = nbits - 1; i >= 0; --i) {
-      bool b = bit_test(i);
-      int word = i / 64;
-      int bit = i % 64;
+      bool b          = bit_test(i);
+      int  word       = i / 64;
+      int  bit        = i % 64;
       bool is_unknown = (word < size) ? ((extra()[word] >> bit) & 1) : false;
       if (is_unknown) {
         result.push_back('?');
@@ -1835,7 +2026,9 @@ std::string Dlop::to_binary() const {
   }
 
   int nbits = get_bits();
-  if (nbits <= 0) return "0";
+  if (nbits <= 0) {
+    return "0";
+  }
 
   std::string result;
   for (int i = nbits - 1; i >= 0; --i) {
@@ -1845,11 +2038,15 @@ std::string Dlop::to_binary() const {
 }
 
 std::string Dlop::to_pyrope() const {
-  if (is_invalid()) return "";
+  if (is_invalid()) {
+    return "";
+  }
 
   if (type == Type::String) {
     auto str = to_string();
-    if (str.empty()) return "''";
+    if (str.empty()) {
+      return "''";
+    }
     return std::format("'{}'", str);
   }
 
@@ -1905,7 +2102,9 @@ std::string Dlop::to_pyrope() const {
 }
 
 std::string Dlop::to_verilog() const {
-  if (is_known_false()) return "'sb0";
+  if (is_known_false()) {
+    return "'sb0";
+  }
 
   if (has_unknowns()) {
     auto bin = to_binary();
@@ -1917,22 +2116,28 @@ std::string Dlop::to_verilog() const {
   }
 
   int nbits = get_bits();
+
+  // For negatives, format the two's-complement magnitude (neg_op) as hex.
+  // Don't route through to_pyrope().substr(2): to_pyrope returns decimal
+  // (no "0x" prefix) for small values in [-63,63], so the substr(2) would
+  // throw std::out_of_range on e.g. -1 -> neg_op() == 1 -> "1".
+  const Dlop*     src = this;
+  spool_ptr<Dlop> pos;
   if (is_negative()) {
-    auto pos = neg_op();
-    // Two's complement: (1 << nbits) - abs
-    return std::format("{}'sh{}", nbits, pos->to_pyrope().substr(2));  // skip "0x"
+    pos = neg_op();
+    src = pos.get();
   }
 
-  if (is_i()) {
-    return std::format("{}'sh{:x}", nbits, static_cast<uint64_t>(base()[0]));
+  if (src->is_i()) {
+    return std::format("{}'sh{:x}", nbits, static_cast<uint64_t>(src->base()[0]));
   }
 
   std::string hex;
-  for (int i = size - 1; i >= 0; --i) {
-    if (i == size - 1) {
-      hex += std::format("{:x}", static_cast<uint64_t>(base()[i]));
+  for (int i = src->size - 1; i >= 0; --i) {
+    if (i == src->size - 1) {
+      hex += std::format("{:x}", static_cast<uint64_t>(src->base()[i]));
     } else {
-      hex += std::format("{:016x}", static_cast<uint64_t>(base()[i]));
+      hex += std::format("{:016x}", static_cast<uint64_t>(src->base()[i]));
     }
   }
   return std::format("{}'sh{}", nbits, hex);
@@ -1973,9 +2178,9 @@ spool_ptr<Dlop> Dlop::get_mask_value(int bits) {
     return create_integer((int64_t(1) << bits) - 1);
   }
   // Multi-word: lower `bits` ones, sign-extend zero
-  int words = (bits + 63) / 64 + 1;  // +1 to keep the sign bit clear
-  auto d = spool_ptr<Dlop>::make(Type::Integer, words);
-  int full_words = bits / 64;
+  int  words      = (bits + 63) / 64 + 1;  // +1 to keep the sign bit clear
+  auto d          = spool_ptr<Dlop>::make(Type::Integer, words);
+  int  full_words = bits / 64;
   for (int i = 0; i < full_words; ++i) {
     d->base()[i] = -1;
   }
@@ -1990,10 +2195,10 @@ spool_ptr<Dlop> Dlop::get_mask_value(int bits) {
 spool_ptr<Dlop> Dlop::get_mask_value(int h, int l) {
   if (h == l) {
     // Single-bit set at position h
-    int words = h / 64 + 1 + 1;
-    auto d = spool_ptr<Dlop>::make(Type::Integer, words);
-    int word = h / 64;
-    int bit  = h % 64;
+    int  words      = h / 64 + 1 + 1;
+    auto d          = spool_ptr<Dlop>::make(Type::Integer, words);
+    int  word       = h / 64;
+    int  bit        = h % 64;
     d->base()[word] = int64_t(1) << bit;
     d->normalize();
     return d;
@@ -2023,7 +2228,10 @@ spool_ptr<Dlop> Dlop::get_mask_value() const {
   }
   bool all_zero = true;
   for (int i = 0; i < size; ++i) {
-    if (base()[i] != 0) { all_zero = false; break; }
+    if (base()[i] != 0) {
+      all_zero = false;
+      break;
+    }
   }
   if (all_zero) {
     return create_integer(1);
@@ -2044,13 +2252,16 @@ std::vector<std::pair<int, int>> Dlop::get_mask_range_pairs() const {
   // All-zero short circuit
   bool all_zero = true;
   for (int i = 0; i < size; ++i) {
-    if (base()[i] != 0) { all_zero = false; break; }
+    if (base()[i] != 0) {
+      all_zero = false;
+      break;
+    }
   }
   if (all_zero) {
     return pairs;
   }
 
-  const bool neg_mask = is_negative();
+  const bool neg_mask   = is_negative();
   const int  total_bits = size * 64;
 
   // Build the working bit vector: for negatives, flip the lower get_bits() to
@@ -2071,23 +2282,34 @@ std::vector<std::pair<int, int>> Dlop::get_mask_range_pairs() const {
   }
 
   auto bit_at = [&](int p) -> bool {
-    if (p < 0 || p >= total_bits) return false;
+    if (p < 0 || p >= total_bits) {
+      return false;
+    }
     return (work[p / 64] >> (p % 64)) & 1;
   };
 
   int p = 0;
   while (p < total_bits) {
     // Skip zeros
-    while (p < total_bits && !bit_at(p)) ++p;
-    if (p >= total_bits) break;
+    while (p < total_bits && !bit_at(p)) {
+      ++p;
+    }
+    if (p >= total_bits) {
+      break;
+    }
     int start = p;
-    while (p < total_bits && bit_at(p)) ++p;
+    while (p < total_bits && bit_at(p)) {
+      ++p;
+    }
     int nones = p - start;
 
     // Check remainder all-zero (final negative-extended run sentinel)
     bool tail_zero = true;
     for (int q = p; q < total_bits; ++q) {
-      if (bit_at(q)) { tail_zero = false; break; }
+      if (bit_at(q)) {
+        tail_zero = false;
+        break;
+      }
     }
     if (tail_zero && neg_mask) {
       pairs.emplace_back(start, std::numeric_limits<int>::max() / 2);
@@ -2104,7 +2326,10 @@ std::pair<int, int> Dlop::get_mask_range() const {
   }
   bool all_zero = true;
   for (int i = 0; i < size; ++i) {
-    if (base()[i] != 0) { all_zero = false; break; }
+    if (base()[i] != 0) {
+      all_zero = false;
+      break;
+    }
   }
   if (all_zero) {
     return {-1, -1};
@@ -2151,7 +2376,9 @@ std::string Dlop::to_field() const {
   }
   // Large unsigned: hex without "0x"
   auto p = to_pyrope();
-  if (p.starts_with("0x")) return p.substr(2);
+  if (p.starts_with("0x")) {
+    return p.substr(2);
+  }
   return p;
 }
 
@@ -2179,8 +2406,8 @@ spool_ptr<Dlop> Dlop::to_known_rand() const {
     // the existing known 1s in non-extra positions). For unknown positions
     // (extra=1), substitute random bits.
     uint64_t known_mask = ~static_cast<uint64_t>(extra()[i]);
-    d->base()[i]  = static_cast<int64_t>((static_cast<uint64_t>(base()[i]) & known_mask)
-                                       | (rnd & static_cast<uint64_t>(extra()[i])));
+    d->base()[i]
+        = static_cast<int64_t>((static_cast<uint64_t>(base()[i]) & known_mask) | (rnd & static_cast<uint64_t>(extra()[i])));
     d->extra()[i] = 0;
   }
   return d;
@@ -2216,16 +2443,16 @@ std::string Dlop::serialize() const {
 
 spool_ptr<Dlop> Dlop::unserialize(std::string_view v) {
   assert(v.size() >= 3);
-  int8_t  raw_type = static_cast<int8_t>(v[0]);
-  uint16_t sz      = (static_cast<uint8_t>(v[1]) << 8) | static_cast<uint8_t>(v[2]);
-  Type     tp      = static_cast<Type>(static_cast<int16_t>(raw_type));
+  int8_t   raw_type = static_cast<int8_t>(v[0]);
+  uint16_t sz       = (static_cast<uint8_t>(v[1]) << 8) | static_cast<uint8_t>(v[2]);
+  Type     tp       = static_cast<Type>(static_cast<int16_t>(raw_type));
 
   if (sz == 0) {
     return spool_ptr<Dlop>::make(tp, 0);
   }
   assert(v.size() >= 3u + sz * 16u);
 
-  auto d = spool_ptr<Dlop>::make(tp, static_cast<int16_t>(sz));
+  auto   d   = spool_ptr<Dlop>::make(tp, static_cast<int16_t>(sz));
   size_t off = 3;
   for (int i = 0; i < sz; ++i) {
     uint64_t w = 0;

@@ -134,9 +134,7 @@ struct RegState {
   RegState() = default;
   RegState(size_t n, const V& init) : curr(n, init), next(n, init) {}
 
-  void advance_clock() {
-    curr = next;
-  }
+  void advance_clock() { curr = next; }
 };
 
 // Memory state for slop
@@ -147,12 +145,9 @@ struct MemState {
   bool           fwd = false;
 
   MemState() = default;
-  MemState(size_t depth, const V& init, bool fwd_enable = false)
-      : curr(depth, init), next(depth, init), fwd(fwd_enable) {}
+  MemState(size_t depth, const V& init, bool fwd_enable = false) : curr(depth, init), next(depth, init), fwd(fwd_enable) {}
 
-  void advance_clock() {
-    curr = next;
-  }
+  void advance_clock() { curr = next; }
 };
 
 // =========================================================================
@@ -392,7 +387,7 @@ V eval_flop(State& st, uint32_t slot, const FlopArgs<V>& args) {
     bool neg_reset = args.negreset && args.negreset->is_known_true();
     if (!neg_reset) {
       // Active-high reset is asserted
-      V init_val = args.initial ? *args.initial : V::create_integer(0);
+      V init_val    = args.initial ? *args.initial : V::create_integer(0);
       st.next[slot] = init_val;
       if (args.async_ && args.async_->is_known_true()) {
         // Async reset: immediately visible
@@ -406,7 +401,7 @@ V eval_flop(State& st, uint32_t slot, const FlopArgs<V>& args) {
     bool neg_reset = args.negreset && args.negreset->is_known_true();
     if (neg_reset) {
       // Active-low reset, signal is low -> reset asserted
-      V init_val = args.initial ? *args.initial : V::create_integer(0);
+      V init_val    = args.initial ? *args.initial : V::create_integer(0);
       st.next[slot] = init_val;
       if (args.async_ && args.async_->is_known_true()) {
         st.curr[slot] = init_val;

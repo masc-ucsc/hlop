@@ -23,14 +23,18 @@ std::vector<DValue> DContext::collect_values(const std::vector<DInput>& inputs) 
 
 DValue DContext::find_pin(const std::vector<DInput>& inputs, const std::string& name) {
   for (auto& in : inputs) {
-    if (in.pin == name) return in.value;
+    if (in.pin == name) {
+      return in.value;
+    }
   }
   return {};
 }
 
 DValue DContext::find_pid(const std::vector<DInput>& inputs, int pid) {
   for (auto& in : inputs) {
-    if (in.pid == pid) return in.value;
+    if (in.pid == pid) {
+      return in.value;
+    }
   }
   return {};
 }
@@ -38,7 +42,9 @@ DValue DContext::find_pid(const std::vector<DInput>& inputs, int pid) {
 std::vector<DValue> DContext::collect_pin(const std::vector<DInput>& inputs, const std::string& name) {
   std::vector<DValue> vals;
   for (auto& in : inputs) {
-    if (in.pin == name) vals.push_back(in.value);
+    if (in.pin == name) {
+      vals.push_back(in.value);
+    }
   }
   return vals;
 }
@@ -49,30 +55,28 @@ std::vector<DValue> DContext::collect_pin(const std::vector<DInput>& inputs, con
 
 DResult DContext::execute(const DCall& call) {
   switch (call.op) {
-    case Ntype_op::Sum:      return exec_sum(call);
-    case Ntype_op::Mult:     return exec_mult(call);
-    case Ntype_op::Div:      return exec_div(call);
-    case Ntype_op::And:      return exec_and(call);
-    case Ntype_op::Or:       return exec_or(call);
-    case Ntype_op::Xor:      return exec_xor(call);
-    case Ntype_op::Ror:      return exec_ror(call);
-    case Ntype_op::Not:      return exec_not(call);
+    case Ntype_op::Sum: return exec_sum(call);
+    case Ntype_op::Mult: return exec_mult(call);
+    case Ntype_op::Div: return exec_div(call);
+    case Ntype_op::And: return exec_and(call);
+    case Ntype_op::Or: return exec_or(call);
+    case Ntype_op::Xor: return exec_xor(call);
+    case Ntype_op::Ror: return exec_ror(call);
+    case Ntype_op::Not: return exec_not(call);
     case Ntype_op::Get_mask: return exec_get_mask(call);
     case Ntype_op::Set_mask: return exec_set_mask(call);
-    case Ntype_op::Sext:     return exec_sext(call);
-    case Ntype_op::LT:       return exec_lt(call);
-    case Ntype_op::EQ:       return exec_eq(call);
-    case Ntype_op::SHL:      return exec_shl(call);
-    case Ntype_op::SRA:      return exec_sra(call);
-    case Ntype_op::Mux:      return exec_mux(call);
-    case Ntype_op::LUT:      return exec_lut(call);
-    case Ntype_op::Flop:     return exec_flop(call);
-    case Ntype_op::Latch:    return exec_latch(call);
-    case Ntype_op::Fflop:    return exec_fflop(call);
-    case Ntype_op::Memory:   return exec_memory(call);
-    default:
-      assert(false && "Unsupported op in DContext::execute");
-      return {};
+    case Ntype_op::Sext: return exec_sext(call);
+    case Ntype_op::LT: return exec_lt(call);
+    case Ntype_op::EQ: return exec_eq(call);
+    case Ntype_op::SHL: return exec_shl(call);
+    case Ntype_op::SRA: return exec_sra(call);
+    case Ntype_op::Mux: return exec_mux(call);
+    case Ntype_op::LUT: return exec_lut(call);
+    case Ntype_op::Flop: return exec_flop(call);
+    case Ntype_op::Latch: return exec_latch(call);
+    case Ntype_op::Fflop: return exec_fflop(call);
+    case Ntype_op::Memory: return exec_memory(call);
+    default: assert(false && "Unsupported op in DContext::execute"); return {};
   }
 }
 
@@ -248,9 +252,11 @@ DResult DContext::exec_mux(const DCall& call) {
   assert(sel);
 
   std::vector<DValue> data;
-  for (int i = 1; ; ++i) {
+  for (int i = 1;; ++i) {
     auto d = find_pid(call.inputs, i);
-    if (!d) break;
+    if (!d) {
+      break;
+    }
     data.push_back(d);
   }
   assert(!data.empty());
@@ -317,8 +323,8 @@ DResult DContext::exec_flop(const DCall& call) {
   auto& st = flop_state_[call.state_id];
   if (!st.curr) {
     auto init_val = initial ? initial : Dlop::create_integer(0);
-    st.curr = init_val;
-    st.next = init_val;
+    st.curr       = init_val;
+    st.next       = init_val;
   }
 
   // Handle reset
@@ -326,7 +332,7 @@ DResult DContext::exec_flop(const DCall& call) {
     bool neg_rst = negreset && negreset->is_known_true();
     if (!neg_rst) {
       auto init_val = initial ? initial : Dlop::create_integer(0);
-      st.next = init_val;
+      st.next       = init_val;
       if (async_v && async_v->is_known_true()) {
         st.curr = init_val;
         return {.outputs = {init_val}};
@@ -338,7 +344,7 @@ DResult DContext::exec_flop(const DCall& call) {
     bool neg_rst = negreset && negreset->is_known_true();
     if (neg_rst) {
       auto init_val = initial ? initial : Dlop::create_integer(0);
-      st.next = init_val;
+      st.next       = init_val;
       if (async_v && async_v->is_known_true()) {
         st.curr = init_val;
         return {.outputs = {init_val}};
@@ -401,15 +407,15 @@ DResult DContext::exec_memory(const DCall& call) {
   auto& ms = memory_state_[call.state_id];
 
   // Extract global config pins
-  auto bits_v    = find_pin(call.inputs, "bits");
-  auto size_v    = find_pin(call.inputs, "size");
-  auto fwd_v     = find_pin(call.inputs, "fwd");
+  auto bits_v = find_pin(call.inputs, "bits");
+  auto size_v = find_pin(call.inputs, "size");
+  auto fwd_v  = find_pin(call.inputs, "fwd");
 
   // Initialize memory if needed
   if (!ms.initialized && size_v && bits_v) {
-    ms.size = size_v->to_i();
-    ms.bits = bits_v->to_i();
-    ms.fwd  = fwd_v && fwd_v->is_known_true();
+    ms.size   = size_v->to_i();
+    ms.bits   = bits_v->to_i();
+    ms.fwd    = fwd_v && fwd_v->is_known_true();
     auto zero = Dlop::create_integer(0);
     ms.curr.resize(ms.size, zero);
     ms.next.resize(ms.size, zero);
@@ -437,7 +443,9 @@ DResult DContext::exec_memory(const DCall& call) {
 
   for (int port_base = 0; port_base <= max_pid; port_base += 11) {
     auto addr = find_pid(call.inputs, port_base);
-    if (!addr) continue;
+    if (!addr) {
+      continue;
+    }
 
     auto wen = find_pid(call.inputs, port_base + 10);
     if (wen && wen->is_known_true()) {

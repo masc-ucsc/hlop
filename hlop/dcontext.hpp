@@ -90,17 +90,17 @@ private:
   struct MemoryState {
     std::vector<DValue> curr;
     std::vector<DValue> next;
-    bool                fwd      = false;
-    int64_t             size     = 0;
-    int64_t             bits     = 0;
+    bool                fwd         = false;
+    int64_t             size        = 0;
+    int64_t             bits        = 0;
     bool                initialized = false;
   };
   std::unordered_map<std::string, MemoryState> memory_state_;
 
   // Helpers for collecting inputs
   static std::vector<DValue> collect_values(const std::vector<DInput>& inputs);
-  static DValue find_pin(const std::vector<DInput>& inputs, const std::string& name);
-  static DValue find_pid(const std::vector<DInput>& inputs, int pid);
+  static DValue              find_pin(const std::vector<DInput>& inputs, const std::string& name);
+  static DValue              find_pid(const std::vector<DInput>& inputs, int pid);
   static std::vector<DValue> collect_pin(const std::vector<DInput>& inputs, const std::string& name);
 
   // Per-op dispatch

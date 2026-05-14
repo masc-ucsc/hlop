@@ -141,9 +141,7 @@ protected:
   }
 
 #ifndef NDEBUG
-  void assert_owner_thread() const {
-    assert(owner_thread_id == std::this_thread::get_id());
-  }
+  void assert_owner_thread() const { assert(owner_thread_id == std::this_thread::get_id()); }
 #endif
 
 public:
@@ -154,7 +152,8 @@ public:
 #ifndef NDEBUG
       , owner_thread_id(std::this_thread::get_id())
 #endif
-  {}
+  {
+  }
 
   ~spsc256() { aligned_free(_buffer); }
 
