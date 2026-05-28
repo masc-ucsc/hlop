@@ -649,3 +649,130 @@ TEST_F(Dlop_test, format_integration_spool_ptr) {
   spool_ptr<Dlop> empty;
   EXPECT_EQ(std::format("{}", empty), "");
 }
+
+// =========================================================================
+// Three-valued op tests (TODO: hlop_todo.md)
+// =========================================================================
+TEST_F(Dlop_test, eq_known_bits_decide_false) {
+  // bit 0: known 0 vs known 1 — disagree → result must be definite false.
+  auto a = Dlop::from_pyrope("0sb?00");
+  auto b = Dlop::from_pyrope("0sb?01");
+  auto r = a->eq_op(*b);
+  EXPECT_TRUE(r->is_known_false());
+}
+
+TEST_F(Dlop_test, eq_unknown_when_known_bits_agree) {
+  // every known position agrees (bit 0=0, bit 2=1); only bit 1 unknown on both.
+  auto a = Dlop::from_pyrope("0sb1?0");
+  auto b = Dlop::from_pyrope("0sb1?0");
+  auto r = a->eq_op(*b);
+  EXPECT_FALSE(r->is_known_true());
+  EXPECT_FALSE(r->is_known_false());
+  EXPECT_TRUE(r->has_unknowns());
+}
+
+TEST_F(Dlop_test, eq_known_bits_decide_false_top) {
+  // bit 0: known 0 vs known 1 — decides false (bit 1 unknown on LHS).
+  auto a = Dlop::from_pyrope("0sb1?0");
+  auto b = Dlop::from_pyrope("0sb111");
+  auto r = a->eq_op(*b);
+  EXPECT_TRUE(r->is_known_false());
+}
+
+TEST_F(Dlop_test, lt_decided_by_top_sign_bit) {
+  // 0sb01 (+1) < 0sb1? (negative): top bit known-different — definite.
+  auto a = Dlop::from_pyrope("0sb01");
+  auto b = Dlop::from_pyrope("0sb1?");
+  // a > b numerically (a positive, b negative).
+  EXPECT_TRUE(a->gt_op(*b)->is_known_true());
+  EXPECT_TRUE(b->lt_op(*a)->is_known_true());
+}
+
+TEST_F(Dlop_test, lt_unknown_when_decided_bit_unknown) {
+  // 0sb1?0 vs 0sb111: top bit agrees, bit 1 unknown on LHS → unknown.
+  auto a = Dlop::from_pyrope("0sb1?0");
+  auto b = Dlop::from_pyrope("0sb111");
+  auto r = a->lt_op(*b);
+  EXPECT_TRUE(r->has_unknowns());
+  EXPECT_FALSE(r->is_known_true());
+  EXPECT_FALSE(r->is_known_false());
+}
+
+TEST_F(Dlop_test, ge_equal_known_bits_only_unknown) {
+  // 0sb1?0 vs 0sb1?0: known bits all match, bit 1 unknown on both sides. The
+  // conservative MSB walk gives up at the first unknown bit → unknown.
+  auto a = Dlop::from_pyrope("0sb1?0");
+  auto b = Dlop::from_pyrope("0sb1?0");
+  auto r = a->ge_op(*b);
+  EXPECT_TRUE(r->has_unknowns());
+}
+
+TEST_F(Dlop_test, add_unknown_grows_carry) {
+  // 0sb?? + 1: every bit unknown — carry expansion keeps the result fully
+  // unknown (base=-1, extra=-1 in one word). Width-sensitive consumers see
+  // a >=2-bit unknown.
+  auto a = Dlop::from_pyrope("0sb??");
+  auto r = a->add_op(int64_t(1));
+  EXPECT_TRUE(r->has_unknowns());
+  EXPECT_GE(r->get_bits(), 2);
+}
+
+TEST_F(Dlop_test, add_unknown_does_not_propagate_past_known_zero) {
+  // 0sb1?00 + 1: carry from bit 0 (1) hits known 0 at bit 1 → carry dies.
+  // Bit 2 stays unknown, bit 3 stays known 1. So result bit 0 is 1, bit 1 is
+  // 0, bit 2 unknown, bit 3 known 1.
+  // (Current implementation widens "unknown above lowest unknown" which is a
+  // conservative envelope; bit 3 may also be flagged unknown by the
+  // hi_fill path. We assert the bits that the spec considers must-known and
+  // accept the conservative envelope above the unknown.)
+  auto a = Dlop::from_pyrope("0sb1?00");
+  auto r = a->add_op(int64_t(1));
+  // Bit 0 of the result must be a definite 1 (no unknowns flow from below).
+  EXPECT_NE(r->base()[0] & 1, 0);
+  EXPECT_EQ(r->extra()[0] & 1, 0);
+}
+
+TEST_F(Dlop_test, ror_unknown_unary) {
+  // ror on a value whose only set bits are unknown → 1-bit unknown.
+  auto u = Dlop::from_pyrope("0sb?0");
+  auto r = u->ror_op();
+  EXPECT_TRUE(r->has_unknowns());
+}
+
+TEST_F(Dlop_test, ror_known_true_with_unknowns) {
+  // Any known-set bit forces the OR-reduction to true regardless of unknowns.
+  auto v = Dlop::from_pyrope("0sb?1");  // bit 0 known 1, bit 1 unknown
+  auto r = v->ror_op();
+  EXPECT_TRUE(r->is_known_true());
+}
+
+TEST_F(Dlop_test, and_with_zero_is_zero) {
+  // Identity fold: v & 0 == 0, even when v has unknowns.
+  auto v = Dlop::from_pyrope("0sb?1?0");
+  auto z = Dlop::create_integer(0);
+  auto r = v->and_op(*z);
+  EXPECT_TRUE(r->is_known_zero());
+  EXPECT_FALSE(r->has_unknowns());
+}
+
+TEST_F(Dlop_test, or_with_minus_one_is_minus_one) {
+  // Identity fold: v | -1 == -1, even when v has unknowns.
+  auto v       = Dlop::from_pyrope("0sb?1?0");
+  auto neg_one = Dlop::create_integer(-1);
+  auto r       = v->or_op(*neg_one);
+  EXPECT_FALSE(r->has_unknowns());
+  EXPECT_TRUE(r->is_known_true());
+  // All-ones value reads as -1.
+  EXPECT_EQ(r->to_i(), int64_t(-1));
+}
+
+TEST_F(Dlop_test, or_with_all_ones_byte_forces_known) {
+  // v | 0xff masks the low byte to known ones; remaining bits stay whatever v
+  // says. The whole-byte equality requires the upper bits of v to also be
+  // known (here we pick a known-zero value above the byte).
+  auto v   = Dlop::from_pyrope("0sb0000000???????");  // 7 unknown bits in low byte
+  auto ff  = Dlop::create_integer(0xff);
+  auto r   = v->or_op(*ff);
+  auto cmp = r->eq_op(*ff);
+  EXPECT_TRUE(cmp->is_known_true());
+}

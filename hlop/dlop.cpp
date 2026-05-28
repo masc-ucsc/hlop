@@ -1236,22 +1236,36 @@ spool_ptr<Dlop> Dlop::rsh_op(const Dlop& amount) const {
 // Comparison operations
 // =========================================================================
 spool_ptr<Dlop> Dlop::eq_op(const Dlop& other) const {
-  if (has_unknowns() || other.has_unknowns()) {
-    return unknown_bool();
-  }
-
-  if (size == 1 && other.size == 1) {
-    return create_bool(base()[0] == other.base()[0]);
-  }
-
-  // Compare with sign extension
+  // Three-valued: a bit position where BOTH sides are known but the values
+  // differ decides the result as false even when other positions carry
+  // unknowns. Only collapse to unknown when every known/known position agrees
+  // and at least one position is unknown.
   int16_t rsz = std::max(size, other.size);
+
+  const int64_t b_sign = (size > 0 && base()[size - 1] < 0) ? -1 : 0;
+  const int64_t e_sign = (size > 0 && extra()[size - 1] < 0) ? -1 : 0;
+  const int64_t ob_sign = (other.size > 0 && other.base()[other.size - 1] < 0) ? -1 : 0;
+  const int64_t oe_sign = (other.size > 0 && other.extra()[other.size - 1] < 0) ? -1 : 0;
+
+  bool any_unknown = false;
   for (int i = 0; i < rsz; ++i) {
-    int64_t v1 = (i < size) ? base()[i] : (base()[size - 1] < 0 ? -1 : 0);
-    int64_t v2 = (i < other.size) ? other.base()[i] : (other.base()[other.size - 1] < 0 ? -1 : 0);
-    if (v1 != v2) {
+    int64_t b1 = (i < size) ? base()[i] : b_sign;
+    int64_t e1 = (i < size) ? extra()[i] : e_sign;
+    int64_t b2 = (i < other.size) ? other.base()[i] : ob_sign;
+    int64_t e2 = (i < other.size) ? other.extra()[i] : oe_sign;
+
+    // Bits known on BOTH sides — where (e1 | e2) is 0.
+    int64_t known_both = ~(e1 | e2);
+    if ((b1 & known_both) != (b2 & known_both)) {
       return create_bool(false);
     }
+    if ((e1 | e2) != 0) {
+      any_unknown = true;
+    }
+  }
+
+  if (any_unknown) {
+    return unknown_bool();
   }
   return create_bool(true);
 }
@@ -1304,32 +1318,117 @@ bool Dlop::cmp_less_known(const Dlop& other) const {
   return false;
 }
 
-// Three-valued comparison ops: unknown bits on either side produce a 1-bit
-// unknown Dlop (mirrors eq_op). When both sides are fully known we defer to
-// the private cmp_less_known helper.
-spool_ptr<Dlop> Dlop::lt_op(const Dlop& other) const {
-  if (has_unknowns() || other.has_unknowns()) {
-    return unknown_bool();
+// Three-valued comparison: MSB→LSB walk that decides on the first known/known
+// disagreement and gives up to unknown at the first unknown bit reached before
+// any disagreement. Signed: at the top sign-extended bit, a known 1 means
+// "more negative" than a known 0; below the sign bit, the usual unsigned bit
+// weighting applies.
+enum class CmpResult { Less, Equal, Greater, Unknown };
+
+static CmpResult three_way_cmp(const Dlop& a, const Dlop& b) {
+  int16_t rsz = std::max(a.size, b.size);
+  if (rsz <= 0) {
+    return CmpResult::Equal;
   }
-  return create_bool(cmp_less_known(other));
+
+  auto sign_b = [](const Dlop& d) -> int64_t {
+    if (d.size <= 0) {
+      return 0;
+    }
+    return d.base()[d.size - 1] < 0 ? -1 : 0;
+  };
+  auto sign_e = [](const Dlop& d) -> int64_t {
+    if (d.size <= 0) {
+      return 0;
+    }
+    return d.extra()[d.size - 1] < 0 ? -1 : 0;
+  };
+
+  const int64_t a_bs = sign_b(a);
+  const int64_t a_es = sign_e(a);
+  const int64_t b_bs = sign_b(b);
+  const int64_t b_es = sign_e(b);
+
+  const int top_bit_pos = rsz * 64 - 1;
+
+  // Walk from highest bit to lowest. Words are processed high→low; within each
+  // word we extract the topmost "interesting" bit (known-disagreement or
+  // unknown) via __builtin_clzll on the merged mask.
+  for (int w = rsz - 1; w >= 0; --w) {
+    int64_t b1 = (w < a.size) ? a.base()[w] : a_bs;
+    int64_t e1 = (w < a.size) ? a.extra()[w] : a_es;
+    int64_t b2 = (w < b.size) ? b.base()[w] : b_bs;
+    int64_t e2 = (w < b.size) ? b.extra()[w] : b_es;
+
+    int64_t combined_extra = e1 | e2;
+    // diff_known: bits where both sides are known AND they disagree.
+    int64_t diff_known     = (b1 ^ b2) & ~combined_extra;
+    uint64_t interesting   = static_cast<uint64_t>(diff_known | combined_extra);
+
+    while (interesting != 0) {
+      int bit = 63 - __builtin_clzll(interesting);  // highest set bit
+      uint64_t mask = uint64_t(1) << bit;
+      bool unk = (combined_extra & static_cast<int64_t>(mask)) != 0;
+      if (unk) {
+        return CmpResult::Unknown;
+      }
+      // Known disagreement at this bit.
+      int p = w * 64 + bit;
+      bool b1_set = (b1 & static_cast<int64_t>(mask)) != 0;
+      bool b2_set = (b2 & static_cast<int64_t>(mask)) != 0;
+      // Equal case excluded by diff_known.
+      bool a_less;
+      if (p == top_bit_pos) {
+        // Sign bit position: 1 → negative, so set side is the smaller one.
+        a_less = b1_set && !b2_set;
+      } else {
+        a_less = !b1_set && b2_set;
+      }
+      return a_less ? CmpResult::Less : CmpResult::Greater;
+    }
+  }
+  return CmpResult::Equal;
+}
+
+spool_ptr<Dlop> Dlop::lt_op(const Dlop& other) const {
+  auto r = three_way_cmp(*this, other);
+  switch (r) {
+    case CmpResult::Less:    return create_bool(true);
+    case CmpResult::Equal:   return create_bool(false);
+    case CmpResult::Greater: return create_bool(false);
+    case CmpResult::Unknown: return unknown_bool();
+  }
+  return unknown_bool();
 }
 spool_ptr<Dlop> Dlop::le_op(const Dlop& other) const {
-  if (has_unknowns() || other.has_unknowns()) {
-    return unknown_bool();
+  auto r = three_way_cmp(*this, other);
+  switch (r) {
+    case CmpResult::Less:    return create_bool(true);
+    case CmpResult::Equal:   return create_bool(true);
+    case CmpResult::Greater: return create_bool(false);
+    case CmpResult::Unknown: return unknown_bool();
   }
-  return create_bool(!other.cmp_less_known(*this));
+  return unknown_bool();
 }
 spool_ptr<Dlop> Dlop::gt_op(const Dlop& other) const {
-  if (has_unknowns() || other.has_unknowns()) {
-    return unknown_bool();
+  auto r = three_way_cmp(*this, other);
+  switch (r) {
+    case CmpResult::Less:    return create_bool(false);
+    case CmpResult::Equal:   return create_bool(false);
+    case CmpResult::Greater: return create_bool(true);
+    case CmpResult::Unknown: return unknown_bool();
   }
-  return create_bool(other.cmp_less_known(*this));
+  return unknown_bool();
 }
 spool_ptr<Dlop> Dlop::ge_op(const Dlop& other) const {
-  if (has_unknowns() || other.has_unknowns()) {
-    return unknown_bool();
+  auto r = three_way_cmp(*this, other);
+  switch (r) {
+    case CmpResult::Less:    return create_bool(false);
+    case CmpResult::Equal:   return create_bool(true);
+    case CmpResult::Greater: return create_bool(true);
+    case CmpResult::Unknown: return unknown_bool();
   }
-  return create_bool(!cmp_less_known(other));
+  return unknown_bool();
 }
 
 // =========================================================================
