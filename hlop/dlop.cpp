@@ -666,6 +666,17 @@ spool_ptr<Dlop> Dlop::sub_op(const Dlop& other) const {
 
 spool_ptr<Dlop> Dlop::sub_op(int64_t other) const { return add_op(-other); }
 
+spool_ptr<Dlop> Dlop::sum_op(std::span<const spool_ptr<Dlop>> a, std::span<const spool_ptr<Dlop>> b) {
+  auto result = create_integer(0);
+  for (const auto& v : a) {
+    result = result->add_op(v);
+  }
+  for (const auto& v : b) {
+    result = result->sub_op(v);
+  }
+  return result;
+}
+
 // Unknown propagation for multiply: bit k of (a*b) depends on every (i,j)
 // with i+j ≤ k. The lowest output bit that can be tainted by an unknown is
 // `min(lu_a, lu_b)`, the lowest unknown across both operands — for any k

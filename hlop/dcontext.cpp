@@ -169,14 +169,7 @@ DResult DContext::exec_sum(const DCall& call) {
   auto plus_vals  = collect_pin(call.inputs, "A");
   auto minus_vals = collect_pin(call.inputs, "B");
 
-  auto result = Dlop::create_integer(0);
-  for (auto& v : plus_vals) {
-    result = result->add_op(v);
-  }
-  for (auto& v : minus_vals) {
-    result = result->sub_op(v);
-  }
-  return {.outputs = {result}};
+  return {.outputs = {Dlop::sum_op(plus_vals, minus_vals)}};
 }
 
 DResult DContext::exec_lt(const DCall& call) {

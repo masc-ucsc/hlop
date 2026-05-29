@@ -455,6 +455,15 @@ public:
   spool_ptr<Dlop> concat_op(spool_ptr<Dlop> other) const { return concat_op(*other); }
   spool_ptr<Dlop> adjust_bits(int amount) const;
 
+  // --- Multi-input computing cells from livehd graph/cell.* ---
+  // sum_op: all values on `a` are added and all values on `b` are
+  // subtracted. This mirrors the LGraph Sum cell pin polarity.
+  static spool_ptr<Dlop> sum_op(std::span<const spool_ptr<Dlop>> a, std::span<const spool_ptr<Dlop>> b);
+  static spool_ptr<Dlop> sum_op(std::initializer_list<spool_ptr<Dlop>> a, std::initializer_list<spool_ptr<Dlop>> b) {
+    return sum_op(std::span<const spool_ptr<Dlop>>(a.begin(), a.size()),
+                  std::span<const spool_ptr<Dlop>>(b.begin(), b.size()));
+  }
+
   // --- Multiplexers / LUT (computing cells from livehd graph/cell.*) ---
   // These take the selector/address and the value list explicitly (static),
   // matching the LGraph node shape where pid 0 is the selector and pid 1..N

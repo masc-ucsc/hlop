@@ -100,6 +100,15 @@ TEST_F(Slop_test, sub_op) {
   EXPECT_EQ(c.to_i(), 70);
 }
 
+TEST_F(Slop_test, sum_op) {
+  std::vector<S> a{S::from_pyrope("100"), S::from_pyrope("30")};
+  std::vector<S> b{S::from_pyrope("7"), S::from_pyrope("3")};
+  auto           c = S::sum_op(a, b);
+  EXPECT_EQ(c.to_i(), 120);
+
+  EXPECT_EQ(S::sum_op({S::create_integer(1), S::create_integer(2)}, {}).to_i(), 3);
+}
+
 TEST_F(Slop_test, mult_op) {
   auto a = S::from_pyrope("7");
   auto b = S::from_pyrope("6");

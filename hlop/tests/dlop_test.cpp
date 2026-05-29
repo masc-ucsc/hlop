@@ -844,6 +844,17 @@ TEST_F(Dlop_test, or_with_all_ones_byte_forces_known) {
 // =========================================================================
 // Mux / Hotmux / LUT tests (computing cells mirrored from livehd cell.*)
 // =========================================================================
+TEST_F(Dlop_test, sum_op_adds_a_subtracts_b) {
+  auto                         a0 = Dlop::create_integer(10);
+  auto                         a1 = Dlop::create_integer(3);
+  auto                         b0 = Dlop::create_integer(4);
+  std::vector<spool_ptr<Dlop>> a{a0, a1};
+  std::vector<spool_ptr<Dlop>> b{b0};
+
+  EXPECT_EQ(Dlop::sum_op(a, b)->to_i(), 9);
+  EXPECT_EQ(Dlop::sum_op({Dlop::create_integer(1), Dlop::create_integer(2)}, {})->to_i(), 3);
+}
+
 TEST_F(Dlop_test, mux_known_select) {
   auto                         v0 = Dlop::from_pyrope("0x11");
   auto                         v1 = Dlop::from_pyrope("0x22");
