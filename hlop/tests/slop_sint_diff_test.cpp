@@ -243,9 +243,9 @@ void CheckPair(int64_t a_in, int64_t b_in, int iter) {
                           uint64_t{31}, uint64_t{32}, uint64_t{63},
                           uint64_t{W - 1}}) {
     if (shamt >= static_cast<uint64_t>(W)) continue;
-    EXPECT_BITS_EQ(W, slop_low128(a_sl.lsh_op(static_cast<int64_t>(shamt))),
+    EXPECT_BITS_EQ(W, slop_low128(a_sl.shl_op(static_cast<int64_t>(shamt))),
                    i128_to_words(sext_to_i128<W>(a128 << shamt)), "lsh");
-    EXPECT_BITS_EQ(W, slop_low128(a_sl.rsh_op(static_cast<int64_t>(shamt))),
+    EXPECT_BITS_EQ(W, slop_low128(a_sl.sra_op(static_cast<int64_t>(shamt))),
                    i128_to_words(sext_to_i128<W>(a128 >> shamt)), "rsh");
   }
 }

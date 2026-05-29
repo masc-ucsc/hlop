@@ -3,6 +3,7 @@
 #include "dlop.hpp"
 
 #include <string>
+#include <vector>
 
 #include "gtest/gtest.h"
 #include "lconst.hpp"
@@ -287,15 +288,15 @@ TEST_F(Dlop_test, and_or_xor_not_propagate_nil) {
 // =========================================================================
 // Shift tests
 // =========================================================================
-TEST_F(Dlop_test, lsh_op) {
+TEST_F(Dlop_test, shl_op) {
   auto a = Dlop::from_pyrope("1");
-  auto b = a->lsh_op(4);
+  auto b = a->shl_op(4);
   EXPECT_EQ(b->to_i(), 16);
 }
 
-TEST_F(Dlop_test, rsh_op) {
+TEST_F(Dlop_test, sra_op) {
   auto a = Dlop::from_pyrope("0xff");
-  auto b = a->rsh_op(4);
+  auto b = a->sra_op(4);
   EXPECT_EQ(b->to_i(), 0xf);
 }
 
@@ -838,4 +839,85 @@ TEST_F(Dlop_test, or_with_all_ones_byte_forces_known) {
   auto r   = v->or_op(*ff);
   auto cmp = r->eq_op(*ff);
   EXPECT_TRUE(cmp->is_known_true());
+}
+
+// =========================================================================
+// Mux / Hotmux / LUT tests (computing cells mirrored from livehd cell.*)
+// =========================================================================
+TEST_F(Dlop_test, mux_known_select) {
+  auto                         v0 = Dlop::from_pyrope("0x11");
+  auto                         v1 = Dlop::from_pyrope("0x22");
+  auto                         v2 = Dlop::from_pyrope("0x33");
+  std::vector<spool_ptr<Dlop>> vals{v0, v1, v2};
+
+  EXPECT_EQ(Dlop::mux_op(*Dlop::create_integer(0), vals)->to_i(), 0x11);
+  EXPECT_EQ(Dlop::mux_op(*Dlop::create_integer(2), vals)->to_i(), 0x33);
+  // Out-of-range known selector -> invalid.
+  EXPECT_TRUE(Dlop::mux_op(*Dlop::create_integer(9), vals)->is_invalid());
+}
+
+TEST_F(Dlop_test, mux_unknown_select_merges) {
+  // sel selects index 0 or 1; the two values agree on every bit except bit 3,
+  // so the merge keeps bits 0..2 known and marks bit 3 unknown.
+  auto                         v0 = Dlop::from_pyrope("0x0f");  // 0b0_1111
+  auto                         v1 = Dlop::from_pyrope("0x07");  // 0b0_0111
+  std::vector<spool_ptr<Dlop>> vals{v0, v1};
+
+  auto r = Dlop::mux_op(*Dlop::from_pyrope("0ub?"), vals);
+  EXPECT_TRUE(r->has_unknowns());
+  EXPECT_TRUE(r->same_repr(*Dlop::from_pyrope("0sb0?111")));
+}
+
+TEST_F(Dlop_test, hotmux_known_onehot) {
+  auto                         v0 = Dlop::from_pyrope("0x11");
+  auto                         v1 = Dlop::from_pyrope("0x22");
+  auto                         v2 = Dlop::from_pyrope("0x33");
+  std::vector<spool_ptr<Dlop>> vals{v0, v1, v2};
+
+  // one-hot bit 0 -> values[0], bit 1 -> values[1], bit 2 -> values[2]
+  EXPECT_EQ(Dlop::hotmux_op(*Dlop::create_integer(0b001), vals)->to_i(), 0x11);
+  EXPECT_EQ(Dlop::hotmux_op(*Dlop::create_integer(0b010), vals)->to_i(), 0x22);
+  EXPECT_EQ(Dlop::hotmux_op(*Dlop::create_integer(0b100), vals)->to_i(), 0x33);
+}
+
+TEST_F(Dlop_test, hotmux_known_bit_with_unknown_elsewhere) {
+  // bit 1 is known-set; one-hot guarantees the unknown bit 4 is 0, so pick v1.
+  auto                         v0 = Dlop::from_pyrope("0x11");
+  auto                         v1 = Dlop::from_pyrope("0x22");
+  std::vector<spool_ptr<Dlop>> vals{v0, v1};
+
+  auto r = Dlop::hotmux_op(*Dlop::from_pyrope("0ub?0010"), vals);
+  EXPECT_EQ(r->to_i(), 0x22);
+}
+
+TEST_F(Dlop_test, hotmux_unknown_select_merges) {
+  // No known-set bit; the hot bit is among the unknown low two positions, so
+  // values[0] and values[1] are merged.
+  auto                         v0 = Dlop::from_pyrope("0x0f");
+  auto                         v1 = Dlop::from_pyrope("0x07");
+  std::vector<spool_ptr<Dlop>> vals{v0, v1};
+
+  auto r = Dlop::hotmux_op(*Dlop::from_pyrope("0ub??"), vals);
+  EXPECT_TRUE(r->has_unknowns());
+  EXPECT_TRUE(r->same_repr(*Dlop::from_pyrope("0sb0?111")));
+}
+
+TEST_F(Dlop_test, lut_known_addr) {
+  auto table = Dlop::from_pyrope("0b1010");  // bit0=0 bit1=1 bit2=0 bit3=1
+
+  EXPECT_TRUE(Dlop::lut_op(*table, *Dlop::create_integer(0))->is_known_false());
+  EXPECT_TRUE(Dlop::lut_op(*table, *Dlop::create_integer(1))->is_known_true());
+  EXPECT_TRUE(Dlop::lut_op(*table, *Dlop::create_integer(2))->is_known_false());
+  EXPECT_TRUE(Dlop::lut_op(*table, *Dlop::create_integer(3))->is_known_true());
+}
+
+TEST_F(Dlop_test, lut_unknown_addr) {
+  // table bits 0 and 1 are both 0 -> a ?-low-bit address still folds to false.
+  auto table = Dlop::from_pyrope("0b1100");  // bit0=0 bit1=0 bit2=1 bit3=1
+  EXPECT_TRUE(Dlop::lut_op(*table, *Dlop::from_pyrope("0ub?"))->is_known_false());
+  // index in {2,3}: both table bits are 1 -> folds to true.
+  EXPECT_TRUE(Dlop::lut_op(*table, *Dlop::from_pyrope("0ub1?"))->is_known_true());
+  // reachable table bits disagree (bit0=0, bit1=1) -> unknown.
+  auto mixed = Dlop::from_pyrope("0b1010");
+  EXPECT_TRUE(Dlop::lut_op(*mixed, *Dlop::from_pyrope("0ub?"))->has_unknowns());
 }

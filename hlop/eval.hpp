@@ -282,7 +282,7 @@ V eval_shl(const V& value, const V& amount) {
     return V::unknown(value.get_bits() + 64);  // conservative
   }
   assert(amount.is_i());
-  return value.lsh_op(amount.to_i());
+  return value.shl_op(amount.to_i());
 }
 
 // --- SRA: arithmetic shift right ---
@@ -292,7 +292,7 @@ V eval_sra(const V& value, const V& amount) {
     return V::unknown(value.get_bits());  // conservative
   }
   assert(amount.is_i());
-  return value.rsh_op(amount.to_i());
+  return value.sra_op(amount.to_i());
 }
 
 // =========================================================================

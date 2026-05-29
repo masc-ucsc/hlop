@@ -3,6 +3,7 @@
 #include "slop.hpp"
 
 #include <string>
+#include <vector>
 
 #include "gtest/gtest.h"
 
@@ -163,15 +164,15 @@ TEST_F(Slop_test, not_op) {
 // =========================================================================
 // Shift tests
 // =========================================================================
-TEST_F(Slop_test, lsh_op) {
+TEST_F(Slop_test, shl_op) {
   auto a = S::from_pyrope("1");
-  auto b = a.lsh_op(4);
+  auto b = a.shl_op(4);
   EXPECT_EQ(b.to_i(), 16);
 }
 
-TEST_F(Slop_test, rsh_op) {
+TEST_F(Slop_test, sra_op) {
   auto a = S::from_pyrope("0xff");
-  auto b = a.rsh_op(4);
+  auto b = a.sra_op(4);
   EXPECT_EQ(b.to_i(), 0xf);
 }
 
@@ -264,4 +265,36 @@ TEST_F(Slop_test, slop_1bit) {
   auto b = Slop<1>(1);
   EXPECT_EQ(a.to_i(), 0);
   EXPECT_EQ(b.to_i(), 1);
+}
+
+// =========================================================================
+// Mux / Hotmux / LUT tests (computing cells mirrored from livehd cell.*)
+// =========================================================================
+TEST_F(Slop_test, mux_op) {
+  using S8 = Slop<8>;
+  std::vector<S8> vals{S8::from_pyrope("0x11"), S8::from_pyrope("0x22"), S8::from_pyrope("0x33")};
+
+  EXPECT_EQ(S8::mux_op(S8::create_integer(0), vals).to_i(), 0x11);
+  EXPECT_EQ(S8::mux_op(S8::create_integer(2), vals).to_i(), 0x33);
+  // Brace-list overload.
+  EXPECT_EQ(S8::mux_op(S8::create_integer(1), {S8::create_integer(5), S8::create_integer(9)}).to_i(), 9);
+}
+
+TEST_F(Slop_test, hotmux_op) {
+  using S8 = Slop<8>;
+  std::vector<S8> vals{S8::from_pyrope("0x11"), S8::from_pyrope("0x22"), S8::from_pyrope("0x33")};
+
+  EXPECT_EQ(S8::hotmux_op(S8::create_integer(0b001), vals).to_i(), 0x11);
+  EXPECT_EQ(S8::hotmux_op(S8::create_integer(0b010), vals).to_i(), 0x22);
+  EXPECT_EQ(S8::hotmux_op(S8::create_integer(0b100), vals).to_i(), 0x33);
+}
+
+TEST_F(Slop_test, lut_op) {
+  using S8 = Slop<8>;
+  auto table = S8::from_pyrope("0b1010");  // bit0=0 bit1=1 bit2=0 bit3=1
+
+  EXPECT_TRUE(S8::lut_op(table, S8::create_integer(0)).is_known_false());
+  EXPECT_TRUE(S8::lut_op(table, S8::create_integer(1)).is_known_true());
+  EXPECT_TRUE(S8::lut_op(table, S8::create_integer(2)).is_known_false());
+  EXPECT_TRUE(S8::lut_op(table, S8::create_integer(3)).is_known_true());
 }

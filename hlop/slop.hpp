@@ -17,8 +17,10 @@
 #include <cassert>
 #include <cstdint>
 #include <format>
+#include <initializer_list>
 #include <print>
 #include <random>
+#include <span>
 #include <string>
 #include <string_view>
 
@@ -435,7 +437,7 @@ public:
   }
 
   // --- Shift ---
-  Slop lsh_op(int64_t amount) const {
+  Slop shl_op(int64_t amount) const {
     nil_check_();
     if (amount == 0) {
       return *this;
@@ -445,7 +447,7 @@ public:
     return result;
   }
 
-  Slop rsh_op(int64_t amount) const {
+  Slop sra_op(int64_t amount) const {
     nil_check_();
     if (amount == 0) {
       return *this;
@@ -457,8 +459,8 @@ public:
 
   // Slop-typed shift wrappers — forward to the int64 form after extracting
   // the amount. Slop has no runtime unknowns.
-  Slop lsh_op(const Slop& amount) const { return lsh_op(amount.base_[0]); }
-  Slop rsh_op(const Slop& amount) const { return rsh_op(amount.base_[0]); }
+  Slop shl_op(const Slop& amount) const { return shl_op(amount.base_[0]); }
+  Slop sra_op(const Slop& amount) const { return sra_op(amount.base_[0]); }
 
   // --- Comparison ---
   Slop eq_op(const Slop& other) const {
@@ -686,9 +688,59 @@ public:
     if (other_bits <= 0) {
       return *this;
     }
-    auto shifted = lsh_op(other_bits);
+    auto shifted = shl_op(other_bits);
     auto masked  = other.get_mask_op();
     return shifted.or_op(masked);
+  }
+
+  // --- Multiplexers / LUT (computing cells from livehd graph/cell.*) ---
+  // Static, with the selector/address and ordered value list passed
+  // explicitly. Slop carries no unknowns, so these are the plain concrete
+  // cases of the matching Dlop ops.
+
+  // mux_op: Y = values[sel] (0-based). A non-integer or out-of-range selector
+  // returns invalid().
+  static Slop mux_op(const Slop& sel, std::span<const Slop> values) {
+    assert(!values.empty());
+    if (!sel.is_i()) {
+      return invalid();
+    }
+    int64_t idx = sel.to_i();
+    if (idx < 0 || static_cast<size_t>(idx) >= values.size()) {
+      return invalid();
+    }
+    return values[idx];
+  }
+  static Slop mux_op(const Slop& sel, std::initializer_list<Slop> values) {
+    return mux_op(sel, std::span<const Slop>(values.begin(), values.size()));
+  }
+
+  // hotmux_op: one-hot selector — bit `i` selects values[i]. The selector is
+  // asserted to be one-hot; an out-of-range hot bit returns invalid().
+  static Slop hotmux_op(const Slop& sel, std::span<const Slop> values) {
+    assert(!values.empty());
+    assert(sel.popcount() == 1 && "hotmux select must be one-hot");
+    int b = sel.get_first_bit_set();
+    if (b < 0 || static_cast<size_t>(b) >= values.size()) {
+      return invalid();
+    }
+    return values[b];
+  }
+  static Slop hotmux_op(const Slop& sel, std::initializer_list<Slop> values) {
+    return hotmux_op(sel, std::span<const Slop>(values.begin(), values.size()));
+  }
+
+  // lut_op: Yosys `$lut` semantics — 1-bit result `table[addr]` (bit `addr` of
+  // the truth table, addr's LSB = first input).
+  static Slop lut_op(const Slop& table, const Slop& addr) {
+    if (!addr.is_i()) {
+      return invalid();
+    }
+    int64_t idx = addr.to_i();
+    if (idx < 0) {
+      return invalid();
+    }
+    return create_bool(table.bit_test(static_cast<int>(idx)));
   }
 
   Slop adjust_bits(int amount) const {

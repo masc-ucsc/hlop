@@ -2,6 +2,7 @@
 
 #include "dlop.hpp"
 
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <format>
@@ -1150,7 +1151,7 @@ spool_ptr<Dlop> Dlop::not_op() const {
 // =========================================================================
 // Shift operations
 // =========================================================================
-spool_ptr<Dlop> Dlop::lsh_op(int64_t amount) const {
+spool_ptr<Dlop> Dlop::shl_op(int64_t amount) const {
   if (amount == 0) {
     auto dlop = make_result(Type::Integer, size);
     memcpy(dlop->base(), base(), size * sizeof(int64_t));
@@ -1186,7 +1187,7 @@ spool_ptr<Dlop> Dlop::lsh_op(int64_t amount) const {
   return dlop;
 }
 
-spool_ptr<Dlop> Dlop::rsh_op(int64_t amount) const {
+spool_ptr<Dlop> Dlop::sra_op(int64_t amount) const {
   if (amount == 0) {
     auto dlop = make_result(Type::Integer, size);
     memcpy(dlop->base(), base(), size * sizeof(int64_t));
@@ -1212,24 +1213,257 @@ spool_ptr<Dlop> Dlop::rsh_op(int64_t amount) const {
 // convention — left shift widens conservatively by 64 (could grow), right
 // shift keeps the source width (cannot grow). Non-numeric / nil amount is
 // invalid.
-spool_ptr<Dlop> Dlop::lsh_op(const Dlop& amount) const {
+spool_ptr<Dlop> Dlop::shl_op(const Dlop& amount) const {
   if (amount.has_unknowns()) {
     return unknown(get_bits() + 64);
   }
   if (!amount.is_i()) {
     return invalid();
   }
-  return lsh_op(amount.to_i());
+  return shl_op(amount.to_i());
 }
 
-spool_ptr<Dlop> Dlop::rsh_op(const Dlop& amount) const {
+spool_ptr<Dlop> Dlop::sra_op(const Dlop& amount) const {
   if (amount.has_unknowns()) {
     return unknown(get_bits());
   }
   if (!amount.is_i()) {
     return invalid();
   }
-  return rsh_op(amount.to_i());
+  return sra_op(amount.to_i());
+}
+
+// =========================================================================
+// Multiplexers / LUT
+// =========================================================================
+spool_ptr<Dlop> Dlop::clone(const Dlop& src) {
+  auto dlop = make_result(src.type, src.size);
+  memcpy(dlop->base(), src.base(), src.size * sizeof(int64_t));
+  memcpy(dlop->extra(), src.extra(), src.size * sizeof(int64_t));
+  dlop->normalize();
+  return dlop;
+}
+
+bool Dlop::unknown_bit_test(int pos) const {
+  int word = pos / 64;
+  int bit  = pos % 64;
+  if (word >= size) {
+    return extra()[size - 1] < 0;  // sign extension of the unknown mask
+  }
+  return (extra()[word] >> bit) & 1;
+}
+
+spool_ptr<Dlop> Dlop::merge_unknown(const std::vector<const Dlop*>& cands) {
+  assert(!cands.empty());
+  if (cands.size() == 1) {
+    return clone(*cands[0]);
+  }
+
+  int width = 1;
+  for (const auto* c : cands) {
+    width = std::max(width, c->get_bits());
+  }
+  int16_t words = static_cast<int16_t>((width + 63) / 64);
+  if (words < 1) {
+    words = 1;
+  }
+
+  auto result = make_result(Type::Integer, words);
+  for (int w = 0; w < words; ++w) {
+    result->base()[w]  = 0;
+    result->extra()[w] = 0;
+  }
+
+  for (int b = 0; b < words * 64; ++b) {
+    bool any_unknown = false;
+    bool has_known   = false;
+    bool known_val   = false;
+    bool disagree    = false;
+    for (const auto* c : cands) {
+      if (c->unknown_bit_test(b)) {
+        any_unknown = true;
+      } else {
+        bool v = c->bit_test(b);
+        if (!has_known) {
+          has_known = true;
+          known_val = v;
+        } else if (v != known_val) {
+          disagree = true;
+        }
+      }
+    }
+    bool unknown_here = any_unknown || disagree || !has_known;
+    int  w            = b / 64;
+    int  bit          = b % 64;
+    if (unknown_here) {
+      // Invariant: base bit is forced set wherever the value is unknown.
+      result->extra()[w] |= int64_t(1) << bit;
+      result->base()[w] |= int64_t(1) << bit;
+    } else if (known_val) {
+      result->base()[w] |= int64_t(1) << bit;
+    }
+  }
+
+  result->normalize();
+  return result;
+}
+
+spool_ptr<Dlop> Dlop::mux_op(const Dlop& sel, std::span<const spool_ptr<Dlop>> values) {
+  assert(!values.empty());
+
+  // True iff index `i` is consistent with sel's known/unknown bit pattern:
+  // every *known* selector bit must match the corresponding bit of `i`.
+  auto consistent = [&](size_t i) -> bool {
+    int hib = 0;
+    for (size_t t = i; t != 0; t >>= 1) {
+      ++hib;
+    }
+    int maxb = std::max({sel.get_bits(), hib, 1});
+    for (int b = 0; b < maxb; ++b) {
+      if (sel.unknown_bit_test(b)) {
+        continue;
+      }
+      bool sb = sel.bit_test(b);
+      bool ib = (b < 64) && ((i >> b) & 1);
+      if (sb != ib) {
+        return false;
+      }
+    }
+    return true;
+  };
+
+  if (!sel.has_unknowns()) {
+    if (!sel.is_i()) {
+      return invalid();
+    }
+    int64_t idx = sel.to_i();
+    if (idx < 0 || static_cast<size_t>(idx) >= values.size()) {
+      return invalid();
+    }
+    return clone(*values[idx]);
+  }
+
+  std::vector<const Dlop*> cands;
+  for (size_t i = 0; i < values.size(); ++i) {
+    if (consistent(i)) {
+      cands.push_back(&*values[i]);
+    }
+  }
+  if (cands.empty()) {
+    return invalid();
+  }
+  return merge_unknown(cands);
+}
+
+spool_ptr<Dlop> Dlop::hotmux_op(const Dlop& sel, std::span<const spool_ptr<Dlop>> values) {
+  assert(!values.empty());
+
+  int scan = std::max(sel.get_bits(), static_cast<int>(values.size()));
+
+  int known_set   = -1;
+  int known_count = 0;
+  for (int b = 0; b < scan; ++b) {
+    if (!sel.unknown_bit_test(b) && sel.bit_test(b)) {
+      ++known_count;
+      known_set = b;
+    }
+  }
+  assert(known_count <= 1 && "hotmux select must be one-hot");
+
+  if (known_count == 1) {
+    if (static_cast<size_t>(known_set) >= values.size()) {
+      return invalid();
+    }
+    return clone(*values[known_set]);
+  }
+
+  // No known-set bit: the hot bit is among the unknown positions in range.
+  std::vector<const Dlop*> cands;
+  for (size_t b = 0; b < values.size(); ++b) {
+    if (sel.unknown_bit_test(static_cast<int>(b))) {
+      cands.push_back(&*values[b]);
+    }
+  }
+  if (cands.empty()) {
+    return invalid();  // selector is a known zero -> not one-hot
+  }
+  return merge_unknown(cands);
+}
+
+spool_ptr<Dlop> Dlop::lut_op(const Dlop& table, const Dlop& addr) {
+  if (!addr.has_unknowns()) {
+    if (!addr.is_i()) {
+      return invalid();
+    }
+    int64_t idx = addr.to_i();
+    if (idx < 0) {
+      return invalid();
+    }
+    return create_bool(table.bit_test(static_cast<int>(idx)));
+  }
+
+  // Unknown address: fold every reachable table bit. Indices at or beyond the
+  // table width all read the table's sign bit (a single constant), so one
+  // representative covers that whole region.
+  int tbits = std::max(table.get_bits(), 1);
+
+  auto addr_consistent = [&](int idx) -> bool {
+    int maxb = std::max({addr.get_bits(), 32, 1});
+    for (int b = 0; b < maxb; ++b) {
+      if (addr.unknown_bit_test(b)) {
+        continue;
+      }
+      bool ab = addr.bit_test(b);
+      bool ib = (b < 31) && ((idx >> b) & 1);
+      if (ab != ib) {
+        return false;
+      }
+    }
+    return true;
+  };
+
+  bool has_known      = false;
+  bool known_val      = false;
+  bool unknown_result = false;
+  for (int idx = 0; idx < tbits && !unknown_result; ++idx) {
+    if (!addr_consistent(idx)) {
+      continue;
+    }
+    bool v = table.bit_test(idx);
+    if (!has_known) {
+      has_known = true;
+      known_val = v;
+    } else if (v != known_val) {
+      unknown_result = true;
+    }
+  }
+
+  // Does the unknown pattern admit an index at or beyond the table width? Set
+  // every unknown low bit to 1; if the maximum reachable index reaches tbits
+  // the sign region is in play.
+  if (!unknown_result) {
+    uint64_t maxidx = 0;
+    for (int b = 0; b < 31; ++b) {
+      bool bit = addr.unknown_bit_test(b) || addr.bit_test(b);
+      if (bit) {
+        maxidx |= uint64_t(1) << b;
+      }
+    }
+    if (maxidx >= static_cast<uint64_t>(tbits)) {
+      bool v = table.bit_test(tbits);  // sign region
+      if (!has_known) {
+        has_known = true;
+        known_val = v;
+      } else if (v != known_val) {
+        unknown_result = true;
+      }
+    }
+  }
+
+  if (!has_known || unknown_result) {
+    return unknown(1);
+  }
+  return create_bool(known_val);
 }
 
 // =========================================================================
@@ -1854,7 +2088,7 @@ spool_ptr<Dlop> Dlop::concat_op(const Dlop& other) const {
       memcpy(dlop->extra(), other.extra(), other.size * sizeof(int64_t));
       return dlop;
     }
-    auto shifted     = other.lsh_op(self_bits);
+    auto shifted     = other.shl_op(self_bits);
     auto masked_self = get_mask_op();
     auto r           = shifted->or_op(masked_self);
     r->type          = Type::String;
@@ -1869,7 +2103,7 @@ spool_ptr<Dlop> Dlop::concat_op(const Dlop& other) const {
     return dlop;
   }
 
-  auto shifted      = lsh_op(other_bits);
+  auto shifted      = shl_op(other_bits);
   auto masked_other = other.get_mask_op();
   return shifted->or_op(masked_other);
 }
@@ -2364,7 +2598,7 @@ spool_ptr<Dlop> Dlop::get_mask_value(int h, int l) {
 
   // Bits [l..h] inclusive set; equivalent to ((1<<(h-l+1))-1) << l
   auto width = get_mask_value(h - l + 1);
-  return width->lsh_op(l);
+  return width->shl_op(l);
 }
 
 spool_ptr<Dlop> Dlop::get_neg_mask_value(int bits) {
@@ -2373,7 +2607,7 @@ spool_ptr<Dlop> Dlop::get_neg_mask_value(int bits) {
   }
   // -1 << bits : sign-extended ones in high positions, zeros in low `bits`
   auto neg_one = create_integer(-1);
-  return neg_one->lsh_op(bits);
+  return neg_one->shl_op(bits);
 }
 
 // =========================================================================
@@ -2508,7 +2742,7 @@ std::pair<int, int> Dlop::get_mask_range() const {
     return {-1, -1};
   }
 
-  auto shifted = rsh_op(trail);
+  auto shifted = sra_op(trail);
   if (shifted->is_mask()) {
     return {trail, range_end};
   }

@@ -5,7 +5,9 @@
 #include <cassert>
 #include <cstdint>
 #include <cstring>
+#include <initializer_list>
 #include <memory>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -182,6 +184,17 @@ public:
 
   // Align operand sizes for binary operations
   static void align_sizes(spool_ptr<Dlop>& a, spool_ptr<Dlop>& b);
+
+  // Deep copy `src` into a fresh pool-managed Dlop (used by mux_op/hotmux_op
+  // to return a selected value without aliasing the caller's storage).
+  static spool_ptr<Dlop> clone(const Dlop& src);
+  // Ternary-merge candidate values into one Dlop: a bit stays known only when
+  // every candidate is known and agrees there; otherwise it becomes unknown.
+  // Used for the unknown-selector paths of mux_op/hotmux_op.
+  static spool_ptr<Dlop> merge_unknown(const std::vector<const Dlop*>& cands);
+  // Read the `extra` (unknown) bit at position `pos`, sign-extending past the
+  // stored width — the unknown-bit analogue of bit_test.
+  bool unknown_bit_test(int pos) const;
 
   bool has_extra() const {
     if (size <= 1) {
@@ -374,13 +387,13 @@ public:
   spool_ptr<Dlop> not_op() const;
 
   // --- Shift operations ---
-  spool_ptr<Dlop> lsh_op(int64_t amount) const;
-  spool_ptr<Dlop> rsh_op(int64_t amount) const;
+  spool_ptr<Dlop> shl_op(int64_t amount) const;
+  spool_ptr<Dlop> sra_op(int64_t amount) const;
   // Dlop-typed shift overloads: forward to the int64 form once the amount is
   // confirmed numeric. Unknown shift amount → 1-bit unknown result (the bit
   // pattern is unrecoverable). Invalid / nil / string amount → invalid.
-  spool_ptr<Dlop> lsh_op(const Dlop& amount) const;
-  spool_ptr<Dlop> rsh_op(const Dlop& amount) const;
+  spool_ptr<Dlop> shl_op(const Dlop& amount) const;
+  spool_ptr<Dlop> sra_op(const Dlop& amount) const;
 
   // --- Comparison operations ---
   spool_ptr<Dlop> eq_op(const Dlop& other) const;
@@ -441,6 +454,39 @@ public:
   spool_ptr<Dlop> concat_op(const Dlop& other) const;
   spool_ptr<Dlop> concat_op(spool_ptr<Dlop> other) const { return concat_op(*other); }
   spool_ptr<Dlop> adjust_bits(int amount) const;
+
+  // --- Multiplexers / LUT (computing cells from livehd graph/cell.*) ---
+  // These take the selector/address and the value list explicitly (static),
+  // matching the LGraph node shape where pid 0 is the selector and pid 1..N
+  // are the ordered values.
+  //
+  // mux_op: Y = values[sel] (0-based; sel == 0 picks values[0]). A fully known
+  // selector picks one value exactly; a known out-of-range / non-integer
+  // selector returns invalid(). When `sel` has unknown bits, every value whose
+  // index is still reachable under the known/unknown bit pattern is ternary-
+  // merged: bit positions that are known and equal across all reachable values
+  // stay known, any differing or unknown bit becomes unknown.
+  static spool_ptr<Dlop> mux_op(const Dlop& sel, std::span<const spool_ptr<Dlop>> values);
+  static spool_ptr<Dlop> mux_op(const Dlop& sel, std::initializer_list<spool_ptr<Dlop>> values) {
+    return mux_op(sel, std::span<const spool_ptr<Dlop>>(values.begin(), values.size()));
+  }
+  // hotmux_op: one-hot selector — bit `i` set selects values[i]. The selector
+  // is asserted to be one-hot (at most one *known*-set bit). If exactly one
+  // bit is known-set, that value is picked (one-hot guarantees the rest are 0,
+  // even when they are unknown). If no bit is known-set but some bits are
+  // unknown, the hot bit lies among the unknown positions and those values are
+  // ternary-merged as in mux_op. A known all-zero selector returns invalid().
+  static spool_ptr<Dlop> hotmux_op(const Dlop& sel, std::span<const spool_ptr<Dlop>> values);
+  static spool_ptr<Dlop> hotmux_op(const Dlop& sel, std::initializer_list<spool_ptr<Dlop>> values) {
+    return hotmux_op(sel, std::span<const spool_ptr<Dlop>>(values.begin(), values.size()));
+  }
+  // lut_op: Yosys `$lut` semantics — `table` is the 2^W-bit truth table and
+  // `addr` is the index; the 1-bit result is `table[addr]` (bit `addr` of the
+  // table, addr's LSB = first input). A known addr selects the bit directly
+  // (sign-extended past the table width like any value). An unknown addr folds
+  // every reachable table bit: all-equal-and-known → that bool, else 0sb? (a
+  // 1-bit unknown).
+  static spool_ptr<Dlop> lut_op(const Dlop& table, const Dlop& addr);
 
   // --- Queries ---
   bool is_negative() const;

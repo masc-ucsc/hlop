@@ -232,7 +232,7 @@ DResult DContext::exec_shl(const DCall& call) {
     return {.outputs = {Dlop::unknown(value->get_bits() + 64)}};
   }
   assert(amount->is_i());
-  return {.outputs = {value->lsh_op(amount->to_i())}};
+  return {.outputs = {value->shl_op(amount->to_i())}};
 }
 
 DResult DContext::exec_sra(const DCall& call) {
@@ -243,7 +243,7 @@ DResult DContext::exec_sra(const DCall& call) {
     return {.outputs = {Dlop::unknown(value->get_bits())}};
   }
   assert(amount->is_i());
-  return {.outputs = {value->rsh_op(amount->to_i())}};
+  return {.outputs = {value->sra_op(amount->to_i())}};
 }
 
 DResult DContext::exec_mux(const DCall& call) {

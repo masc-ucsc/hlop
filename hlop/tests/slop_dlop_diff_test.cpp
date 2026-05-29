@@ -127,14 +127,14 @@ void RunOnce(std::mt19937_64 &rng, const std::vector<PoolEntry> &pool, int op_id
     case 3: {
       // Shift by a small known amount so the result fits in Slop<256>.
       int amt = rng() % 60;
-      ExpectConsistent(*da->lsh_op(amt), sa.lsh_op(amt),
-                       "lsh_op(" + std::to_string(amt) + ")");
+      ExpectConsistent(*da->shl_op(amt), sa.shl_op(amt),
+                       "shl_op(" + std::to_string(amt) + ")");
       break;
     }
     case 4: {
       int amt = rng() % 60;
-      ExpectConsistent(*da->rsh_op(amt), sa.rsh_op(amt),
-                       "rsh_op(" + std::to_string(amt) + ")");
+      ExpectConsistent(*da->sra_op(amt), sa.sra_op(amt),
+                       "sra_op(" + std::to_string(amt) + ")");
       break;
     }
     case 5: {
@@ -171,16 +171,16 @@ void RunOnce(std::mt19937_64 &rng, const std::vector<PoolEntry> &pool, int op_id
       int64_t amt = rng() % 60;
       auto amt_d = Dlop::create_integer(amt);
       auto amt_s = S::create_integer(amt);
-      ExpectConsistent(*da->lsh_op(*amt_d), sa.lsh_op(amt_s),
-                       "lsh_op(Dlop=" + std::to_string(amt) + ")");
+      ExpectConsistent(*da->shl_op(*amt_d), sa.shl_op(amt_s),
+                       "shl_op(Dlop=" + std::to_string(amt) + ")");
       break;
     }
     case 21: {
       int64_t amt = rng() % 60;
       auto amt_d = Dlop::create_integer(amt);
       auto amt_s = S::create_integer(amt);
-      ExpectConsistent(*da->rsh_op(*amt_d), sa.rsh_op(amt_s),
-                       "rsh_op(Dlop=" + std::to_string(amt) + ")");
+      ExpectConsistent(*da->sra_op(*amt_d), sa.sra_op(amt_s),
+                       "sra_op(Dlop=" + std::to_string(amt) + ")");
       break;
     }
     case 22: {
