@@ -232,6 +232,23 @@ TEST_F(Slop_test, popcount_test) {
   EXPECT_EQ(S::from_pyrope("0xFF").popcount(), 8);
 }
 
+TEST_F(Slop_test, popcount_op_test) {
+  // Slop has no unknowns, so popcount_op is always the exact count as a value.
+  EXPECT_EQ(S::from_pyrope("0b1010").popcount_op().to_i(), 2);
+  EXPECT_EQ(S::from_pyrope("0xFF").popcount_op().to_i(), 8);
+  EXPECT_EQ(S::from_pyrope("0").popcount_op().to_i(), 0);
+}
+
+TEST_F(Slop_test, popcount_op_negative_test) {
+  // Unlike Dlop, Slop has a fixed width and a concrete bit pattern even when
+  // negative, so popcount_op returns the exact count of set bits across the
+  // full width. S is Slop<128>, so -1 (all 128 bits set) → 128.
+  EXPECT_TRUE(S::from_pyrope("-1").is_negative());
+  EXPECT_EQ(S::from_pyrope("-1").popcount_op().to_i(), 128);
+  // -2 = ...11111110 → all bits set except bit 0 → 127.
+  EXPECT_EQ(S::from_pyrope("-2").popcount_op().to_i(), 127);
+}
+
 // =========================================================================
 // Small Slop sizes
 // =========================================================================

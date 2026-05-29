@@ -356,6 +356,69 @@ TEST_F(Dlop_test, popcount_test) {
   EXPECT_EQ(Dlop::from_pyrope("0xFF")->popcount(), 8);
 }
 
+TEST_F(Dlop_test, popcount_op_known) {
+  // No unknowns → exact count, fully known.
+  auto a = Dlop::from_pyrope("0b1010")->popcount_op();
+  EXPECT_FALSE(a->has_unknowns());
+  EXPECT_EQ(a->to_i(), 2);
+
+  auto b = Dlop::from_pyrope("0xFF")->popcount_op();
+  EXPECT_FALSE(b->has_unknowns());
+  EXPECT_EQ(b->to_i(), 8);
+
+  auto z = Dlop::from_pyrope("0")->popcount_op();
+  EXPECT_FALSE(z->has_unknowns());
+  EXPECT_EQ(z->to_i(), 0);
+}
+
+TEST_F(Dlop_test, popcount_op_unknown_range) {
+  // 0sb011?000: two known-set bits + one unknown → popcount in {2,3} = 0ub1?.
+  auto a = Dlop::from_pyrope("0sb011?000")->popcount_op();
+  EXPECT_TRUE(a->has_unknowns());
+  EXPECT_TRUE(a->same_repr(*Dlop::from_pyrope("0ub1?")));
+
+  // 0sb00111??00: three known-set bits + two unknown → {3,4,5}. The tightest
+  // ternary cube covering [3,5] is 0ub??? (the bits diverge from bit 2 down).
+  auto b = Dlop::from_pyrope("0sb00111??00")->popcount_op();
+  EXPECT_TRUE(b->has_unknowns());
+  EXPECT_TRUE(b->same_repr(*Dlop::from_pyrope("0ub???")));
+
+  // Four unknown bits, non-negative → popcount in [0,4] → tightest cube 0ub???
+  // (covers [0,7], the minimal prefix cube containing [0,4]). Uses an unsigned
+  // literal so the leading '?' is not a sign bit that would extend unbounded.
+  auto c = Dlop::from_pyrope("0ub????")->popcount_op();
+  EXPECT_TRUE(c->has_unknowns());
+  EXPECT_TRUE(c->same_repr(*Dlop::from_pyrope("0ub???")));
+
+  // Single unknown bit, no known-set bits → {0,1} = 0ub? (explicit 0 sign bit).
+  auto d = Dlop::from_pyrope("0sb0?")->popcount_op();
+  EXPECT_TRUE(d->has_unknowns());
+  EXPECT_TRUE(d->same_repr(*Dlop::from_pyrope("0ub?")));
+}
+
+TEST_F(Dlop_test, popcount_op_negative) {
+  // A negative value has an unbounded set-bit count (infinite sign extension),
+  // so popcount_op returns a 1-bit unknown (0sb?).
+  EXPECT_TRUE(Dlop::from_pyrope("-1")->is_negative());
+  EXPECT_TRUE(Dlop::from_pyrope("-1")->popcount_op()->same_repr(*Dlop::unknown(1)));
+  EXPECT_TRUE(Dlop::from_pyrope("-5")->popcount_op()->same_repr(*Dlop::unknown(1)));
+}
+
+TEST_F(Dlop_test, popcount_op_negative_or_unknown_sign) {
+  // Popcount is unbounded for negative values and for an unknown sign bit;
+  // both collapse to a 1-bit unknown (0sb?).
+  auto neg = Dlop::from_pyrope("0sb1010")->popcount_op();  // signed, negative
+  EXPECT_TRUE(neg->has_unknowns());
+  EXPECT_TRUE(neg->same_repr(*Dlop::unknown(1)));
+
+  auto usign = Dlop::from_pyrope("0sb????")->popcount_op();  // unknown sign bit
+  EXPECT_TRUE(usign->has_unknowns());
+  EXPECT_TRUE(usign->same_repr(*Dlop::unknown(1)));
+
+  auto usign2 = Dlop::from_pyrope("0sb?010")->popcount_op();  // 0sb?...
+  EXPECT_TRUE(usign2->same_repr(*Dlop::unknown(1)));
+}
+
 TEST_F(Dlop_test, to_pyrope_roundtrip) {
   auto check = [](std::string_view txt) {
     auto d = Dlop::from_pyrope(txt);

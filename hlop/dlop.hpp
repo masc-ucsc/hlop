@@ -421,6 +421,15 @@ public:
   // rxor_op: XOR-reduction (single operand). Returns bool true iff popcount
   // is odd. Unknown bits → 1-bit unknown.
   spool_ptr<Dlop> rxor_op() const;
+  // popcount_op: count of set bits as an Integer Dlop. With unknowns, the
+  // exact count is not knowable: it lies in [ones, ones+u] where `ones` is the
+  // number of known-set bits and `u` the number of unknown bits. The result is
+  // the tightest ternary value (base/extra cube) that covers that whole range
+  // — e.g. 0sb011?000 → 0ub1? (popcount 2 or 3), 0sb00111??00 → 0ub??? (3..5).
+  // A negative value, or one with an unknown sign bit (0sb?...), has unbounded
+  // popcount and returns a 1-bit unknown (0sb?). Distinct from the private
+  // popcount() helper, which returns a plain int and ignores unknowns.
+  spool_ptr<Dlop> popcount_op() const;
 
   // --- Bit manipulation ---
   spool_ptr<Dlop> sext_op(int bits) const;

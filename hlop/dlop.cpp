@@ -1759,6 +1759,64 @@ spool_ptr<Dlop> Dlop::rxor_op() const {
   return create_bool((popcount() & 1) == 1);
 }
 
+// popcount_op: number of set bits, returned as an Integer Dlop.
+//
+// With no unknowns this is the exact count. With unknowns the count is only
+// bounded: every unknown bit independently contributes 0 or 1, so the true
+// popcount lies anywhere in [ones, ones+u] where `ones` is the number of
+// known-set bits (base & ~extra) and `u` the number of unknown bits (extra).
+//
+// We encode that contiguous range as the tightest ternary cube covering it:
+// let lo=ones, hi=ones+u; the bits above the highest position where lo and hi
+// differ form a fixed common prefix, and every bit at or below that position
+// becomes unknown. This is a sound over-approximation — it never drops a real
+// popcount value, though it may admit a few extra ones (e.g. [3,5] widens to
+// 0ub??? = [0,7]).
+spool_ptr<Dlop> Dlop::popcount_op() const {
+  if (is_invalid() || is_nil() || is_string()) {
+    return invalid();
+  }
+
+  // Popcount is only well-defined for non-negative finite values. A negative
+  // value — or one whose sign bit is unknown (e.g. 0sb?...) — sign-extends with
+  // unbounded set/unknown bits, so the count has no finite answer. Return a
+  // generic 1-bit unknown (0sb?). By the base == base|extra invariant an
+  // unknown sign bit also forces base's top bit to 1, so is_negative() catches
+  // both the negative and the unknown-sign cases.
+  if (is_negative()) {
+    return unknown(1);
+  }
+
+  int ones = 0;  // known-set bits: base bit set and not unknown
+  int u    = 0;  // unknown bits
+  for (int i = 0; i < size; ++i) {
+    uint64_t b = static_cast<uint64_t>(base()[i]);
+    uint64_t e = static_cast<uint64_t>(extra()[i]);
+    ones += __builtin_popcountll(b & ~e);
+    u    += __builtin_popcountll(e);
+  }
+
+  if (u == 0) {
+    return create_integer(ones);  // exact, fully known
+  }
+
+  // lo/hi fit in int64: popcount is bounded by the bit count of the value.
+  int64_t lo   = ones;
+  int64_t hi   = static_cast<int64_t>(ones) + u;
+  int64_t diff = lo ^ hi;  // nonzero since u > 0 ⇒ hi > lo
+  int     p    = 63 - __builtin_clzll(static_cast<uint64_t>(diff));
+  int64_t mask = (p >= 63) ? ~int64_t(0) : ((int64_t(1) << (p + 1)) - 1);
+
+  // Fixed common prefix above bit p, with bits [0..p] marked unknown. Unknown
+  // bits must carry base=1 (the base == base|extra invariant), so OR mask into
+  // both base and extra.
+  auto result = create_integer(lo & ~mask);
+  result->or_base(mask);
+  result->or_extra(mask);
+  result->normalize();
+  return result;
+}
+
 spool_ptr<Dlop> Dlop::concat_op(const Dlop& other) const {
   // String ++ string is a *text* concat, not a numeric bit-concat.
   // init_string stores the first character in the low byte (so "ab" is

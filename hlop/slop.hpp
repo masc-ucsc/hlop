@@ -672,6 +672,14 @@ public:
     return create_bool((popcount() & 1) == 1);
   }
 
+  // popcount_op: number of set bits as an Integer Slop. Slop carries no
+  // unknowns, so this is always the exact count (the unknown-range encoding
+  // the Dlop variant needs is not applicable here).
+  Slop popcount_op() const {
+    nil_check_();
+    return Slop(static_cast<int64_t>(popcount()));
+  }
+
   Slop concat_op(const Slop& other) const {
     nil_check_(other);
     int other_bits = other.get_bits();
