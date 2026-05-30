@@ -22,12 +22,12 @@
 
 namespace {
 
-constexpr int kSlopWidth      = 256;  // headroom for 127×127-bit MULT.
-constexpr int kInputWidth     = 127;
-constexpr int kPoolSize       = 32;
-constexpr int kUnknownChanceN = 8;    // ~12.5% of bits become '?' in Dlop.
-constexpr int kIterations     = 8000;
-constexpr uint64_t kSeed      = 0xD1FFEEULL;
+constexpr int      kSlopWidth      = 256;  // headroom for 127×127-bit MULT.
+constexpr int      kInputWidth     = 127;
+constexpr int      kPoolSize       = 32;
+constexpr int      kUnknownChanceN = 8;  // ~12.5% of bits become '?' in Dlop.
+constexpr int      kIterations     = 8000;
+constexpr uint64_t kSeed           = 0xD1FFEEULL;
 
 using S = Slop<kSlopWidth>;
 
@@ -40,7 +40,7 @@ struct PoolEntry {
 };
 
 std::vector<PoolEntry> BuildPool() {
-  std::mt19937_64 rng{kSeed};
+  std::mt19937_64        rng{kSeed};
   std::vector<PoolEntry> pool;
   pool.reserve(kPoolSize);
   for (int i = 0; i < kPoolSize; ++i) {
@@ -68,9 +68,9 @@ std::vector<PoolEntry> BuildPool() {
 // word's base (the unknown-bit at the sign position is, by Dlop convention,
 // the unknown sign — but we treat *higher* positions as the sign extension
 // of base only, which matches bit_test()).
-char DlopTriBit(const Dlop &d, int pos) {
-  int word = pos / 64;
-  int bit  = pos % 64;
+char DlopTriBit(const Dlop& d, int pos) {
+  int  word = pos / 64;
+  int  bit  = pos % 64;
   bool b, u;
   if (word >= d.size) {
     b = d.base()[d.size - 1] < 0;
@@ -79,19 +79,17 @@ char DlopTriBit(const Dlop &d, int pos) {
     // unknown — otherwise it's known and matches the sign of base.
     u = d.extra()[d.size - 1] < 0;
   } else {
-    b = (d.base()[word]  >> bit) & 1;
+    b = (d.base()[word] >> bit) & 1;
     u = (d.extra()[word] >> bit) & 1;
   }
   return u ? '?' : (b ? '1' : '0');
 }
 
 // Slop has no unknowns — just bit_test.
-char SlopBit(const S &s, int pos) {
-  return s.bit_test(pos) ? '1' : '0';
-}
+char SlopBit(const S& s, int pos) { return s.bit_test(pos) ? '1' : '0'; }
 
 // Soundness check: every known bit in d must match the matching bit in s.
-void ExpectConsistent(const Dlop &d, const S &s, const std::string &tag) {
+void ExpectConsistent(const Dlop& d, const S& s, const std::string& tag) {
   ASSERT_FALSE(d.is_invalid()) << "Dlop returned Invalid for " << tag;
   // Compare bit positions [0, max+pad). bit_test sign-extends beyond the
   // natural width so any reasonable upper bound works.
@@ -99,9 +97,10 @@ void ExpectConsistent(const Dlop &d, const S &s, const std::string &tag) {
   for (int pos = 0; pos < w; ++pos) {
     char dc = DlopTriBit(d, pos);
     char sc = SlopBit(s, pos);
-    if (dc == '?') continue;
-    ASSERT_EQ(dc, sc) << tag << ": bit " << pos
-                      << " mismatch (dlop=" << dc << " slop=" << sc << ")";
+    if (dc == '?') {
+      continue;
+    }
+    ASSERT_EQ(dc, sc) << tag << ": bit " << pos << " mismatch (dlop=" << dc << " slop=" << sc << ")";
   }
 }
 
@@ -109,9 +108,9 @@ void ExpectConsistent(const Dlop &d, const S &s, const std::string &tag) {
 // Bitwise + shift + masked-extract are bit-local. add_op propagates the
 // carry chain by forcing every bit at or above the lowest unknown input bit
 // to be unknown in the result.
-void RunOnce(std::mt19937_64 &rng, const std::vector<PoolEntry> &pool, int op_idx) {
-  const auto &ea = pool[rng() % pool.size()];
-  const auto &eb = pool[rng() % pool.size()];
+void RunOnce(std::mt19937_64& rng, const std::vector<PoolEntry>& pool, int op_idx) {
+  const auto& ea = pool[rng() % pool.size()];
+  const auto& eb = pool[rng() % pool.size()];
 
   // The "0sb" prefix tells from_pyrope/from_binary to parse as signed
   // binary; the leading bit becomes the sign.
@@ -122,19 +121,17 @@ void RunOnce(std::mt19937_64 &rng, const std::vector<PoolEntry> &pool, int op_id
 
   switch (op_idx) {
     case 0: ExpectConsistent(*da->and_op(*db), sa.and_op(sb), "and_op"); break;
-    case 1: ExpectConsistent(*da->or_op(*db),  sa.or_op(sb),  "or_op");  break;
+    case 1: ExpectConsistent(*da->or_op(*db), sa.or_op(sb), "or_op"); break;
     case 2: ExpectConsistent(*da->xor_op(*db), sa.xor_op(sb), "xor_op"); break;
     case 3: {
       // Shift by a small known amount so the result fits in Slop<256>.
       int amt = rng() % 60;
-      ExpectConsistent(*da->shl_op(amt), sa.shl_op(amt),
-                       "shl_op(" + std::to_string(amt) + ")");
+      ExpectConsistent(*da->shl_op(amt), sa.shl_op(amt), "shl_op(" + std::to_string(amt) + ")");
       break;
     }
     case 4: {
       int amt = rng() % 60;
-      ExpectConsistent(*da->sra_op(amt), sa.sra_op(amt),
-                       "sra_op(" + std::to_string(amt) + ")");
+      ExpectConsistent(*da->sra_op(amt), sa.sra_op(amt), "sra_op(" + std::to_string(amt) + ")");
       break;
     }
     case 5: {
@@ -142,88 +139,78 @@ void RunOnce(std::mt19937_64 &rng, const std::vector<PoolEntry> &pool, int op_id
       // unknown-propagation fix we just added.
       auto mask_d = Dlop::create_integer((int64_t(1) << 60) - 1);
       auto mask_s = S::create_integer((int64_t(1) << 60) - 1);
-      ExpectConsistent(*da->get_mask_op(*mask_d),
-                       sa.get_mask_op(mask_s),
-                       "get_mask_op");
+      ExpectConsistent(*da->get_mask_op(*mask_d), sa.get_mask_op(mask_s), "get_mask_op");
       break;
     }
-    case 6:  ExpectConsistent(*da->add_op(*db),  sa.add_op(sb),  "add_op");  break;
-    case 7:  ExpectConsistent(*da->sub_op(*db),  sa.sub_op(sb),  "sub_op");  break;
-    case 8:  ExpectConsistent(*da->neg_op(),     sa.neg_op(),    "neg_op");  break;
-    case 9:  ExpectConsistent(*da->mult_op(*db), sa.mult_op(sb), "mult_op"); break;
-    case 10: ExpectConsistent(*da->eq_op(*db),   sa.eq_op(sb),   "eq_op");   break;
-    case 11: ExpectConsistent(*da->lt_op(*db),   sa.lt_op(sb),   "lt_op");   break;
-    case 12: ExpectConsistent(*da->le_op(*db),   sa.le_op(sb),   "le_op");   break;
-    case 13: ExpectConsistent(*da->gt_op(*db),   sa.gt_op(sb),   "gt_op");   break;
-    case 14: ExpectConsistent(*da->ge_op(*db),   sa.ge_op(sb),   "ge_op");   break;
-    case 15: ExpectConsistent(*da->not_op(),     sa.not_op(),    "not_op");  break;
+    case 6: ExpectConsistent(*da->add_op(*db), sa.add_op(sb), "add_op"); break;
+    case 7: ExpectConsistent(*da->sub_op(*db), sa.sub_op(sb), "sub_op"); break;
+    case 8: ExpectConsistent(*da->neg_op(), sa.neg_op(), "neg_op"); break;
+    case 9: ExpectConsistent(*da->mult_op(*db), sa.mult_op(sb), "mult_op"); break;
+    case 10: ExpectConsistent(*da->eq_op(*db), sa.eq_op(sb), "eq_op"); break;
+    case 11: ExpectConsistent(*da->lt_op(*db), sa.lt_op(sb), "lt_op"); break;
+    case 12: ExpectConsistent(*da->le_op(*db), sa.le_op(sb), "le_op"); break;
+    case 13: ExpectConsistent(*da->gt_op(*db), sa.gt_op(sb), "gt_op"); break;
+    case 14: ExpectConsistent(*da->ge_op(*db), sa.ge_op(sb), "ge_op"); break;
+    case 15: ExpectConsistent(*da->not_op(), sa.not_op(), "not_op"); break;
     case 16: {
       int from = 1 + (rng() % 100);  // sign-extend from bit `from`
-      ExpectConsistent(*da->sext_op(from), sa.sext_op(from),
-                       "sext_op(" + std::to_string(from) + ")");
+      ExpectConsistent(*da->sext_op(from), sa.sext_op(from), "sext_op(" + std::to_string(from) + ")");
       break;
     }
-    case 17: ExpectConsistent(*da->ror_op(),  sa.ror_op(),  "ror_op_unary");  break;
+    case 17: ExpectConsistent(*da->ror_op(), sa.ror_op(), "ror_op_unary"); break;
     case 18: ExpectConsistent(*da->rand_op(), sa.rand_op(), "rand_op_unary"); break;
     case 19: ExpectConsistent(*da->rxor_op(), sa.rxor_op(), "rxor_op_unary"); break;
     case 20: {
       // Shift amount is itself a Dlop/Slop value (small concrete int).
-      int64_t amt = rng() % 60;
-      auto amt_d = Dlop::create_integer(amt);
-      auto amt_s = S::create_integer(amt);
-      ExpectConsistent(*da->shl_op(*amt_d), sa.shl_op(amt_s),
-                       "shl_op(Dlop=" + std::to_string(amt) + ")");
+      int64_t amt   = rng() % 60;
+      auto    amt_d = Dlop::create_integer(amt);
+      auto    amt_s = S::create_integer(amt);
+      ExpectConsistent(*da->shl_op(*amt_d), sa.shl_op(amt_s), "shl_op(Dlop=" + std::to_string(amt) + ")");
       break;
     }
     case 21: {
-      int64_t amt = rng() % 60;
-      auto amt_d = Dlop::create_integer(amt);
-      auto amt_s = S::create_integer(amt);
-      ExpectConsistent(*da->sra_op(*amt_d), sa.sra_op(amt_s),
-                       "sra_op(Dlop=" + std::to_string(amt) + ")");
+      int64_t amt   = rng() % 60;
+      auto    amt_d = Dlop::create_integer(amt);
+      auto    amt_s = S::create_integer(amt);
+      ExpectConsistent(*da->sra_op(*amt_d), sa.sra_op(amt_s), "sra_op(Dlop=" + std::to_string(amt) + ")");
       break;
     }
     case 22: {
       // get_mask_op where the mask itself may have unknowns.
-      ExpectConsistent(*da->get_mask_op(*db), sa.get_mask_op(sb),
-                       "get_mask_op(Dlop)");
+      ExpectConsistent(*da->get_mask_op(*db), sa.get_mask_op(sb), "get_mask_op(Dlop)");
       break;
     }
     case 23: {
       // set_mask_op: replace bits in da selected by mask with bits from value.
-      const auto &ev = pool[rng() % pool.size()];
-      auto mask_d = Dlop::create_integer((int64_t(1) << 50) - 1);
-      auto mask_s = S::create_integer((int64_t(1) << 50) - 1);
-      auto val_d  = Dlop::from_pyrope("0sb" + ev.masked);
-      auto val_s  = S::from_pyrope("0sb" + ev.concrete);
-      ExpectConsistent(*da->set_mask_op(*mask_d, *val_d),
-                       sa.set_mask_op(mask_s, val_s),
-                       "set_mask_op");
+      const auto& ev     = pool[rng() % pool.size()];
+      auto        mask_d = Dlop::create_integer((int64_t(1) << 50) - 1);
+      auto        mask_s = S::create_integer((int64_t(1) << 50) - 1);
+      auto        val_d  = Dlop::from_pyrope("0sb" + ev.masked);
+      auto        val_s  = S::from_pyrope("0sb" + ev.concrete);
+      ExpectConsistent(*da->set_mask_op(*mask_d, *val_d), sa.set_mask_op(mask_s, val_s), "set_mask_op");
       break;
     }
     case 24: {
       // div_op needs single-word values (multi-word divn not implemented in
       // blop.hpp). Use a small (~60-bit) signed numerator/denominator with
       // a non-zero divisor. Denominator built so it can't resolve to zero.
-      int64_t num   = static_cast<int64_t>(rng()) >> 4;          // ~60 bits
-      int64_t denom = (static_cast<int64_t>(rng()) >> 4) | 1;    // non-zero
-      auto sa_small = S::create_integer(num);
-      auto sb_small = S::create_integer(denom);
-      auto da_small = Dlop::create_integer(num);
-      auto db_small = Dlop::create_integer(denom);
-      ExpectConsistent(*da_small->div_op(*db_small),
-                       sa_small.div_op(sb_small), "div_op");
+      int64_t num      = static_cast<int64_t>(rng()) >> 4;        // ~60 bits
+      int64_t denom    = (static_cast<int64_t>(rng()) >> 4) | 1;  // non-zero
+      auto    sa_small = S::create_integer(num);
+      auto    sb_small = S::create_integer(denom);
+      auto    da_small = Dlop::create_integer(num);
+      auto    db_small = Dlop::create_integer(denom);
+      ExpectConsistent(*da_small->div_op(*db_small), sa_small.div_op(sb_small), "div_op");
       break;
     }
     case 25: {
-      int64_t num   = static_cast<int64_t>(rng()) >> 4;
-      int64_t denom = (static_cast<int64_t>(rng()) >> 4) | 1;
-      auto sa_small = S::create_integer(num);
-      auto sb_small = S::create_integer(denom);
-      auto da_small = Dlop::create_integer(num);
-      auto db_small = Dlop::create_integer(denom);
-      ExpectConsistent(*da_small->mod_op(*db_small),
-                       sa_small.mod_op(sb_small), "mod_op");
+      int64_t num      = static_cast<int64_t>(rng()) >> 4;
+      int64_t denom    = (static_cast<int64_t>(rng()) >> 4) | 1;
+      auto    sa_small = S::create_integer(num);
+      auto    sb_small = S::create_integer(denom);
+      auto    da_small = Dlop::create_integer(num);
+      auto    db_small = Dlop::create_integer(denom);
+      ExpectConsistent(*da_small->mod_op(*db_small), sa_small.mod_op(sb_small), "mod_op");
       break;
     }
     case 26: {
@@ -242,9 +229,9 @@ void RunOnce(std::mt19937_64 &rng, const std::vector<PoolEntry> &pool, int op_id
 }  // namespace
 
 TEST(SlopDlopDiff, fuzz_property) {
-  auto pool = BuildPool();
+  auto            pool = BuildPool();
   std::mt19937_64 rng{kSeed ^ 0xA5A5A5A5ULL};
-  constexpr int kOpCount = 27;
+  constexpr int   kOpCount = 27;
   for (int i = 0; i < kIterations; ++i) {
     int op = i % kOpCount;
     RunOnce(rng, pool, op);
@@ -265,7 +252,7 @@ TEST(SlopDlopDiff, and_or_xor_concrete_vs_masked) {
   auto db = Dlop::from_pyrope("0sb00110011");
 
   ExpectConsistent(*da->and_op(*db), sa.and_op(sb), "and");
-  ExpectConsistent(*da->or_op(*db),  sa.or_op(sb),  "or");
+  ExpectConsistent(*da->or_op(*db), sa.or_op(sb), "or");
   ExpectConsistent(*da->xor_op(*db), sa.xor_op(sb), "xor");
 }
 
@@ -277,10 +264,9 @@ TEST(SlopDlopDiff, add_op_carry_chain_soundness) {
   // bits 0..1 are invariant (both 0); bit 2 upward must be unknown.
   auto da = Dlop::from_pyrope("0sb??11");
   auto db = Dlop::from_pyrope("0sb0001");
-  for (const char *concrete : {"0sb0011", "0sb0111", "0sb1011", "0sb1111"}) {
+  for (const char* concrete : {"0sb0011", "0sb0111", "0sb1011", "0sb1111"}) {
     auto sa = S::from_pyrope(concrete);
     auto sb = S::from_pyrope("0sb0001");
-    ExpectConsistent(*da->add_op(*db), sa.add_op(sb),
-                     std::string("add_op@") + concrete);
+    ExpectConsistent(*da->add_op(*db), sa.add_op(sb), std::string("add_op@") + concrete);
   }
 }

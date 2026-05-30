@@ -102,7 +102,11 @@ TEST_F(Dlop_test, concat_op_string_byte_aligned) {
   // operand's bytes end up offset by one bit and the round-trip via
   // to_string returns garbage. The cases below all have the property
   // that the top byte's MSB is 0, which is where the off-by-one bites.
-  struct Case { const char* lhs; const char* rhs; const char* expected; };
+  struct Case {
+    const char* lhs;
+    const char* rhs;
+    const char* expected;
+  };
   for (const auto& [lhs, rhs, expected] : std::vector<Case>{
            {"'a'", "'b'", "ab"},
            {"'hello '", "'world'", "hello world"},
@@ -504,7 +508,7 @@ TEST_F(Dlop_test, nil_is_distinct) {
 // Mask helpers
 // =========================================================================
 TEST_F(Dlop_test, get_mask_value_static) {
-  EXPECT_EQ(Dlop::get_mask_value(0)->to_i(), 1);   // bits==0 -> 1 per the contract
+  EXPECT_EQ(Dlop::get_mask_value(0)->to_i(), 1);  // bits==0 -> 1 per the contract
   EXPECT_EQ(Dlop::get_mask_value(1)->to_i(), 1);
   EXPECT_EQ(Dlop::get_mask_value(4)->to_i(), 0xF);
   EXPECT_EQ(Dlop::get_mask_value(8)->to_i(), 0xFF);
@@ -546,7 +550,7 @@ TEST_F(Dlop_test, get_mask_range_shifted) {
 
 TEST_F(Dlop_test, get_mask_range_pairs_two_runs) {
   // 0b0011_0011 -> two runs of 2 ones each at positions 0 and 4
-  auto a = Dlop::create_integer(0x33);
+  auto a     = Dlop::create_integer(0x33);
   auto pairs = a->get_mask_range_pairs();
   ASSERT_EQ(pairs.size(), 2u);
   EXPECT_EQ(pairs[0].first, 0);

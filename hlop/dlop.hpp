@@ -460,8 +460,7 @@ public:
   // subtracted. This mirrors the LGraph Sum cell pin polarity.
   static spool_ptr<Dlop> sum_op(std::span<const spool_ptr<Dlop>> a, std::span<const spool_ptr<Dlop>> b);
   static spool_ptr<Dlop> sum_op(std::initializer_list<spool_ptr<Dlop>> a, std::initializer_list<spool_ptr<Dlop>> b) {
-    return sum_op(std::span<const spool_ptr<Dlop>>(a.begin(), a.size()),
-                  std::span<const spool_ptr<Dlop>>(b.begin(), b.size()));
+    return sum_op(std::span<const spool_ptr<Dlop>>(a.begin(), a.size()), std::span<const spool_ptr<Dlop>>(b.begin(), b.size()));
   }
 
   // --- Multiplexers / LUT (computing cells from livehd graph/cell.*) ---

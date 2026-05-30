@@ -299,7 +299,7 @@ TEST_F(Slop_test, hotmux_op) {
 }
 
 TEST_F(Slop_test, lut_op) {
-  using S8 = Slop<8>;
+  using S8   = Slop<8>;
   auto table = S8::from_pyrope("0b1010");  // bit0=0 bit1=1 bit2=0 bit3=1
 
   EXPECT_TRUE(S8::lut_op(table, S8::create_integer(0)).is_known_false());

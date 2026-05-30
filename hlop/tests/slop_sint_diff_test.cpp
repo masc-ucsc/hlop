@@ -47,16 +47,18 @@ using u128 = unsigned __int128;
 // Subclass-friend trick to expose SInt<W>::raw_copy_out, which is protected.
 template <int W>
 struct SIntPeek : public SInt<W> {
-  SIntPeek(const SInt<W> &s) : SInt<W>(s) {}
+  SIntPeek(const SInt<W>& s) : SInt<W>(s) {}
   using SInt<W>::raw_copy_out;
 };
 
 // Convert Slop<W> to a {lo, hi} pair covering bits [0..127] via bit_test.
 template <int W>
-std::array<uint64_t, 2> slop_low128(const Slop<W> &s) {
+std::array<uint64_t, 2> slop_low128(const Slop<W>& s) {
   std::array<uint64_t, 2> out{0, 0};
   for (int i = 0; i < 128; ++i) {
-    if (s.bit_test(i)) out[i / 64] |= uint64_t{1} << (i % 64);
+    if (s.bit_test(i)) {
+      out[i / 64] |= uint64_t{1} << (i % 64);
+    }
   }
   return out;
 }
@@ -64,14 +66,18 @@ std::array<uint64_t, 2> slop_low128(const Slop<W> &s) {
 // Convert a SInt<W> to a {lo, hi} pair, sign-extended from bit W-1 up to
 // bit 127. Used for bitwise-op cross-checks at every width.
 template <int W>
-std::array<uint64_t, 2> sint_low128(const SInt<W> &s) {
-  constexpr int nw = (W + 63) / 64;
+std::array<uint64_t, 2> sint_low128(const SInt<W>& s) {
+  constexpr int            nw = (W + 63) / 64;
   std::array<uint64_t, nw> raw{};
   SIntPeek<W>(s).raw_copy_out(raw.data());
 
   std::array<uint64_t, 2> out{0, 0};
-  if constexpr (nw >= 1) out[0] = raw[0];
-  if constexpr (nw >= 2) out[1] = raw[1];
+  if constexpr (nw >= 1) {
+    out[0] = raw[0];
+  }
+  if constexpr (nw >= 2) {
+    out[1] = raw[1];
+  }
 
   constexpr int sign_word = (W - 1) / 64;
   constexpr int sign_bit  = (W - 1) % 64;
@@ -97,9 +103,9 @@ i128 sext_to_i128(i128 v) {
   if constexpr (W >= 128) {
     return v;
   } else {
-    u128 mask    = (u128{1} << W) - 1;
-    u128 lo      = static_cast<u128>(v) & mask;
-    bool neg     = (lo >> (W - 1)) & 1;
+    u128 mask = (u128{1} << W) - 1;
+    u128 lo   = static_cast<u128>(v) & mask;
+    bool neg  = (lo >> (W - 1)) & 1;
     return neg ? static_cast<i128>(lo | ~mask) : static_cast<i128>(lo);
   }
 }
@@ -111,12 +117,12 @@ std::array<uint64_t, 2> i128_to_words(i128 v) {
 }
 
 template <int N>
-bool uint_truth(const UInt<N> &u) {
+bool uint_truth(const UInt<N>& u) {
   return u.as_single_word() != 0;
 }
 
 template <int W>
-bool slop_truth(const Slop<W> &s) {
+bool slop_truth(const Slop<W>& s) {
   return s.is_known_true();
 }
 
@@ -139,37 +145,35 @@ int first_diff_bit(std::array<uint64_t, 2> a, std::array<uint64_t, 2> b) {
   for (int i = 0; i < W; ++i) {
     bool ab = (a[i / 64] >> (i % 64)) & 1;
     bool bb = (b[i / 64] >> (i % 64)) & 1;
-    if (ab != bb) return i;
+    if (ab != bb) {
+      return i;
+    }
   }
   return -1;
 }
 
-#define EXPECT_BITS_EQ(W_, GOT, WANT, OP)                                                          \
-  do {                                                                                             \
-    auto _g = (GOT);                                                                               \
-    auto _w = (WANT);                                                                              \
-    int  _b = first_diff_bit<W_>(_g, _w);                                                          \
-    if (_b >= 0) {                                                                                 \
-      ADD_FAILURE() << "W=" << W_ << " iter=" << iter << " op=" << OP << " bit=" << _b             \
-                    << " a=0x" << std::hex << static_cast<uint64_t>(a)                             \
-                    << " b=0x" << static_cast<uint64_t>(b)                                         \
-                    << " got=0x" << _g[1] << ":" << _g[0]                                          \
-                    << " want=0x" << _w[1] << ":" << _w[0] << std::dec;                            \
-      return;                                                                                      \
-    }                                                                                              \
+#define EXPECT_BITS_EQ(W_, GOT, WANT, OP)                                                                                    \
+  do {                                                                                                                       \
+    auto _g = (GOT);                                                                                                         \
+    auto _w = (WANT);                                                                                                        \
+    int  _b = first_diff_bit<W_>(_g, _w);                                                                                    \
+    if (_b >= 0) {                                                                                                           \
+      ADD_FAILURE() << "W=" << W_ << " iter=" << iter << " op=" << OP << " bit=" << _b << " a=0x" << std::hex                \
+                    << static_cast<uint64_t>(a) << " b=0x" << static_cast<uint64_t>(b) << " got=0x" << _g[1] << ":" << _g[0] \
+                    << " want=0x" << _w[1] << ":" << _w[0] << std::dec;                                                      \
+      return;                                                                                                                \
+    }                                                                                                                        \
   } while (0)
 
-#define EXPECT_TRUTH_EQ(GOT, WANT, OP)                                                             \
-  do {                                                                                             \
-    bool _g = (GOT);                                                                               \
-    bool _w = (WANT);                                                                              \
-    if (_g != _w) {                                                                                \
-      ADD_FAILURE() << "iter=" << iter << " op=" << OP                                             \
-                    << " a=0x" << std::hex << static_cast<uint64_t>(a) << " b=0x"                  \
-                    << static_cast<uint64_t>(b) << std::dec                                        \
-                    << " got=" << _g << " want=" << _w;                                            \
-      return;                                                                                      \
-    }                                                                                              \
+#define EXPECT_TRUTH_EQ(GOT, WANT, OP)                                                                               \
+  do {                                                                                                               \
+    bool _g = (GOT);                                                                                                 \
+    bool _w = (WANT);                                                                                                \
+    if (_g != _w) {                                                                                                  \
+      ADD_FAILURE() << "iter=" << iter << " op=" << OP << " a=0x" << std::hex << static_cast<uint64_t>(a) << " b=0x" \
+                    << static_cast<uint64_t>(b) << std::dec << " got=" << _g << " want=" << _w;                      \
+      return;                                                                                                        \
+    }                                                                                                                \
   } while (0)
 
 template <int W>
@@ -184,36 +188,26 @@ void CheckPair(int64_t a_in, int64_t b_in, int iter) {
   i128 b128 = sext_to_i128<W>(static_cast<i128>(b));
 
   // ----- Bitwise (SInt oracle: bit-local, no cross-word carries). -----
-  EXPECT_BITS_EQ(W, slop_low128(a_sl.and_op(b_sl)),
-                 sint_low128<W>(SInt<W>(a_si & b_si)), "and");
-  EXPECT_BITS_EQ(W, slop_low128(a_sl.or_op(b_sl)),
-                 sint_low128<W>(SInt<W>(a_si | b_si)), "or");
-  EXPECT_BITS_EQ(W, slop_low128(a_sl.xor_op(b_sl)),
-                 sint_low128<W>(SInt<W>(a_si ^ b_si)), "xor");
-  EXPECT_BITS_EQ(W, slop_low128(a_sl.not_op()),
-                 sint_low128<W>(SInt<W>(~a_si)), "not");
+  EXPECT_BITS_EQ(W, slop_low128(a_sl.and_op(b_sl)), sint_low128<W>(SInt<W>(a_si & b_si)), "and");
+  EXPECT_BITS_EQ(W, slop_low128(a_sl.or_op(b_sl)), sint_low128<W>(SInt<W>(a_si | b_si)), "or");
+  EXPECT_BITS_EQ(W, slop_low128(a_sl.xor_op(b_sl)), sint_low128<W>(SInt<W>(a_si ^ b_si)), "xor");
+  EXPECT_BITS_EQ(W, slop_low128(a_sl.not_op()), sint_low128<W>(SInt<W>(~a_si)), "not");
 
   // ----- Arithmetic (__int128 oracle — SInt's core_add_sub has a
   //       multi-word carry bug that produces wrong results for some
   //       edge cases at W>64). -----
-  EXPECT_BITS_EQ(W, slop_low128(a_sl.add_op(b_sl)),
-                 i128_to_words(sext_to_i128<W>(a128 + b128)), "add");
-  EXPECT_BITS_EQ(W, slop_low128(a_sl.sub_op(b_sl)),
-                 i128_to_words(sext_to_i128<W>(a128 - b128)), "sub");
-  EXPECT_BITS_EQ(W, slop_low128(a_sl.neg_op()),
-                 i128_to_words(sext_to_i128<W>(-a128)), "neg");
-  EXPECT_BITS_EQ(W, slop_low128(a_sl.mult_op(b_sl)),
-                 i128_to_words(sext_to_i128<W>(a128 * b128)), "mult");
+  EXPECT_BITS_EQ(W, slop_low128(a_sl.add_op(b_sl)), i128_to_words(sext_to_i128<W>(a128 + b128)), "add");
+  EXPECT_BITS_EQ(W, slop_low128(a_sl.sub_op(b_sl)), i128_to_words(sext_to_i128<W>(a128 - b128)), "sub");
+  EXPECT_BITS_EQ(W, slop_low128(a_sl.neg_op()), i128_to_words(sext_to_i128<W>(-a128)), "neg");
+  EXPECT_BITS_EQ(W, slop_low128(a_sl.mult_op(b_sl)), i128_to_words(sext_to_i128<W>(a128 * b128)), "mult");
 
   // ----- Div / mod — SInt supports only ≤64-bit, but native int64_t is
   //       a safe oracle for any W ≤ 64.  For W > 64, Slop's div_op uses
   //       Blop::div which is single-word only (asserts), so we skip. -----
   if constexpr (W <= 64) {
     if (b != 0 && !(a == std::numeric_limits<int64_t>::min() && b == -1)) {
-      EXPECT_BITS_EQ(W, slop_low128(a_sl.div_op(b_sl)),
-                     i128_to_words(sext_to_i128<W>(a128 / b128)), "div");
-      EXPECT_BITS_EQ(W, slop_low128(a_sl.mod_op(b_sl)),
-                     i128_to_words(sext_to_i128<W>(a128 % b128)), "mod");
+      EXPECT_BITS_EQ(W, slop_low128(a_sl.div_op(b_sl)), i128_to_words(sext_to_i128<W>(a128 / b128)), "div");
+      EXPECT_BITS_EQ(W, slop_low128(a_sl.mod_op(b_sl)), i128_to_words(sext_to_i128<W>(a128 % b128)), "mod");
     }
   }
 
@@ -221,12 +215,11 @@ void CheckPair(int64_t a_in, int64_t b_in, int iter) {
   //       signed above).  SInt's signed le/ge are unreliable for two
   //       negative operands; eq is bitwise so we still cross-check it. -----
   EXPECT_TRUTH_EQ(slop_truth(a_sl.eq_op(b_sl)), a == b, "eq");
-  EXPECT_TRUTH_EQ(slop_truth(a_sl.lt_op(b_sl)), a <  b, "lt");
+  EXPECT_TRUTH_EQ(slop_truth(a_sl.lt_op(b_sl)), a < b, "lt");
   EXPECT_TRUTH_EQ(slop_truth(a_sl.le_op(b_sl)), a <= b, "le");
-  EXPECT_TRUTH_EQ(slop_truth(a_sl.gt_op(b_sl)), a >  b, "gt");
+  EXPECT_TRUTH_EQ(slop_truth(a_sl.gt_op(b_sl)), a > b, "gt");
   EXPECT_TRUTH_EQ(slop_truth(a_sl.ge_op(b_sl)), a >= b, "ge");
-  EXPECT_TRUTH_EQ(slop_truth(a_sl.eq_op(b_sl)),
-                  uint_truth(a_si == b_si), "eq_sint");
+  EXPECT_TRUTH_EQ(slop_truth(a_sl.eq_op(b_sl)), uint_truth(a_si == b_si), "eq_sint");
 
   // ----- Reductions.
   //   ror_op: any bit set ≡ value != 0. Matches SInt's orr at every width.
@@ -239,14 +232,13 @@ void CheckPair(int64_t a_in, int64_t b_in, int iter) {
   //       oracle so wide widths work uniformly.  SInt is also fine here
   //       (single-word inputs → cross-word carries don't apply), but
   //       __int128 keeps the comparator simple. -----
-  for (uint64_t shamt : {uint64_t{0}, uint64_t{1}, uint64_t{5}, uint64_t{16},
-                          uint64_t{31}, uint64_t{32}, uint64_t{63},
-                          uint64_t{W - 1}}) {
-    if (shamt >= static_cast<uint64_t>(W)) continue;
-    EXPECT_BITS_EQ(W, slop_low128(a_sl.shl_op(static_cast<int64_t>(shamt))),
-                   i128_to_words(sext_to_i128<W>(a128 << shamt)), "lsh");
-    EXPECT_BITS_EQ(W, slop_low128(a_sl.sra_op(static_cast<int64_t>(shamt))),
-                   i128_to_words(sext_to_i128<W>(a128 >> shamt)), "rsh");
+  for (uint64_t shamt :
+       {uint64_t{0}, uint64_t{1}, uint64_t{5}, uint64_t{16}, uint64_t{31}, uint64_t{32}, uint64_t{63}, uint64_t{W - 1}}) {
+    if (shamt >= static_cast<uint64_t>(W)) {
+      continue;
+    }
+    EXPECT_BITS_EQ(W, slop_low128(a_sl.shl_op(static_cast<int64_t>(shamt))), i128_to_words(sext_to_i128<W>(a128 << shamt)), "lsh");
+    EXPECT_BITS_EQ(W, slop_low128(a_sl.sra_op(static_cast<int64_t>(shamt))), i128_to_words(sext_to_i128<W>(a128 >> shamt)), "rsh");
   }
 }
 
@@ -282,7 +274,9 @@ void RunCorner() {
   for (int64_t a : vals) {
     for (int64_t b : vals) {
       CheckPair<W>(a, b, iter++);
-      if (::testing::Test::HasFailure()) return;
+      if (::testing::Test::HasFailure()) {
+        return;
+      }
     }
   }
 }
@@ -294,7 +288,9 @@ void RunFuzz(int seed_xor) {
     int64_t a = static_cast<int64_t>(rng());
     int64_t b = static_cast<int64_t>(rng());
     CheckPair<W>(a, b, iter);
-    if (::testing::Test::HasFailure()) return;
+    if (::testing::Test::HasFailure()) {
+      return;
+    }
   }
 }
 

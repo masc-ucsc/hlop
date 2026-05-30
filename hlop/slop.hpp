@@ -388,8 +388,7 @@ public:
   }
 
   static Slop sum_op(std::initializer_list<Slop> a, std::initializer_list<Slop> b) {
-    return sum_op(std::span<const Slop>(a.begin(), a.size()),
-                  std::span<const Slop>(b.begin(), b.size()));
+    return sum_op(std::span<const Slop>(a.begin(), a.size()), std::span<const Slop>(b.begin(), b.size()));
   }
 
   Slop mult_op(const Slop& other) const {

@@ -1487,8 +1487,8 @@ spool_ptr<Dlop> Dlop::eq_op(const Dlop& other) const {
   // and at least one position is unknown.
   int16_t rsz = std::max(size, other.size);
 
-  const int64_t b_sign = (size > 0 && base()[size - 1] < 0) ? -1 : 0;
-  const int64_t e_sign = (size > 0 && extra()[size - 1] < 0) ? -1 : 0;
+  const int64_t b_sign  = (size > 0 && base()[size - 1] < 0) ? -1 : 0;
+  const int64_t e_sign  = (size > 0 && extra()[size - 1] < 0) ? -1 : 0;
   const int64_t ob_sign = (other.size > 0 && other.base()[other.size - 1] < 0) ? -1 : 0;
   const int64_t oe_sign = (other.size > 0 && other.extra()[other.size - 1] < 0) ? -1 : 0;
 
@@ -1607,18 +1607,18 @@ static CmpResult three_way_cmp(const Dlop& a, const Dlop& b) {
 
     int64_t combined_extra = e1 | e2;
     // diff_known: bits where both sides are known AND they disagree.
-    int64_t diff_known     = (b1 ^ b2) & ~combined_extra;
-    uint64_t interesting   = static_cast<uint64_t>(diff_known | combined_extra);
+    int64_t  diff_known  = (b1 ^ b2) & ~combined_extra;
+    uint64_t interesting = static_cast<uint64_t>(diff_known | combined_extra);
 
     while (interesting != 0) {
-      int bit = 63 - __builtin_clzll(interesting);  // highest set bit
+      int      bit  = 63 - __builtin_clzll(interesting);  // highest set bit
       uint64_t mask = uint64_t(1) << bit;
-      bool unk = (combined_extra & static_cast<int64_t>(mask)) != 0;
+      bool     unk  = (combined_extra & static_cast<int64_t>(mask)) != 0;
       if (unk) {
         return CmpResult::Unknown;
       }
       // Known disagreement at this bit.
-      int p = w * 64 + bit;
+      int  p      = w * 64 + bit;
       bool b1_set = (b1 & static_cast<int64_t>(mask)) != 0;
       bool b2_set = (b2 & static_cast<int64_t>(mask)) != 0;
       // Equal case excluded by diff_known.
@@ -1638,8 +1638,8 @@ static CmpResult three_way_cmp(const Dlop& a, const Dlop& b) {
 spool_ptr<Dlop> Dlop::lt_op(const Dlop& other) const {
   auto r = three_way_cmp(*this, other);
   switch (r) {
-    case CmpResult::Less:    return create_bool(true);
-    case CmpResult::Equal:   return create_bool(false);
+    case CmpResult::Less: return create_bool(true);
+    case CmpResult::Equal: return create_bool(false);
     case CmpResult::Greater: return create_bool(false);
     case CmpResult::Unknown: return unknown_bool();
   }
@@ -1648,8 +1648,8 @@ spool_ptr<Dlop> Dlop::lt_op(const Dlop& other) const {
 spool_ptr<Dlop> Dlop::le_op(const Dlop& other) const {
   auto r = three_way_cmp(*this, other);
   switch (r) {
-    case CmpResult::Less:    return create_bool(true);
-    case CmpResult::Equal:   return create_bool(true);
+    case CmpResult::Less: return create_bool(true);
+    case CmpResult::Equal: return create_bool(true);
     case CmpResult::Greater: return create_bool(false);
     case CmpResult::Unknown: return unknown_bool();
   }
@@ -1658,8 +1658,8 @@ spool_ptr<Dlop> Dlop::le_op(const Dlop& other) const {
 spool_ptr<Dlop> Dlop::gt_op(const Dlop& other) const {
   auto r = three_way_cmp(*this, other);
   switch (r) {
-    case CmpResult::Less:    return create_bool(false);
-    case CmpResult::Equal:   return create_bool(false);
+    case CmpResult::Less: return create_bool(false);
+    case CmpResult::Equal: return create_bool(false);
     case CmpResult::Greater: return create_bool(true);
     case CmpResult::Unknown: return unknown_bool();
   }
@@ -1668,8 +1668,8 @@ spool_ptr<Dlop> Dlop::gt_op(const Dlop& other) const {
 spool_ptr<Dlop> Dlop::ge_op(const Dlop& other) const {
   auto r = three_way_cmp(*this, other);
   switch (r) {
-    case CmpResult::Less:    return create_bool(false);
-    case CmpResult::Equal:   return create_bool(true);
+    case CmpResult::Less: return create_bool(false);
+    case CmpResult::Equal: return create_bool(true);
     case CmpResult::Greater: return create_bool(true);
     case CmpResult::Unknown: return unknown_bool();
   }
@@ -2038,7 +2038,7 @@ spool_ptr<Dlop> Dlop::popcount_op() const {
     uint64_t b = static_cast<uint64_t>(base()[i]);
     uint64_t e = static_cast<uint64_t>(extra()[i]);
     ones += __builtin_popcountll(b & ~e);
-    u    += __builtin_popcountll(e);
+    u += __builtin_popcountll(e);
   }
 
   if (u == 0) {
