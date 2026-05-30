@@ -307,3 +307,43 @@ TEST_F(Slop_test, lut_op) {
   EXPECT_TRUE(S8::lut_op(table, S8::create_integer(2)).is_known_false());
   EXPECT_TRUE(S8::lut_op(table, S8::create_integer(3)).is_known_true());
 }
+
+// get_mask_op(mask) — multi-bit mask packs the selected bits LSB-first.
+TEST_F(Slop_test, get_mask_op_multibit_packed) {
+  using S32 = Slop<32>;
+  auto v    = S32::create_integer(0xABCD);
+  // 0xff selects the low byte -> 0xCD.
+  EXPECT_EQ(v.get_mask_op(S32::create_integer(0xff)).to_i(), 0xCD);
+  // 0xf00 selects bits 8..11 -> 0xB, packed down to the low nibble.
+  EXPECT_EQ(v.get_mask_op(S32::create_integer(0xf00)).to_i(), 0xB);
+}
+
+// get_mask_op(mask) — a NEGATIVE source is sign-extended past its minimal
+// width before extraction (the result is unsigned). Regression: -1 has a
+// minimal width of one sign bit, so capping extraction at src_bits wrongly
+// returned 1 instead of 0xff for get_mask(-1, 0xff). Unlike Dlop, Slop is
+// fixed width and stores the full sign extension, so bit_test handles it.
+TEST_F(Slop_test, get_mask_op_negative_source_sign_extends) {
+  using S32 = Slop<32>;
+  auto neg1 = S32::create_integer(-1);
+  EXPECT_EQ(neg1.get_mask_op(S32::create_integer(0xff)).to_i(), 0xff);    // low 8 bits of ...1111
+  EXPECT_EQ(neg1.get_mask_op(S32::create_integer(0xf)).to_i(), 0xf);      // low 4 bits
+  EXPECT_EQ(neg1.get_mask_op(S32::create_integer(0xffff)).to_i(), 0xffff);
+
+  // -2 == ...11111110 -> low byte is 0xfe.
+  auto neg2 = S32::create_integer(-2);
+  EXPECT_EQ(neg2.get_mask_op(S32::create_integer(0xff)).to_i(), 0xfe);
+
+  // Positive sources are unaffected (sign bit is 0 above their width).
+  auto p511 = S32::create_integer(0x1ff);
+  EXPECT_EQ(p511.get_mask_op(S32::create_integer(0xff)).to_i(), 0xff);
+}
+
+// get_mask_op(mask) — single-bit mask returns the signed 1-bit integer
+// (-1 if the bit is set, 0 if clear), not the unsigned 1/0.
+TEST_F(Slop_test, get_mask_op_single_bit) {
+  using S32 = Slop<32>;
+  auto v    = S32::create_integer(0b1010);
+  EXPECT_EQ(v.get_mask_op(S32::create_integer(0b0010)).to_i(), -1);  // bit set
+  EXPECT_EQ(v.get_mask_op(S32::create_integer(0b0001)).to_i(), 0);   // bit clear
+}

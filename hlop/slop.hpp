@@ -578,7 +578,13 @@ public:
       if (!selected) {
         continue;
       }
-      bool b = (i < src_bits) && bit_test(i);
+      // A positive mask may select bit positions ABOVE the source's minimal
+      // width; those are the sign bit (0 for non-negative, 1 for negative), so
+      // do NOT cap at src_bits. bit_test already sign-extends past storage, so
+      // get_mask(-1, 0xff) yields 0xff rather than 1. (Slop is fixed width and
+      // stores full sign extension, so no explicit is_negative() read is needed
+      // like in Dlop's minimally-sized representation.)
+      bool b = bit_test(i);
       if (b) {
         int word = out_bit / 64;
         int bit  = out_bit % 64;
