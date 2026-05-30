@@ -819,6 +819,13 @@ TEST_F(Dlop_test, and_with_zero_is_zero) {
   EXPECT_FALSE(r->has_unknowns());
 }
 
+TEST_F(Dlop_test, and_unknown_truth_table_across_bits) {
+  auto a = Dlop::from_pyrope("0b111_000_???");
+  auto b = Dlop::from_pyrope("0b01?_01?_01?");
+  auto r = a->and_op(*b);
+  EXPECT_TRUE(r->same_repr(*Dlop::from_pyrope("0b01?_000_0??")));
+}
+
 TEST_F(Dlop_test, or_with_minus_one_is_minus_one) {
   // Identity fold: v | -1 == -1, even when v has unknowns.
   auto v       = Dlop::from_pyrope("0sb?1?0");
@@ -828,6 +835,13 @@ TEST_F(Dlop_test, or_with_minus_one_is_minus_one) {
   EXPECT_TRUE(r->is_known_true());
   // All-ones value reads as -1.
   EXPECT_EQ(r->to_i(), int64_t(-1));
+}
+
+TEST_F(Dlop_test, or_unknown_truth_table_across_bits) {
+  auto a = Dlop::from_pyrope("0b111_000_???");
+  auto b = Dlop::from_pyrope("0b01?_01?_01?");
+  auto r = a->or_op(*b);
+  EXPECT_TRUE(r->same_repr(*Dlop::from_pyrope("0b111_01?_?1?")));
 }
 
 TEST_F(Dlop_test, or_with_all_ones_byte_forces_known) {
