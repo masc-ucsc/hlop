@@ -1792,10 +1792,18 @@ spool_ptr<Dlop> Dlop::get_mask_op(const Dlop& mask) const {
   bool mask_neg           = mask.is_negative();
   int  src_bits           = get_bits();
   int  positive_mask_bits = mask_neg ? (mask_bits - 1) : mask_bits;
-  int  end_pos            = mask_neg ? src_bits : std::min(src_bits, positive_mask_bits);
+  // A positive mask may select bit positions ABOVE the source's minimal width;
+  // those bits are the sign (0 for non-negative, 1 for negative), so extraction
+  // must extend to the mask width and NOT cap at src_bits. Otherwise
+  // get_mask(-1, 0xff) wrongly yields 1 instead of 255 (the source's minimal
+  // width for -1 is a single sign bit).
+  int  end_pos            = mask_neg ? src_bits : positive_mask_bits;
 
-  // Pre-size the output: at most src_bits selected (when all bits pass).
-  int  out_words = std::max(1, (src_bits + 63) / 64);
+  // Pre-size the output: number of extracted bits is bounded by positive mask
+  // width (a positive mask) or by src_bits (a negative-mask carve-out). Sizing
+  // by src_bits alone would undersize when positive_mask_bits > src_bits.
+  int  max_out_bits = mask_neg ? src_bits : positive_mask_bits;
+  int  out_words    = std::max(1, (max_out_bits + 63) / 64);
   auto result    = make_result(Type::Integer, static_cast<int16_t>(out_words));
   for (int i = 0; i < out_words; ++i) {
     result->base()[i]  = 0;
@@ -1813,7 +1821,9 @@ spool_ptr<Dlop> Dlop::get_mask_op(const Dlop& mask) const {
     int  sbit  = i % 64;
     int  oword = out / 64;
     int  obit  = out % 64;
-    bool b     = (sword < size) ? ((base()[sword] >> sbit) & 1) : false;
+    // Beyond the stored words the source is its sign bit (two's complement):
+    // 1 for a negative value, 0 otherwise. Unknown bits never extend past size.
+    bool b     = (sword < size) ? ((base()[sword] >> sbit) & 1) : is_negative();
     bool u     = (sword < size) ? ((extra()[sword] >> sbit) & 1) : false;
     if (b || u) {
       result->base()[oword] |= int64_t(1) << obit;

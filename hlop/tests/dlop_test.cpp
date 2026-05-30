@@ -568,6 +568,25 @@ TEST_F(Dlop_test, get_mask_op_multibit_packed) {
   EXPECT_EQ(v->get_mask_op(Dlop::create_integer(0xf00))->to_i(), 0xe);
 }
 
+// get_mask_op(mask) — a NEGATIVE source is sign-extended past its minimal
+// width before extraction (the result is unsigned). Regression: -1 has a
+// minimal width of one sign bit, so capping extraction at src_bits wrongly
+// returned 1 instead of 0xff for get_mask(-1, 0xff).
+TEST_F(Dlop_test, get_mask_op_negative_source_sign_extends) {
+  auto neg1 = Dlop::create_integer(-1);
+  EXPECT_EQ(neg1->get_mask_op(Dlop::create_integer(0xff))->to_i(), 0xff);    // low 8 bits of ...1111
+  EXPECT_EQ(neg1->get_mask_op(Dlop::create_integer(0xf))->to_i(), 0xf);      // low 4 bits
+  EXPECT_EQ(neg1->get_mask_op(Dlop::create_integer(0xffff))->to_i(), 0xffff);
+
+  // -2 == ...11111110 → low byte is 0xfe.
+  auto neg2 = Dlop::create_integer(-2);
+  EXPECT_EQ(neg2->get_mask_op(Dlop::create_integer(0xff))->to_i(), 0xfe);
+
+  // Positive sources are unaffected (sign bit is 0 above their width).
+  auto p511 = Dlop::create_integer(0x1ff);
+  EXPECT_EQ(p511->get_mask_op(Dlop::create_integer(0xff))->to_i(), 0xff);
+}
+
 // get_mask_op(mask) — single-bit mask returns the signed 1-bit integer
 // (-1 if the bit is set, 0 if clear), not the unsigned 1/0.
 TEST_F(Dlop_test, get_mask_op_single_bit_set_is_neg_one) {
