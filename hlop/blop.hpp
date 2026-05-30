@@ -49,7 +49,7 @@ public:
     uint64_t carry = __builtin_uaddll_overflow(src1[0], src2[0], reinterpret_cast<unsigned long long*>(dest));
     for (size_t i = 1; i < dest_sz - 1; ++i) {
       unsigned long long tmp;
-      carry = __builtin_uaddll_overflow(src1[i], carry, &tmp);
+      carry  = __builtin_uaddll_overflow(src1[i], carry, &tmp);
       carry |= __builtin_uaddll_overflow(tmp, src2[i], reinterpret_cast<unsigned long long*>(dest + i));
     }
     if (dest_sz > 1) {
@@ -65,7 +65,7 @@ public:
       uint64_t carry = __builtin_uaddll_overflow(src1[0], src2[0], reinterpret_cast<unsigned long long*>(&dest[0]));
       for (size_t i = 1; i < N - 1; ++i) {
         unsigned long long tmp;
-        carry = __builtin_uaddll_overflow(src1[i], carry, &tmp);
+        carry  = __builtin_uaddll_overflow(src1[i], carry, &tmp);
         carry |= __builtin_uaddll_overflow(tmp, src2[i], reinterpret_cast<unsigned long long*>(&dest[i]));
       }
       dest[N - 1] = src1[N - 1] + src2[N - 1] + carry;
@@ -82,7 +82,7 @@ public:
     uint64_t carry = __builtin_usubll_overflow(src1[0], src2[0], reinterpret_cast<unsigned long long*>(dest));
     for (size_t i = 1; i < dest_sz - 1; ++i) {
       unsigned long long tmp;
-      carry = __builtin_usubll_overflow(src1[i], carry, &tmp);
+      carry  = __builtin_usubll_overflow(src1[i], carry, &tmp);
       carry |= __builtin_usubll_overflow(tmp, src2[i], reinterpret_cast<unsigned long long*>(dest + i));
     }
     if (dest_sz > 1) {
@@ -98,7 +98,7 @@ public:
       uint64_t carry = __builtin_usubll_overflow(src1[0], src2[0], reinterpret_cast<unsigned long long*>(&dest[0]));
       for (size_t i = 1; i < N - 1; ++i) {
         unsigned long long tmp;
-        carry = __builtin_usubll_overflow(src1[i], carry, &tmp);
+        carry  = __builtin_usubll_overflow(src1[i], carry, &tmp);
         carry |= __builtin_usubll_overflow(tmp, src2[i], reinterpret_cast<unsigned long long*>(&dest[i]));
       }
       dest[N - 1] = src1[N - 1] - src2[N - 1] - carry;
@@ -159,8 +159,8 @@ public:
       }
     } else {
       for (int i = dest_sz - word_up - 1; i > 0; --i) {
-        auto tmp          = src1[i];
-        dest[i + word_up] = static_cast<uint64_t>(src1[i - 1]) >> (64 - bits_up);
+        auto tmp           = src1[i];
+        dest[i + word_up]  = static_cast<uint64_t>(src1[i - 1]) >> (64 - bits_up);
         dest[i + word_up] |= tmp << bits_up;
       }
       dest[word_up] = src1[0] << bits_up;
@@ -187,8 +187,8 @@ public:
         }
       } else {
         for (int i = N - word_up - 1; i > 0; --i) {
-          auto tmp          = src1[i];
-          dest[i + word_up] = static_cast<uint64_t>(src1[i - 1]) >> (64 - bits_up);
+          auto tmp           = src1[i];
+          dest[i + word_up]  = static_cast<uint64_t>(src1[i - 1]) >> (64 - bits_up);
           dest[i + word_up] |= tmp << bits_up;
         }
         dest[word_up] = src1[0] << bits_up;
@@ -222,9 +222,9 @@ public:
       }
     } else {
       for (size_t i = word_down; i < dest_sz - 1; i++) {
-        auto tmp = static_cast<uint64_t>(src1[i]) >> bits_down;
-        tmp |= static_cast<uint64_t>(src1[i + 1]) << (64 - bits_down);
-        dest[i - word_down] = tmp;
+        auto tmp             = static_cast<uint64_t>(src1[i]) >> bits_down;
+        tmp                 |= static_cast<uint64_t>(src1[i + 1]) << (64 - bits_down);
+        dest[i - word_down]  = tmp;
       }
       dest[dest_sz - 1 - word_down] = src1[dest_sz - 1] >> bits_down;  // arithmetic shift on top word
     }
@@ -252,9 +252,9 @@ public:
         }
       } else {
         for (size_t i = word_down; i < N - 1; i++) {
-          auto tmp = static_cast<uint64_t>(src1[i]) >> bits_down;
-          tmp |= static_cast<uint64_t>(src1[i + 1]) << (64 - bits_down);
-          dest[i - word_down] = tmp;
+          auto tmp             = static_cast<uint64_t>(src1[i]) >> bits_down;
+          tmp                 |= static_cast<uint64_t>(src1[i + 1]) << (64 - bits_down);
+          dest[i - word_down]  = tmp;
         }
         dest[N - 1 - word_down] = src1[N - 1] >> bits_down;
       }

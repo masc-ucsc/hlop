@@ -42,7 +42,7 @@ class Slop {
     // Nil is Pyrope's tagged unit ("absence of value"). Slop intentionally does
     // NOT propagate Nil through ops at runtime — every op asserts that no input
     // is Nil. A Nil reaching an op is a caller bug, not a representable result.
-    Nil = 4
+    Nil      = 4
   };
 
   Type                         type_;
@@ -151,7 +151,7 @@ public:
     }
     int leftover = nbits % 64;
     if (leftover > 0 && words - 1 < n_words) {
-      int64_t mask = (int64_t(1) << leftover) - 1;
+      int64_t mask        = (int64_t(1) << leftover) - 1;
       s.base_[words - 1] &= mask;
     }
     return s;
@@ -774,10 +774,10 @@ public:
   }
 
   // --- Queries ---
-  bool is_negative() const { return Blop::is_negative<n_words>(base_); }
-  bool is_positive() const { return !is_negative(); }
-  bool is_known_false() const { return Blop::is_zero<n_words>(base_); }
-  bool is_known_true() const { return !Blop::is_zero<n_words>(base_); }
+  bool           is_negative() const { return Blop::is_negative<n_words>(base_); }
+  bool           is_positive() const { return !is_negative(); }
+  bool           is_known_false() const { return Blop::is_zero<n_words>(base_); }
+  bool           is_known_true() const { return !Blop::is_zero<n_words>(base_); }
   // Slop never carries unknowns past parse — always false. Kept so templated
   // kernels in eval.hpp (shared with Dlop) compile; their `if (has_unknowns())`
   // branches are dead code for Slop.
@@ -786,7 +786,7 @@ public:
   // is_ref: encoded as Type::Invalid carrying a non-zero packed-string
   // payload — mirrors Lconst::is_ref. `invalid()` (no value) has all-zero
   // base; `from_ref` keeps the same Invalid tag but stores bytes there.
-  bool is_ref() const {
+  bool           is_ref() const {
     if (type_ != Type::Invalid) {
       return false;
     }

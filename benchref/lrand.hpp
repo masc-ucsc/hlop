@@ -131,7 +131,11 @@ public:
 #endif
   }
 
-  std::array<uint64_t, 4> state() const { return {{m_a, m_b, m_c, m_counter}}; }
+  std::array<uint64_t, 4> state() const {
+    return {
+        {m_a, m_b, m_c, m_counter}
+    };
+  }
 
   void state(std::array<uint64_t, 4> const& s) {
     m_a       = s[0];
@@ -233,8 +237,8 @@ public:
     if (1 == m_rand) {
       m_rand = rint.uniform<uint64_t>(std::numeric_limits<uint64_t>::max()) | s_mask_left1;
     }
-    bool const ret = m_rand & 1;
-    m_rand >>= 1;
+    bool const ret   = m_rand & 1;
+    m_rand         >>= 1;
     return ret;
   }
 };

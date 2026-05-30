@@ -55,28 +55,28 @@ std::vector<DValue> DContext::collect_pin(const std::vector<DInput>& inputs, con
 
 DResult DContext::execute(const DCall& call) {
   switch (call.op) {
-    case Ntype_op::Sum: return exec_sum(call);
-    case Ntype_op::Mult: return exec_mult(call);
-    case Ntype_op::Div: return exec_div(call);
-    case Ntype_op::And: return exec_and(call);
-    case Ntype_op::Or: return exec_or(call);
-    case Ntype_op::Xor: return exec_xor(call);
-    case Ntype_op::Ror: return exec_ror(call);
-    case Ntype_op::Not: return exec_not(call);
+    case Ntype_op::Sum     : return exec_sum(call);
+    case Ntype_op::Mult    : return exec_mult(call);
+    case Ntype_op::Div     : return exec_div(call);
+    case Ntype_op::And     : return exec_and(call);
+    case Ntype_op::Or      : return exec_or(call);
+    case Ntype_op::Xor     : return exec_xor(call);
+    case Ntype_op::Ror     : return exec_ror(call);
+    case Ntype_op::Not     : return exec_not(call);
     case Ntype_op::Get_mask: return exec_get_mask(call);
     case Ntype_op::Set_mask: return exec_set_mask(call);
-    case Ntype_op::Sext: return exec_sext(call);
-    case Ntype_op::LT: return exec_lt(call);
-    case Ntype_op::EQ: return exec_eq(call);
-    case Ntype_op::SHL: return exec_shl(call);
-    case Ntype_op::SRA: return exec_sra(call);
-    case Ntype_op::Mux: return exec_mux(call);
-    case Ntype_op::LUT: return exec_lut(call);
-    case Ntype_op::Flop: return exec_flop(call);
-    case Ntype_op::Latch: return exec_latch(call);
-    case Ntype_op::Fflop: return exec_fflop(call);
-    case Ntype_op::Memory: return exec_memory(call);
-    default: assert(false && "Unsupported op in DContext::execute"); return {};
+    case Ntype_op::Sext    : return exec_sext(call);
+    case Ntype_op::LT      : return exec_lt(call);
+    case Ntype_op::EQ      : return exec_eq(call);
+    case Ntype_op::SHL     : return exec_shl(call);
+    case Ntype_op::SRA     : return exec_sra(call);
+    case Ntype_op::Mux     : return exec_mux(call);
+    case Ntype_op::LUT     : return exec_lut(call);
+    case Ntype_op::Flop    : return exec_flop(call);
+    case Ntype_op::Latch   : return exec_latch(call);
+    case Ntype_op::Fflop   : return exec_fflop(call);
+    case Ntype_op::Memory  : return exec_memory(call);
+    default                : assert(false && "Unsupported op in DContext::execute"); return {};
   }
 }
 

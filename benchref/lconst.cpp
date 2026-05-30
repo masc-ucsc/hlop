@@ -109,7 +109,7 @@ Lconst::Lconst(int64_t v) {
   bits         = calc_num_bits();
 }
 
-Lconst::Lconst(const Number &v) {
+Lconst::Lconst(const Number& v) {
   explicit_str = false;
   num          = v;
   bits         = calc_num_bits();
@@ -167,7 +167,7 @@ Lconst Lconst::from_binary(std::string_view txt, bool unsigned_result) {
     num = 0;
     for (int i = bin.size() - 1; i >= 0; --i) {
       num <<= 8;
-      num |= static_cast<uint8_t>(bin[i]);
+      num  |= static_cast<uint8_t>(bin[i]);
     }
 
     return Lconst(true, bin.size(), num);
@@ -201,13 +201,34 @@ Lconst Lconst::from_string(std::string_view orig_txt) {
     }
     char nxt = orig_txt[i + 1];
     switch (nxt) {
-      case 'n':  decoded.push_back('\n'); ++i; continue;
-      case 'r':  decoded.push_back('\r'); ++i; continue;
-      case 't':  decoded.push_back('\t'); ++i; continue;
-      case '0':  decoded.push_back('\0'); ++i; continue;
-      case '\\': decoded.push_back('\\'); ++i; continue;
-      case '\'': decoded.push_back('\''); ++i; continue;
-      case '"':  decoded.push_back('"');  ++i; continue;
+      case 'n':
+        decoded.push_back('\n');
+        ++i;
+        continue;
+      case 'r':
+        decoded.push_back('\r');
+        ++i;
+        continue;
+      case 't':
+        decoded.push_back('\t');
+        ++i;
+        continue;
+      case '0':
+        decoded.push_back('\0');
+        ++i;
+        continue;
+      case '\\':
+        decoded.push_back('\\');
+        ++i;
+        continue;
+      case '\'':
+        decoded.push_back('\'');
+        ++i;
+        continue;
+      case '"':
+        decoded.push_back('"');
+        ++i;
+        continue;
       case 'x': {
         if (i + 3 >= orig_txt.size()) {
           break;  // incomplete \x — fall through to literal
@@ -229,7 +250,7 @@ Lconst Lconst::from_string(std::string_view orig_txt) {
   Number num;
   for (int i = static_cast<int>(decoded.size()) - 1; i >= 0; --i) {
     num <<= 8;
-    num += static_cast<unsigned char>(decoded[i]);
+    num  += static_cast<unsigned char>(decoded[i]);
   }
 
   return Lconst(true, decoded.size() * 8, num);
@@ -240,7 +261,7 @@ Lconst Lconst::from_ref(std::string_view orig_txt) {
 
   for (int i = orig_txt.size() - 1; i >= 0; --i) {
     num <<= 8;
-    num += orig_txt[i];
+    num  += orig_txt[i];
   }
 
   return Lconst(true, 0, num);
@@ -322,8 +343,7 @@ Lconst Lconst::from_pyrope(std::string_view orig_txt) {
     // produce the same packed bytes (escape interpretation, when added,
     // belongs in prp2lnast or a dedicated path).
     bool quoted = orig_txt.size() > 1
-                  && ((orig_txt.front() == '\'' && orig_txt.back() == '\'')
-                      || (orig_txt.front() == '"' && orig_txt.back() == '"'));
+                  && ((orig_txt.front() == '\'' && orig_txt.back() == '\'') || (orig_txt.front() == '"' && orig_txt.back() == '"'));
     char quote_ch = quoted ? orig_txt.front() : '\0';
     if (quoted) {
       --start_i;
@@ -332,16 +352,15 @@ Lconst Lconst::from_pyrope(std::string_view orig_txt) {
 
     Number num;
     // alnum string (not number, still convert to num)
-    bool prev_escaped = false;
+    bool   prev_escaped = false;
     for (int i = start_i - 1; i >= end_i; --i) {
       num <<= 8;
-      num |= orig_txt[i];
+      num  |= orig_txt[i];
 
       // Inner quotes must be escaped — same rule for ' and "; the matching
       // quote character is determined by the outer wrapper.
       if (quoted && orig_txt[i] == quote_ch && !prev_escaped && i != 0) {
-        throw std::runtime_error(
-            std::format("ERROR: {} malformed pyrope string. {} must be escaped\n", orig_txt, quote_ch));
+        throw std::runtime_error(std::format("ERROR: {} malformed pyrope string. {} must be escaped\n", orig_txt, quote_ch));
       }
 
       if (orig_txt[i] == '\\') {
@@ -422,7 +441,7 @@ Lconst Lconst::unknown(Bits_t nbits) {
 
   for (Bits_t i = 0u; i < nbits; ++i) {
     lc.num <<= 8;
-    lc.num |= '?';
+    lc.num  |= '?';
   }
   lc.bits = nbits;  // 0sb?>>>
   if (nbits > 0) {
@@ -437,13 +456,13 @@ Lconst Lconst::unknown_positive(Bits_t nbits) {
 
   for (Bits_t i = 0u; i < nbits - 1; ++i) {
     lc.num <<= 8;
-    lc.num |= '?';
+    lc.num  |= '?';
   }
   lc.bits = nbits;  // 0sb?>>>
   if (nbits > 1) {
-    lc.num <<= 8;
-    lc.num |= '0';
-    lc.explicit_str = true;
+    lc.num          <<= 8;
+    lc.num           |= '0';
+    lc.explicit_str   = true;
   }
 
   return lc;
@@ -454,13 +473,13 @@ Lconst Lconst::unknown_negative(Bits_t nbits) {
 
   for (Bits_t i = 0u; i < nbits - 1; ++i) {
     lc.num <<= 8;
-    lc.num |= '?';
+    lc.num  |= '?';
   }
   lc.bits = nbits;  // 0sb?>>>
   if (nbits > 1) {
-    lc.num <<= 8;
-    lc.num |= '1';
-    lc.explicit_str = true;
+    lc.num          <<= 8;
+    lc.num           |= '1';
+    lc.explicit_str   = true;
   }
 
   return lc;
@@ -474,12 +493,12 @@ void Lconst::dump() const {
   }
 }
 
-void Lconst::adjust(const Lconst &o) {
+void Lconst::adjust(const Lconst& o) {
   explicit_str = o.explicit_str && (bits == 0 || explicit_str);
   bits         = calc_num_bits(num);
 }
 
-std::pair<std::string, std::string> Lconst::match_binary(const Lconst &l, const Lconst &r) {
+std::pair<std::string, std::string> Lconst::match_binary(const Lconst& l, const Lconst& r) {
   auto l_str = l.to_binary();
   auto r_str = r.to_binary();
   if (l_str.size() != r_str.size()) {
@@ -539,10 +558,10 @@ std::vector<std::pair<int, int>> Lconst::get_mask_range_pairs() const {
   auto start_pos = 0u;
 
   while (tmp_num) {
-    auto delta_pos = boost::multiprecision::lsb(tmp_num);
-    start_pos += delta_pos;
-    tmp_num >>= delta_pos;
-    size_t nones = 0;
+    auto delta_pos   = boost::multiprecision::lsb(tmp_num);
+    start_pos       += delta_pos;
+    tmp_num        >>= delta_pos;
+    size_t nones     = 0;
     while (true) {
       if (!boost::multiprecision::bit_test(tmp_num, nones)) {
         break;
@@ -604,9 +623,9 @@ Lconst Lconst::get_mask_value(Bits_t h, Bits_t l) {
   }
   assert(h > l);
 
-  Number res_num = Number(1) << (h - l + 1);
-  res_num -= Number(1);
-  res_num <<= l;
+  Number res_num   = Number(1) << (h - l + 1);
+  res_num         -= Number(1);
+  res_num        <<= l;
 
   return Lconst(false, calc_num_bits(res_num), res_num);
 }
@@ -703,8 +722,8 @@ Lconst Lconst::get_mask_op() const {
     if (sign == '0') {
       return Lconst(explicit_str, bits, num);
     }
-    Number res_num = get_num() << 8;
-    res_num |= '0';  // add ZERO to be 0b0whatever
+    Number res_num  = get_num() << 8;
+    res_num        |= '0';  // add ZERO to be 0b0whatever
     return Lconst(explicit_str, bits + 8, res_num);
   }
 
@@ -722,7 +741,7 @@ Lconst Lconst::get_mask_op() const {
   return Lconst(false, calc_num_bits(res_num), res_num);
 }
 
-Lconst Lconst::get_mask_op(const Lconst &mask) const {
+Lconst Lconst::get_mask_op(const Lconst& mask) const {
   if (is_nil() || mask.is_nil()) {
     return nil();
   }
@@ -794,7 +813,7 @@ Lconst Lconst::get_mask_op(const Lconst &mask) const {
 //
 // set_mask(foo ^ (rand & bar_mask), bar_mask, get_mask(foo, bar_mask)) == foo
 
-Lconst Lconst::set_mask_op(const Lconst &mask, const Lconst &value) const {
+Lconst Lconst::set_mask_op(const Lconst& mask, const Lconst& value) const {
   if (is_nil() || mask.is_nil() || value.is_nil()) {
     return nil();
   }
@@ -867,15 +886,15 @@ Lconst Lconst::set_mask_op(const Lconst &mask, const Lconst &value) const {
   }
 
   if (mask.is_negative()) {
-    auto res_value = (value.num >> value_pos) << mask_max;  // clear used bits, get in position
-    res_num &= (Number(1) << mask_max) - 1;                 // clear upper result_bits to use res_value left
-    res_num |= res_value;
+    auto res_value  = (value.num >> value_pos) << mask_max;  // clear used bits, get in position
+    res_num        &= (Number(1) << mask_max) - 1;           // clear upper result_bits to use res_value left
+    res_num        |= res_value;
   }
 
   return Lconst(false, calc_num_bits(res_num), res_num);
 }
 
-Lconst Lconst::add_op(const Lconst &o) const {
+Lconst Lconst::add_op(const Lconst& o) const {
   if (is_nil() || o.is_nil()) {
     return nil();
   }
@@ -896,7 +915,7 @@ Lconst Lconst::add_op(const Lconst &o) const {
     auto s_txt = to_binary();
     auto o_txt = o.to_binary();
 
-    auto bit_at = [](const std::string &t, size_t lsb_off) -> char {
+    auto bit_at = [](const std::string& t, size_t lsb_off) -> char {
       if (lsb_off < t.size()) {
         return t[t.size() - 1 - lsb_off];
       }
@@ -906,9 +925,7 @@ Lconst Lconst::add_op(const Lconst &o) const {
     const char s_sign = s_txt.empty() ? '0' : s_txt.front();
     const char o_sign = o_txt.empty() ? '0' : o_txt.front();
     const bool signed_result
-        = is_negative() || o.is_negative()
-          || (has_unknowns() && s_sign != '0')
-          || (o.has_unknowns() && o_sign != '0');
+        = is_negative() || o.is_negative() || (has_unknowns() && s_sign != '0') || (o.has_unknowns() && o_sign != '0');
 
     const auto width = std::max(s_txt.size(), o_txt.size());
 
@@ -916,8 +933,8 @@ Lconst Lconst::add_op(const Lconst &o) const {
     body.reserve(width + 1);
     char carry = '0';
     for (size_t i = 0; i < width; ++i) {
-      const char a = bit_at(s_txt, i);
-      const char b = bit_at(o_txt, i);
+      const char a     = bit_at(s_txt, i);
+      const char b     = bit_at(o_txt, i);
       auto       count = [](char c) {
         struct R {
           int ones;
@@ -930,11 +947,11 @@ Lconst Lconst::add_op(const Lconst &o) const {
         }
         return r;
       };
-      auto       ca = count(a);
-      auto       cb = count(b);
-      auto       cc = count(carry);
-      const int  n_ones     = ca.ones + cb.ones + cc.ones;
-      const int  n_unknowns = ca.unknowns + cb.unknowns + cc.unknowns;
+      auto      ca         = count(a);
+      auto      cb         = count(b);
+      auto      cc         = count(carry);
+      const int n_ones     = ca.ones + cb.ones + cc.ones;
+      const int n_unknowns = ca.unknowns + cb.unknowns + cc.unknowns;
 
       char ch;
       if (n_unknowns == 0) {
@@ -974,7 +991,7 @@ Lconst Lconst::add_op(const Lconst &o) const {
   return res;
 }
 
-Lconst Lconst::concat_op(const Lconst &o) const {
+Lconst Lconst::concat_op(const Lconst& o) const {
   if (is_nil() || o.is_nil()) {
     return nil();
   }
@@ -999,7 +1016,7 @@ Lconst Lconst::concat_op(const Lconst &o) const {
   return Lconst(false, calc_num_bits(res_num), res_num);
 }
 
-Lconst Lconst::mult_op(const Lconst &o) const {
+Lconst Lconst::mult_op(const Lconst& o) const {
   if (is_nil() || o.is_nil()) {
     return nil();
   }
@@ -1024,7 +1041,7 @@ Lconst Lconst::mult_op(const Lconst &o) const {
   return res;
 }
 
-Lconst Lconst::div_op(const Lconst &o) const {
+Lconst Lconst::div_op(const Lconst& o) const {
   if (is_nil() || o.is_nil()) {
     return nil();
   }
@@ -1065,7 +1082,7 @@ Lconst Lconst::div_op(const Lconst &o) const {
   return res;
 }
 
-Lconst Lconst::sub_op(const Lconst &o) const {
+Lconst Lconst::sub_op(const Lconst& o) const {
   if (is_nil() || o.is_nil()) {
     return nil();
   }
@@ -1153,7 +1170,7 @@ Lconst Lconst::rsh_op(Bits_t amount) const {
   return Lconst(is_string(), calc_num_bits(res_num), res_num);
 }
 
-Lconst Lconst::ror_op(const Lconst &o) const {
+Lconst Lconst::ror_op(const Lconst& o) const {
   if (is_nil() || o.is_nil()) {
     return nil();
   }
@@ -1162,7 +1179,7 @@ Lconst Lconst::ror_op(const Lconst &o) const {
   return Lconst(false, 1, res_num);
 }
 
-Lconst Lconst::or_op(const Lconst &o) const {
+Lconst Lconst::or_op(const Lconst& o) const {
   if (is_nil() || o.is_nil()) {
     return nil();
   }
@@ -1206,7 +1223,7 @@ Lconst Lconst::not_op() const {
   if (unlikely(has_unknowns())) {
     bool unsigned_result = is_negative();  // toggle sign
     auto result          = to_binary();
-    for (auto &ch : result) {
+    for (auto& ch : result) {
       if (ch == '0') {
         ch = '1';
       } else if (ch == '1') {
@@ -1241,7 +1258,7 @@ Lconst Lconst::neg_op() const {
   return Lconst(false, calc_num_bits(res_num), res_num);
 }
 
-Lconst Lconst::and_op(const Lconst &o) const {
+Lconst Lconst::and_op(const Lconst& o) const {
   if (is_nil() || o.is_nil()) {
     return nil();
   }
@@ -1276,7 +1293,7 @@ Lconst Lconst::and_op(const Lconst &o) const {
   return res;
 }
 
-Lconst Lconst::eq_op(const Lconst &o) const {
+Lconst Lconst::eq_op(const Lconst& o) const {
   // Equality is intentionally NOT nil-propagating: `nil == nil` is true
   // and `nil == <anything else>` is false. Pyrope code uses this pattern
   // to test cast failures, e.g. `uint("-1") == nil`. Arithmetic and
@@ -1303,7 +1320,7 @@ Lconst Lconst::eq_op(const Lconst &o) const {
     }
 
     auto [l_str, r_str] = match_binary(*this, o);
-    bool any_unknown = false;
+    bool any_unknown    = false;
     for (auto i = 0u; i < l_str.size(); ++i) {
       const char l = l_str[i];
       const char r = r_str[i];
@@ -1340,9 +1357,9 @@ std::string Lconst::to_string(Number num) {
   std::string str;
   Number      tmp = num;
   while (tmp) {
-    auto ch = static_cast<unsigned char>(tmp & 0xFF);
-    str     = str.append(1, ch);
-    tmp >>= 8;
+    auto ch   = static_cast<unsigned char>(tmp & 0xFF);
+    str       = str.append(1, ch);
+    tmp     >>= 8;
   }
 
   return str;

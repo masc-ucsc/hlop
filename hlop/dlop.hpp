@@ -47,7 +47,7 @@ private:
     // Nil is Pyrope's tagged unit ("absence of value") — distinct from Invalid
     // (which means error / unset). All arithmetic and logical ops propagate Nil:
     // any binary op with a Nil operand returns Nil.
-    Nil = 4
+    Nil      = 4
   };
 
   static inline thread_local std::vector<raw_ptr_pool*> free_pool;
@@ -173,9 +173,9 @@ public:
   }
 
   // Ensure both operands have same size, growing if needed
-  void grow_to(int16_t new_size);
+  void                   grow_to(int16_t new_size);
   // Shrink to minimum needed words
-  void normalize();
+  void                   normalize();
   // Grow result to hold at least 'needed' words
   static spool_ptr<Dlop> make_result(Type tp, int16_t sz);
 
@@ -194,7 +194,7 @@ public:
   static spool_ptr<Dlop> merge_unknown(const std::vector<const Dlop*>& cands);
   // Read the `extra` (unknown) bit at position `pos`, sign-extending past the
   // stored width — the unknown-bit analogue of bit_test.
-  bool unknown_bit_test(int pos) const;
+  bool                   unknown_bit_test(int pos) const;
 
   bool has_extra() const {
     if (size <= 1) {
@@ -401,11 +401,11 @@ public:
   // same_repr: structural compare of base AND extra. Two values with the same
   // unknown pattern (e.g. 0sb?1 vs 0sb?1) are equal. Use for containers, dedup,
   // and hashing where reflexivity is required.
-  bool same_repr(const Dlop& other) const;
+  bool            same_repr(const Dlop& other) const;
   // is_known_eq: three-valued equality collapsed to bool — true only when both
   // sides are fully known and numerically equal; false if either side has any
   // unknown bits. Use in asserts where "definitely equal" is the question.
-  bool is_known_eq(const Dlop& other) const;
+  bool            is_known_eq(const Dlop& other) const;
 
   // Three-valued comparison ops returning a Bool Dlop (or a 1-bit unknown
   // when either side has unknown bits). Mirror eq_op's unknown handling so

@@ -108,11 +108,11 @@ TEST_F(Dlop_test, concat_op_string_byte_aligned) {
     const char* expected;
   };
   for (const auto& [lhs, rhs, expected] : std::vector<Case>{
-           {"'a'", "'b'", "ab"},
-           {"'hello '", "'world'", "hello world"},
+           {     "'a'",      "'b'",           "ab"},
+           {"'hello '",  "'world'",  "hello world"},
            {"'hello '", "'world '", "hello world "},
-           {"' '", "' '", "  "},
-       }) {
+           {     "' '",      "' '",           "  "},
+  }) {
     auto a = Dlop::from_pyrope(lhs);
     auto b = Dlop::from_pyrope(rhs);
     auto c = a->concat_op(*b);

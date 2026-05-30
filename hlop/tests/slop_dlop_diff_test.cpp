@@ -142,10 +142,10 @@ void RunOnce(std::mt19937_64& rng, const std::vector<PoolEntry>& pool, int op_id
       ExpectConsistent(*da->get_mask_op(*mask_d), sa.get_mask_op(mask_s), "get_mask_op");
       break;
     }
-    case 6: ExpectConsistent(*da->add_op(*db), sa.add_op(sb), "add_op"); break;
-    case 7: ExpectConsistent(*da->sub_op(*db), sa.sub_op(sb), "sub_op"); break;
-    case 8: ExpectConsistent(*da->neg_op(), sa.neg_op(), "neg_op"); break;
-    case 9: ExpectConsistent(*da->mult_op(*db), sa.mult_op(sb), "mult_op"); break;
+    case 6 : ExpectConsistent(*da->add_op(*db), sa.add_op(sb), "add_op"); break;
+    case 7 : ExpectConsistent(*da->sub_op(*db), sa.sub_op(sb), "sub_op"); break;
+    case 8 : ExpectConsistent(*da->neg_op(), sa.neg_op(), "neg_op"); break;
+    case 9 : ExpectConsistent(*da->mult_op(*db), sa.mult_op(sb), "mult_op"); break;
     case 10: ExpectConsistent(*da->eq_op(*db), sa.eq_op(sb), "eq_op"); break;
     case 11: ExpectConsistent(*da->lt_op(*db), sa.lt_op(sb), "lt_op"); break;
     case 12: ExpectConsistent(*da->le_op(*db), sa.le_op(sb), "le_op"); break;

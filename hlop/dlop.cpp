@@ -206,8 +206,8 @@ void Dlop::init_unknown_negative(int nbits) {
     return;
   }
   init_unknown(nbits);
-  int word = (nbits - 1) / 64;
-  int bit  = (nbits - 1) % 64;
+  int word       = (nbits - 1) / 64;
+  int bit        = (nbits - 1) % 64;
   extra()[word] &= ~(int64_t(1) << bit);
 }
 
@@ -502,9 +502,9 @@ void Dlop::mut_add(const Dlop& other) {
   }
 
   if (size == 1 && other.size == 1) {
-    base()[0] += other.base()[0];
+    base()[0]  += other.base()[0];
     extra()[0] |= other.extra()[0];
-    base()[0] |= extra()[0];
+    base()[0]  |= extra()[0];
   } else {
     int64_t* tmp = alloc(size);
     memcpy(tmp, other.base(), other.size * sizeof(int64_t));
@@ -545,13 +545,13 @@ spool_ptr<Dlop> Dlop::add_op(const Dlop& other) const {
 
   if (rsz == 1 && size == 1 && other.size == 1) {
     // Fast path
-    uint64_t combined = static_cast<uint64_t>(extra()[0]) | static_cast<uint64_t>(other.extra()[0]);
-    dlop->base()[0]   = base()[0] + other.base()[0];
+    uint64_t combined  = static_cast<uint64_t>(extra()[0]) | static_cast<uint64_t>(other.extra()[0]);
+    dlop->base()[0]    = base()[0] + other.base()[0];
     // hi_fill: all bits at or above the lowest set bit of combined. Zero if
     // combined is zero. Equivalent to `~(combined - 1) & ~0` when combined>0.
-    uint64_t hi_fill = 0u - (combined & (0u - combined));
-    dlop->extra()[0] = static_cast<int64_t>(hi_fill);
-    dlop->base()[0] |= dlop->extra()[0];  // maintain invariant
+    uint64_t hi_fill   = 0u - (combined & (0u - combined));
+    dlop->extra()[0]   = static_cast<int64_t>(hi_fill);
+    dlop->base()[0]   |= dlop->extra()[0];  // maintain invariant
   } else {
     // Multi-word: sign-extend shorter operand
     const int64_t* s1 = base();
@@ -643,9 +643,9 @@ spool_ptr<Dlop> Dlop::add_op(int64_t other) const {
   auto dlop = make_result(Type::Integer, size);
 
   if (size == 1) {
-    dlop->base()[0]  = base()[0] + other;
-    dlop->extra()[0] = extra()[0];
-    dlop->base()[0] |= dlop->extra()[0];
+    dlop->base()[0]   = base()[0] + other;
+    dlop->extra()[0]  = extra()[0];
+    dlop->base()[0]  |= dlop->extra()[0];
   } else {
     int64_t* tmp = alloc(size);
     Blop::extend(tmp, size, other);
@@ -812,11 +812,11 @@ spool_ptr<Dlop> Dlop::neg_op() const {
 
   if (has_unknowns()) {
     if (size == 1) {
-      dlop->base()[0]  = -base()[0];
-      uint64_t e       = static_cast<uint64_t>(extra()[0]);
-      uint64_t hi      = 0u - (e & (0u - e));
-      dlop->extra()[0] = static_cast<int64_t>(hi);
-      dlop->base()[0] |= dlop->extra()[0];
+      dlop->base()[0]   = -base()[0];
+      uint64_t e        = static_cast<uint64_t>(extra()[0]);
+      uint64_t hi       = 0u - (e & (0u - e));
+      dlop->extra()[0]  = static_cast<int64_t>(hi);
+      dlop->base()[0]  |= dlop->extra()[0];
     } else {
       Blop::negn(dlop->base(), size, base());
       // Find lowest unknown across all words.
@@ -1075,8 +1075,8 @@ spool_ptr<Dlop> Dlop::xor_op(const Dlop& other) const {
     if (extra()[0] == 0 && other.extra()[0] == 0) {
       dlop->extra()[0] = 0;
     } else {
-      dlop->extra()[0] = extra()[0] | other.extra()[0];
-      dlop->base()[0] |= dlop->extra()[0];
+      dlop->extra()[0]  = extra()[0] | other.extra()[0];
+      dlop->base()[0]  |= dlop->extra()[0];
     }
   } else {
     const int64_t *s1 = base(), *s2 = other.base();
@@ -1143,8 +1143,8 @@ spool_ptr<Dlop> Dlop::not_op() const {
       dlop->extra()[0] = 0;
     } else {
       // NOT with unknowns: known bits flip, unknown bits stay unknown
-      dlop->extra()[0] = extra()[0];
-      dlop->base()[0] |= dlop->extra()[0];
+      dlop->extra()[0]  = extra()[0];
+      dlop->base()[0]  |= dlop->extra()[0];
     }
   } else {
     Blop::notn(dlop->base(), size, base());
@@ -1309,7 +1309,7 @@ spool_ptr<Dlop> Dlop::merge_unknown(const std::vector<const Dlop*>& cands) {
     if (unknown_here) {
       // Invariant: base bit is forced set wherever the value is unknown.
       result->extra()[w] |= int64_t(1) << bit;
-      result->base()[w] |= int64_t(1) << bit;
+      result->base()[w]  |= int64_t(1) << bit;
     } else if (known_val) {
       result->base()[w] |= int64_t(1) << bit;
     }
@@ -1545,7 +1545,7 @@ bool Dlop::same_repr(const Dlop& other) const {
 bool Dlop::is_known_eq(const Dlop& other) const { return eq_op(other)->is_known_true(); }
 
 bool Dlop::cmp_less_known(const Dlop& other) const {
-  int16_t rsz = std::max(size, other.size);
+  int16_t rsz    = std::max(size, other.size);
   // Signed comparison from MSW down
   int64_t v1_top = (rsz - 1 < size) ? base()[rsz - 1] : (base()[size - 1] < 0 ? -1 : 0);
   int64_t v2_top = (rsz - 1 < other.size) ? other.base()[rsz - 1] : (other.base()[other.size - 1] < 0 ? -1 : 0);
@@ -1605,10 +1605,10 @@ static CmpResult three_way_cmp(const Dlop& a, const Dlop& b) {
     int64_t b2 = (w < b.size) ? b.base()[w] : b_bs;
     int64_t e2 = (w < b.size) ? b.extra()[w] : b_es;
 
-    int64_t combined_extra = e1 | e2;
+    int64_t  combined_extra = e1 | e2;
     // diff_known: bits where both sides are known AND they disagree.
-    int64_t  diff_known  = (b1 ^ b2) & ~combined_extra;
-    uint64_t interesting = static_cast<uint64_t>(diff_known | combined_extra);
+    int64_t  diff_known     = (b1 ^ b2) & ~combined_extra;
+    uint64_t interesting    = static_cast<uint64_t>(diff_known | combined_extra);
 
     while (interesting != 0) {
       int      bit  = 63 - __builtin_clzll(interesting);  // highest set bit
@@ -1638,8 +1638,8 @@ static CmpResult three_way_cmp(const Dlop& a, const Dlop& b) {
 spool_ptr<Dlop> Dlop::lt_op(const Dlop& other) const {
   auto r = three_way_cmp(*this, other);
   switch (r) {
-    case CmpResult::Less: return create_bool(true);
-    case CmpResult::Equal: return create_bool(false);
+    case CmpResult::Less   : return create_bool(true);
+    case CmpResult::Equal  : return create_bool(false);
     case CmpResult::Greater: return create_bool(false);
     case CmpResult::Unknown: return unknown_bool();
   }
@@ -1648,8 +1648,8 @@ spool_ptr<Dlop> Dlop::lt_op(const Dlop& other) const {
 spool_ptr<Dlop> Dlop::le_op(const Dlop& other) const {
   auto r = three_way_cmp(*this, other);
   switch (r) {
-    case CmpResult::Less: return create_bool(true);
-    case CmpResult::Equal: return create_bool(true);
+    case CmpResult::Less   : return create_bool(true);
+    case CmpResult::Equal  : return create_bool(true);
     case CmpResult::Greater: return create_bool(false);
     case CmpResult::Unknown: return unknown_bool();
   }
@@ -1658,8 +1658,8 @@ spool_ptr<Dlop> Dlop::le_op(const Dlop& other) const {
 spool_ptr<Dlop> Dlop::gt_op(const Dlop& other) const {
   auto r = three_way_cmp(*this, other);
   switch (r) {
-    case CmpResult::Less: return create_bool(false);
-    case CmpResult::Equal: return create_bool(false);
+    case CmpResult::Less   : return create_bool(false);
+    case CmpResult::Equal  : return create_bool(false);
     case CmpResult::Greater: return create_bool(true);
     case CmpResult::Unknown: return unknown_bool();
   }
@@ -1668,8 +1668,8 @@ spool_ptr<Dlop> Dlop::gt_op(const Dlop& other) const {
 spool_ptr<Dlop> Dlop::ge_op(const Dlop& other) const {
   auto r = three_way_cmp(*this, other);
   switch (r) {
-    case CmpResult::Less: return create_bool(false);
-    case CmpResult::Equal: return create_bool(true);
+    case CmpResult::Less   : return create_bool(false);
+    case CmpResult::Equal  : return create_bool(true);
     case CmpResult::Greater: return create_bool(true);
     case CmpResult::Unknown: return unknown_bool();
   }
@@ -1897,8 +1897,8 @@ spool_ptr<Dlop> Dlop::set_mask_op(const Dlop& mask, const Dlop& value) const {
     out_bits = std::max(out_bits, positive_mask_bits + value.get_bits());
   }
 
-  int  out_words = std::max(1, (out_bits + 63) / 64);
-  auto result    = make_result(Type::Integer, static_cast<int16_t>(out_words));
+  int     out_words  = std::max(1, (out_bits + 63) / 64);
+  auto    result     = make_result(Type::Integer, static_cast<int16_t>(out_words));
   // Start from `this`, sign-extended to out_words. Bits not selected by the
   // mask (including the sign-extension region beyond get_bits()) flow through
   // unchanged; the loop overwrites only the mask-selected positions.
@@ -2035,10 +2035,10 @@ spool_ptr<Dlop> Dlop::popcount_op() const {
   int ones = 0;  // known-set bits: base bit set and not unknown
   int u    = 0;  // unknown bits
   for (int i = 0; i < size; ++i) {
-    uint64_t b = static_cast<uint64_t>(base()[i]);
-    uint64_t e = static_cast<uint64_t>(extra()[i]);
-    ones += __builtin_popcountll(b & ~e);
-    u += __builtin_popcountll(e);
+    uint64_t b  = static_cast<uint64_t>(base()[i]);
+    uint64_t e  = static_cast<uint64_t>(extra()[i]);
+    ones       += __builtin_popcountll(b & ~e);
+    u          += __builtin_popcountll(e);
   }
 
   if (u == 0) {
@@ -2480,7 +2480,7 @@ std::string Dlop::to_pyrope() const {
   // For multi-word, output hex from MSW to LSW
   std::string result;
   if (is_negative()) {
-    result = "-0x";
+    result   = "-0x";
     // Negate and print
     auto pos = neg_op();
     for (int i = pos->size - 1; i >= 0; --i) {
@@ -2803,7 +2803,7 @@ spool_ptr<Dlop> Dlop::to_known_rand() const {
 
   auto d = spool_ptr<Dlop>::make(type, size);
   for (int i = 0; i < size; ++i) {
-    uint64_t rnd = rng();
+    uint64_t rnd        = rng();
     // Known bits come from base (since base==base|extra(), base already carries
     // the existing known 1s in non-extra positions). For unknown positions
     // (extra=1), substitute random bits.
@@ -2861,16 +2861,16 @@ spool_ptr<Dlop> Dlop::unserialize(std::string_view v) {
     for (int b = 0; b < 8; ++b) {
       w |= static_cast<uint64_t>(static_cast<uint8_t>(v[off + b])) << (b * 8);
     }
-    d->base()[i] = static_cast<int64_t>(w);
-    off += 8;
+    d->base()[i]  = static_cast<int64_t>(w);
+    off          += 8;
   }
   for (int i = 0; i < sz; ++i) {
     uint64_t w = 0;
     for (int b = 0; b < 8; ++b) {
       w |= static_cast<uint64_t>(static_cast<uint8_t>(v[off + b])) << (b * 8);
     }
-    d->extra()[i] = static_cast<int64_t>(w);
-    off += 8;
+    d->extra()[i]  = static_cast<int64_t>(w);
+    off           += 8;
   }
   return d;
 }

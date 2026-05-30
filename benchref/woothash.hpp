@@ -26,62 +26,62 @@ static inline constexpr uint64_t _wootmum(const uint64_t A, const uint64_t B) {
   return r - (r >> 32);
 }
 
-static inline uint64_t _wootr08(const uint8_t *p) {
+static inline uint64_t _wootr08(const uint8_t* p) {
   uint8_t v = 0;
   std::memcpy(&v, p, 1);
   return v;
 }
-static inline uint64_t _wootr16(const uint8_t *p) {
+static inline uint64_t _wootr16(const uint8_t* p) {
   uint16_t v = 0;
   std::memcpy(&v, p, 2);
   return v;
 }
-static inline uint64_t _wootr32(const uint8_t *p) {
+static inline uint64_t _wootr32(const uint8_t* p) {
   uint32_t v = 0;
   std::memcpy(&v, p, 4);
   return v;
 }
-static inline uint64_t _wootr64(const uint8_t *p) {
+static inline uint64_t _wootr64(const uint8_t* p) {
   uint64_t v = 0;
   std::memcpy(&v, p, 8);
   return v;
 }
-static inline uint64_t __wootr64(const uint8_t *p) { return (_wootr32(p) << 32) | _wootr32(p + 4); }
+static inline uint64_t __wootr64(const uint8_t* p) { return (_wootr32(p) << 32) | _wootr32(p + 4); }
 
-static inline uint64_t woothash64(const void *key, uint64_t len,
+static inline uint64_t woothash64(const void* key, uint64_t len,
                                   uint64_t seed = 1021) {  // 1021 is a small prime easy const
-  const uint8_t *p = (const uint8_t *)key;
+  const uint8_t* p = (const uint8_t*)key;
   uint64_t       a = seed ^ _wootp4;
   uint64_t       b = rotl64(seed, 17) ^ _wootp3;
   uint64_t       c = rotl64(seed, 31) ^ _wootp2;
   uint64_t       d = rotl64(seed, 47) ^ _wootp1;
 
   for (uint64_t i = 0; i + 32 <= len; i += 32, p += 32) {
-    a = (_wootr64(p) ^ a) * _wootp1;
-    a = rotl64(a, 22);
-    a *= _wootp3;
-    b = (_wootr64(p + 8) ^ b) * _wootp2;
-    b = rotl64(b, 25);
-    b *= _wootp4;
-    c = (_wootr64(p + 16) ^ c) * _wootp3;
-    c = rotl64(c, 28);
-    c *= _wootp5;
-    d = (_wootr64(p + 24) ^ d) * _wootp4;
-    d = rotl64(d, 31);
-    d *= _wootp1;
+    a     = (_wootr64(p) ^ a) * _wootp1;
+    a     = rotl64(a, 22);
+    a    *= _wootp3;
+    b     = (_wootr64(p + 8) ^ b) * _wootp2;
+    b     = rotl64(b, 25);
+    b    *= _wootp4;
+    c     = (_wootr64(p + 16) ^ c) * _wootp3;
+    c     = rotl64(c, 28);
+    c    *= _wootp5;
+    d     = (_wootr64(p + 24) ^ d) * _wootp4;
+    d     = rotl64(d, 31);
+    d    *= _wootp1;
     seed += a + b + c + d;
   }
   seed += _wootp5;
   switch (len & 31) {
-    case 1: seed = _wootmum(seed, _wootr08(p) ^ _wootp1); break;
-    case 2: seed = _wootmum(seed, _wootr16(p) ^ _wootp1); break;
-    case 3: seed = _wootmum(seed, ((_wootr16(p) << 8) | _wootr08(p + 2)) ^ _wootp1); break;
-    case 4: seed = _wootmum(seed, _wootr32(p) ^ _wootp1); break;
-    case 5: seed = _wootmum(seed, ((_wootr32(p) << 8) | _wootr08(p + 4)) ^ _wootp1); break;
-    case 6: seed = _wootmum(seed, ((_wootr32(p) << 16) | _wootr16(p + 4)) ^ _wootp1); break;
-    case 7: seed = _wootmum(seed, ((_wootr32(p) << 24) | (_wootr16(p + 4) << 8) | _wootr08(p + 6)) ^ _wootp1); break;
-    case 8: seed = _wootmum(seed, __wootr64(p) ^ _wootp1); break;
-    case 9: seed = _wootmum(__wootr64(p) + seed, _wootr08(p + 8) ^ _wootp2); break;
+    case 1 : seed = _wootmum(seed, _wootr08(p) ^ _wootp1); break;
+    case 2 : seed = _wootmum(seed, _wootr16(p) ^ _wootp1); break;
+    case 3 : seed = _wootmum(seed, ((_wootr16(p) << 8) | _wootr08(p + 2)) ^ _wootp1); break;
+    case 4 : seed = _wootmum(seed, _wootr32(p) ^ _wootp1); break;
+    case 5 : seed = _wootmum(seed, ((_wootr32(p) << 8) | _wootr08(p + 4)) ^ _wootp1); break;
+    case 6 : seed = _wootmum(seed, ((_wootr32(p) << 16) | _wootr16(p + 4)) ^ _wootp1); break;
+    case 7 : seed = _wootmum(seed, ((_wootr32(p) << 24) | (_wootr16(p + 4) << 8) | _wootr08(p + 6)) ^ _wootp1); break;
+    case 8 : seed = _wootmum(seed, __wootr64(p) ^ _wootp1); break;
+    case 9 : seed = _wootmum(__wootr64(p) + seed, _wootr08(p + 8) ^ _wootp2); break;
     case 10: seed = _wootmum(__wootr64(p) + seed, _wootr16(p + 8) ^ _wootp2); break;
     case 11: seed = _wootmum(__wootr64(p) + seed, ((_wootr16(p + 8) << 8) | _wootr08(p + 8 + 2)) ^ _wootp2); break;
     case 12: seed = _wootmum(__wootr64(p) + seed, _wootr32(p + 8) ^ _wootp2); break;
@@ -156,39 +156,39 @@ static inline uint64_t woothash64(const void *key, uint64_t len,
   return seed - (seed >> 31) + (seed << 33);
 }
 
-static inline constexpr uint32_t woothash32(const void *key, uint64_t len, uint64_t seed = 1021) {
-  const uint8_t *p = (const uint8_t *)key;
+static inline constexpr uint32_t woothash32(const void* key, uint64_t len, uint64_t seed = 1021) {
+  const uint8_t* p = (const uint8_t*)key;
   uint64_t       a = seed ^ _wootp4;
   uint64_t       b = rotl64(seed, 17) ^ _wootp3;
   uint64_t       c = rotl64(seed, 31) ^ _wootp2;
   uint64_t       d = rotl64(seed, 47) ^ _wootp1;
 
   for (uint64_t i = 0; i + 32 <= len; i += 32, p += 32) {
-    a = (_wootr64(p) ^ a) * _wootp1;
-    a = rotl64(a, 22);
-    a *= _wootp3;
-    b = (_wootr64(p + 8) ^ b) * _wootp2;
-    b = rotl64(b, 25);
-    b *= _wootp4;
-    c = (_wootr64(p + 16) ^ c) * _wootp3;
-    c = rotl64(c, 28);
-    c *= _wootp5;
-    d = (_wootr64(p + 24) ^ d) * _wootp4;
-    d = rotl64(d, 31);
-    d *= _wootp1;
+    a     = (_wootr64(p) ^ a) * _wootp1;
+    a     = rotl64(a, 22);
+    a    *= _wootp3;
+    b     = (_wootr64(p + 8) ^ b) * _wootp2;
+    b     = rotl64(b, 25);
+    b    *= _wootp4;
+    c     = (_wootr64(p + 16) ^ c) * _wootp3;
+    c     = rotl64(c, 28);
+    c    *= _wootp5;
+    d     = (_wootr64(p + 24) ^ d) * _wootp4;
+    d     = rotl64(d, 31);
+    d    *= _wootp1;
     seed += a + b + c + d;
   }
   seed += _wootp5;
   switch (len & 31) {
-    case 1: seed = _wootmum(seed, _wootr08(p) ^ _wootp1); break;
-    case 2: seed = _wootmum(seed, _wootr16(p) ^ _wootp1); break;
-    case 3: seed = _wootmum(seed, ((_wootr16(p) << 8) | _wootr08(p + 2)) ^ _wootp1); break;
-    case 4: seed = _wootmum(seed, _wootr32(p) ^ _wootp1); break;
-    case 5: seed = _wootmum(seed, ((_wootr32(p) << 8) | _wootr08(p + 4)) ^ _wootp1); break;
-    case 6: seed = _wootmum(seed, ((_wootr32(p) << 16) | _wootr16(p + 4)) ^ _wootp1); break;
-    case 7: seed = _wootmum(seed, ((_wootr32(p) << 24) | (_wootr16(p + 4) << 8) | _wootr08(p + 6)) ^ _wootp1); break;
-    case 8: seed = _wootmum(seed, __wootr64(p) ^ _wootp1); break;
-    case 9: seed = _wootmum(__wootr64(p) + seed, _wootr08(p + 8) ^ _wootp2); break;
+    case 1 : seed = _wootmum(seed, _wootr08(p) ^ _wootp1); break;
+    case 2 : seed = _wootmum(seed, _wootr16(p) ^ _wootp1); break;
+    case 3 : seed = _wootmum(seed, ((_wootr16(p) << 8) | _wootr08(p + 2)) ^ _wootp1); break;
+    case 4 : seed = _wootmum(seed, _wootr32(p) ^ _wootp1); break;
+    case 5 : seed = _wootmum(seed, ((_wootr32(p) << 8) | _wootr08(p + 4)) ^ _wootp1); break;
+    case 6 : seed = _wootmum(seed, ((_wootr32(p) << 16) | _wootr16(p + 4)) ^ _wootp1); break;
+    case 7 : seed = _wootmum(seed, ((_wootr32(p) << 24) | (_wootr16(p + 4) << 8) | _wootr08(p + 6)) ^ _wootp1); break;
+    case 8 : seed = _wootmum(seed, __wootr64(p) ^ _wootp1); break;
+    case 9 : seed = _wootmum(__wootr64(p) + seed, _wootr08(p + 8) ^ _wootp2); break;
     case 10: seed = _wootmum(__wootr64(p) + seed, _wootr16(p + 8) ^ _wootp2); break;
     case 11: seed = _wootmum(__wootr64(p) + seed, ((_wootr16(p + 8) << 8) | _wootr08(p + 8 + 2)) ^ _wootp2); break;
     case 12: seed = _wootmum(__wootr64(p) + seed, _wootr32(p + 8) ^ _wootp2); break;
