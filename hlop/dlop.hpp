@@ -548,6 +548,12 @@ public:
   std::string to_binary() const;
   std::string to_verilog() const;
   std::string to_string() const;
+  // Arbitrary-precision numeric renderers (no int64 round-trip — callers pick
+  // the format). to_decimal_string is signed decimal ("-123"); to_hex_string is
+  // "0x.."/"-0x..". Non-plain-integer values (string/unknown/invalid) fall back
+  // to to_pyrope.
+  std::string to_decimal_string() const;
+  std::string to_hex_string() const;
 
   void dump() const;
 };

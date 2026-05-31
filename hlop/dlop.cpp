@@ -2501,6 +2501,84 @@ std::string Dlop::to_pyrope() const {
   return result;
 }
 
+// Arbitrary-precision signed decimal. Manual long division of the raw
+// magnitude words by 1e9 (Blop's div is 64-bit-only), so it handles values far
+// wider than int64. Non-plain-integer values fall back to to_pyrope.
+std::string Dlop::to_decimal_string() const {
+  if (is_invalid() || type == Type::String || has_unknowns()) {
+    return to_pyrope();
+  }
+  if (is_known_zero()) {
+    return "0";
+  }
+  const bool      neg = is_negative();
+  spool_ptr<Dlop> holder;
+  const Dlop*     mag = this;
+  if (neg) {
+    holder = neg_op();
+    mag    = holder.get();
+  }
+  // Magnitude as little-endian uint64 words.
+  std::vector<uint64_t> w(mag->size);
+  for (int i = 0; i < mag->size; ++i) {
+    w[i] = static_cast<uint64_t>(mag->base()[i]);
+  }
+  // Repeatedly divide the whole magnitude by 1e9, collecting 9-digit groups.
+  constexpr uint64_t      base1e9 = 1000000000ULL;
+  std::vector<uint32_t>   groups;  // little-endian (least-significant first)
+  bool                    nonzero = true;
+  while (nonzero) {
+    unsigned __int128 rem = 0;
+    for (int i = static_cast<int>(w.size()) - 1; i >= 0; --i) {
+      unsigned __int128 cur = (rem << 64) | w[i];
+      w[i]                  = static_cast<uint64_t>(cur / base1e9);
+      rem                   = cur % base1e9;
+    }
+    groups.push_back(static_cast<uint32_t>(rem));
+    nonzero = false;
+    for (uint64_t x : w) {
+      if (x != 0) {
+        nonzero = true;
+        break;
+      }
+    }
+  }
+  // Most-significant group unpadded; interior groups zero-padded to 9 digits.
+  std::string out = std::to_string(groups.back());
+  for (int i = static_cast<int>(groups.size()) - 2; i >= 0; --i) {
+    std::string g = std::to_string(groups[i]);
+    out += std::string(9 - g.size(), '0');
+    out += g;
+  }
+  return neg ? "-" + out : out;
+}
+
+// Arbitrary-precision hex ("0x.." / "-0x.."). Mirrors to_pyrope's hex paths but
+// always hex (no decimal-for-small shortcut). Non-plain-integer → to_pyrope.
+std::string Dlop::to_hex_string() const {
+  if (is_invalid() || type == Type::String || has_unknowns()) {
+    return to_pyrope();
+  }
+  std::string     result;
+  const Dlop*     mag = this;
+  spool_ptr<Dlop> holder;
+  if (is_negative()) {
+    result = "-0x";
+    holder = neg_op();
+    mag    = holder.get();
+  } else {
+    result = "0x";
+  }
+  for (int i = mag->size - 1; i >= 0; --i) {
+    if (i == mag->size - 1) {
+      result += std::format("{:x}", static_cast<uint64_t>(mag->base()[i]));
+    } else {
+      result += std::format("{:016x}", static_cast<uint64_t>(mag->base()[i]));
+    }
+  }
+  return result;
+}
+
 std::string Dlop::to_verilog() const {
   if (is_known_false()) {
     return "'sb0";

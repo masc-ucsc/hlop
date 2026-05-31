@@ -443,6 +443,26 @@ TEST_F(Dlop_test, to_pyrope_roundtrip) {
   // Lconst stores as numeric -1/0 returning "-1"/"0"
 }
 
+TEST_F(Dlop_test, to_decimal_string) {
+  EXPECT_EQ(Dlop::create_integer(0)->to_decimal_string(), "0");
+  EXPECT_EQ(Dlop::create_integer(5)->to_decimal_string(), "5");
+  EXPECT_EQ(Dlop::create_integer(100)->to_decimal_string(), "100");  // decimal, not 0x64
+  EXPECT_EQ(Dlop::create_integer(-100)->to_decimal_string(), "-100");
+  EXPECT_EQ(Dlop::create_integer(1234567890123LL)->to_decimal_string(), "1234567890123");
+  // Wider than 64 bits: 2^100 = 1267650600228229401496703205376 (to_i would overflow).
+  auto big = Dlop::create_integer(1)->shl_op(*Dlop::create_integer(100));
+  EXPECT_EQ(big->to_decimal_string(), "1267650600228229401496703205376");
+}
+
+TEST_F(Dlop_test, to_hex_string) {
+  EXPECT_EQ(Dlop::create_integer(0)->to_hex_string(), "0x0");
+  EXPECT_EQ(Dlop::create_integer(255)->to_hex_string(), "0xff");
+  EXPECT_EQ(Dlop::create_integer(-255)->to_hex_string(), "-0xff");
+  // 2^64 (needs >1 word): hex round-trips with no int64 overflow.
+  auto big = Dlop::create_integer(1)->shl_op(*Dlop::create_integer(64));
+  EXPECT_EQ(big->to_hex_string(), "0x10000000000000000");
+}
+
 // =========================================================================
 // Unknown propagation tests
 // =========================================================================
