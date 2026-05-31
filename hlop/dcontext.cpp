@@ -191,7 +191,7 @@ DResult DContext::exec_sext(const DCall& call) {
   auto value = call.inputs[0].value;
   auto bits  = call.inputs[1].value;
   assert(bits->is_i());
-  return {.outputs = {value->sext_op(static_cast<int>(bits->to_i()))}};
+  return {.outputs = {value->sext_op(bits)}};
 }
 
 DResult DContext::exec_get_mask(const DCall& call) {
@@ -221,22 +221,16 @@ DResult DContext::exec_shl(const DCall& call) {
   assert(call.inputs.size() >= 2);
   auto value  = call.inputs[0].value;
   auto amount = call.inputs[1].value;
-  if (amount->has_unknowns()) {
-    return {.outputs = {Dlop::unknown(value->get_bits() + 64)}};
-  }
-  assert(amount->is_i());
-  return {.outputs = {value->shl_op(amount->to_i())}};
+  // shl_op(const Dlop&) handles the unknown / non-numeric amount cases.
+  return {.outputs = {value->shl_op(amount)}};
 }
 
 DResult DContext::exec_sra(const DCall& call) {
   assert(call.inputs.size() >= 2);
   auto value  = call.inputs[0].value;
   auto amount = call.inputs[1].value;
-  if (amount->has_unknowns()) {
-    return {.outputs = {Dlop::unknown(value->get_bits())}};
-  }
-  assert(amount->is_i());
-  return {.outputs = {value->sra_op(amount->to_i())}};
+  // sra_op(const Dlop&) handles the unknown / non-numeric amount cases.
+  return {.outputs = {value->sra_op(amount)}};
 }
 
 DResult DContext::exec_mux(const DCall& call) {

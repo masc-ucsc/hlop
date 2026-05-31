@@ -148,7 +148,7 @@ static void BM_dlop_addi_reassign(benchmark::State& state) {
     auto total = Dlop::create_integer(0);
 
     for (int j = 0; j < state.range(0); ++j) {
-      total = total->add_op(j);
+      total = total->add_op(Dlop::create_integer(j));
     }
 
     benchmark::DoNotOptimize(total);

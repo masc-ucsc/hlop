@@ -639,32 +639,11 @@ spool_ptr<Dlop> Dlop::add_op(const Dlop& other) const {
   return dlop;
 }
 
-spool_ptr<Dlop> Dlop::add_op(int64_t other) const {
-  auto dlop = make_result(Type::Integer, size);
-
-  if (size == 1) {
-    dlop->base()[0]   = base()[0] + other;
-    dlop->extra()[0]  = extra()[0];
-    dlop->base()[0]  |= dlop->extra()[0];
-  } else {
-    int64_t* tmp = alloc(size);
-    Blop::extend(tmp, size, other);
-    Blop::addn(dlop->base(), size, base(), tmp);
-    memcpy(dlop->extra(), extra(), size * sizeof(int64_t));
-    Blop::orn(dlop->base(), size, dlop->base(), dlop->extra());
-    free(size, tmp);
-  }
-
-  return dlop;
-}
-
 spool_ptr<Dlop> Dlop::sub_op(const Dlop& other) const {
   // sub = add(neg(other))
   auto neg_other = other.neg_op();
   return add_op(neg_other);
 }
-
-spool_ptr<Dlop> Dlop::sub_op(int64_t other) const { return add_op(-other); }
 
 spool_ptr<Dlop> Dlop::sum_op(std::span<const spool_ptr<Dlop>> a, std::span<const spool_ptr<Dlop>> b) {
   auto result = create_integer(0);
@@ -1679,6 +1658,15 @@ spool_ptr<Dlop> Dlop::ge_op(const Dlop& other) const {
 // =========================================================================
 // Bit manipulation
 // =========================================================================
+// Dlop-typed sext wrapper: forward to the int form once the bit count is
+// confirmed numeric and known. Non-numeric / unknown bit count is invalid.
+spool_ptr<Dlop> Dlop::sext_op(const Dlop& bits) const {
+  if (!bits.is_i()) {
+    return invalid();
+  }
+  return sext_op(static_cast<int>(bits.to_i()));
+}
+
 spool_ptr<Dlop> Dlop::sext_op(int from_bit) const {
   auto dlop = make_result(Type::Integer, size);
 

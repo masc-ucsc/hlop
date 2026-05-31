@@ -294,13 +294,13 @@ TEST_F(Dlop_test, and_or_xor_not_propagate_nil) {
 // =========================================================================
 TEST_F(Dlop_test, shl_op) {
   auto a = Dlop::from_pyrope("1");
-  auto b = a->shl_op(4);
+  auto b = a->shl_op(Dlop::create_integer(4));
   EXPECT_EQ(b->to_i(), 16);
 }
 
 TEST_F(Dlop_test, sra_op) {
   auto a = Dlop::from_pyrope("0xff");
-  auto b = a->sra_op(4);
+  auto b = a->sra_op(Dlop::create_integer(4));
   EXPECT_EQ(b->to_i(), 0xf);
 }
 
@@ -799,7 +799,7 @@ TEST_F(Dlop_test, add_unknown_grows_carry) {
   // unknown (base=-1, extra=-1 in one word). Width-sensitive consumers see
   // a >=2-bit unknown.
   auto a = Dlop::from_pyrope("0sb??");
-  auto r = a->add_op(int64_t(1));
+  auto r = a->add_op(Dlop::create_integer(1));
   EXPECT_TRUE(r->has_unknowns());
   EXPECT_GE(r->get_bits(), 2);
 }
@@ -813,7 +813,7 @@ TEST_F(Dlop_test, add_unknown_does_not_propagate_past_known_zero) {
   // hi_fill path. We assert the bits that the spec considers must-known and
   // accept the conservative envelope above the unknown.)
   auto a = Dlop::from_pyrope("0sb1?00");
-  auto r = a->add_op(int64_t(1));
+  auto r = a->add_op(Dlop::create_integer(1));
   // Bit 0 of the result must be a definite 1 (no unknowns flow from below).
   EXPECT_NE(r->base()[0] & 1, 0);
   EXPECT_EQ(r->extra()[0] & 1, 0);

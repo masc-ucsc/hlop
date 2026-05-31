@@ -180,9 +180,9 @@ void check_unbounded_pair(int64_t a, int64_t b) {
 
   for (int shamt : {0, 1, 7, 31, 63}) {
     if (a >= 0) {
-      expect_unbounded_equal("lsh", a, shamt, *d_a->shl_op(shamt), s_a.shl_op(shamt), l_a.lsh_op(shamt));
+      expect_unbounded_equal("lsh", a, shamt, *d_a->shl_op(Dlop::create_integer(shamt)), s_a.shl_op(shamt), l_a.lsh_op(shamt));
     }
-    expect_unbounded_equal("rsh", a, shamt, *d_a->sra_op(shamt), s_a.sra_op(shamt), l_a.rsh_op(shamt));
+    expect_unbounded_equal("rsh", a, shamt, *d_a->sra_op(Dlop::create_integer(shamt)), s_a.sra_op(shamt), l_a.rsh_op(shamt));
   }
 
   EXPECT_EQ(d_a->get_bits(), s_a.get_bits()) << "get_bits Dlop vs Slop mismatch for a=" << a;

@@ -126,12 +126,12 @@ void RunOnce(std::mt19937_64& rng, const std::vector<PoolEntry>& pool, int op_id
     case 3: {
       // Shift by a small known amount so the result fits in Slop<256>.
       int amt = rng() % 60;
-      ExpectConsistent(*da->shl_op(amt), sa.shl_op(amt), "shl_op(" + std::to_string(amt) + ")");
+      ExpectConsistent(*da->shl_op(Dlop::create_integer(amt)), sa.shl_op(amt), "shl_op(" + std::to_string(amt) + ")");
       break;
     }
     case 4: {
       int amt = rng() % 60;
-      ExpectConsistent(*da->sra_op(amt), sa.sra_op(amt), "sra_op(" + std::to_string(amt) + ")");
+      ExpectConsistent(*da->sra_op(Dlop::create_integer(amt)), sa.sra_op(amt), "sra_op(" + std::to_string(amt) + ")");
       break;
     }
     case 5: {
@@ -154,7 +154,7 @@ void RunOnce(std::mt19937_64& rng, const std::vector<PoolEntry>& pool, int op_id
     case 15: ExpectConsistent(*da->not_op(), sa.not_op(), "not_op"); break;
     case 16: {
       int from = 1 + (rng() % 100);  // sign-extend from bit `from`
-      ExpectConsistent(*da->sext_op(from), sa.sext_op(from), "sext_op(" + std::to_string(from) + ")");
+      ExpectConsistent(*da->sext_op(Dlop::create_integer(from)), sa.sext_op(from), "sext_op(" + std::to_string(from) + ")");
       break;
     }
     case 17: ExpectConsistent(*da->ror_op(), sa.ror_op(), "ror_op_unary"); break;

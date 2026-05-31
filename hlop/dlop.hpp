@@ -355,6 +355,13 @@ protected:
   void mut_add(spool_ptr<Dlop> other) { mut_add(*other); }
   void mut_add(int64_t other);
 
+  // --- Integer-amount op kernels ---
+  // Implementation helpers for the shift / sign-extend ops. The public API
+  // takes a Dlop operand; these run once the amount is confirmed numeric.
+  spool_ptr<Dlop> shl_op(int64_t amount) const;
+  spool_ptr<Dlop> sra_op(int64_t amount) const;
+  spool_ptr<Dlop> sext_op(int from_bit) const;
+
 public:
   // --- Arithmetic operations ---
   // Every binary op accepts (const Dlop&) or (spool_ptr<Dlop>); the spool
@@ -362,10 +369,8 @@ public:
   // Dlops and pool-managed spool_ptr<Dlop>s can mix freely without copies.
   spool_ptr<Dlop> add_op(const Dlop& other) const;
   spool_ptr<Dlop> add_op(spool_ptr<Dlop> other) const { return add_op(*other); }
-  spool_ptr<Dlop> add_op(int64_t other) const;
   spool_ptr<Dlop> sub_op(const Dlop& other) const;
   spool_ptr<Dlop> sub_op(spool_ptr<Dlop> other) const { return sub_op(*other); }
-  spool_ptr<Dlop> sub_op(int64_t other) const;
   spool_ptr<Dlop> mult_op(const Dlop& other) const;
   spool_ptr<Dlop> mult_op(spool_ptr<Dlop> other) const { return mult_op(*other); }
   spool_ptr<Dlop> div_op(const Dlop& other) const;
@@ -387,13 +392,14 @@ public:
   spool_ptr<Dlop> not_op() const;
 
   // --- Shift operations ---
-  spool_ptr<Dlop> shl_op(int64_t amount) const;
-  spool_ptr<Dlop> sra_op(int64_t amount) const;
-  // Dlop-typed shift overloads: forward to the int64 form once the amount is
-  // confirmed numeric. Unknown shift amount → 1-bit unknown result (the bit
-  // pattern is unrecoverable). Invalid / nil / string amount → invalid.
+  // The shift amount is a Dlop operand (LiveHD passes shift counts as constant
+  // nodes), resolved to a numeric value internally. Unknown shift amount →
+  // 1-bit unknown result (the bit pattern is unrecoverable). Invalid / nil /
+  // string amount → invalid.
   spool_ptr<Dlop> shl_op(const Dlop& amount) const;
+  spool_ptr<Dlop> shl_op(spool_ptr<Dlop> amount) const { return shl_op(*amount); }
   spool_ptr<Dlop> sra_op(const Dlop& amount) const;
+  spool_ptr<Dlop> sra_op(spool_ptr<Dlop> amount) const { return sra_op(*amount); }
 
   // --- Comparison operations ---
   spool_ptr<Dlop> eq_op(const Dlop& other) const;
@@ -445,7 +451,10 @@ public:
   spool_ptr<Dlop> popcount_op() const;
 
   // --- Bit manipulation ---
-  spool_ptr<Dlop> sext_op(int bits) const;
+  // Sign-extend from the bit position given by the `bits` Dlop operand (a
+  // numeric constant node). Non-numeric / unknown bit count → invalid.
+  spool_ptr<Dlop> sext_op(const Dlop& bits) const;
+  spool_ptr<Dlop> sext_op(spool_ptr<Dlop> bits) const { return sext_op(*bits); }
   spool_ptr<Dlop> get_mask_op() const;
   spool_ptr<Dlop> get_mask_op(const Dlop& mask) const;
   spool_ptr<Dlop> get_mask_op(spool_ptr<Dlop> mask) const { return get_mask_op(*mask); }
