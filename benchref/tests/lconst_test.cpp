@@ -1548,7 +1548,7 @@ TEST_F(Lconst_test, lconst_set_bits) {
   // base  is           111..1111_1110 (-2)
   // mask  is           111..1111_0001 (-15)
   // value is   0ub1_1011_1100_110    1
-  // res   is    0b1101_1110_0110_1110
+  // res   is    0ub1101_1110_0110_1110
   Lconst(-2).set_mask_op(Lconst::from_pyrope("-15"), Lconst(0x1bcd)).dump();
   EXPECT_EQ(Lconst(-2).set_mask_op(Lconst::from_pyrope("-15"), Lconst(0x1bcd)), Lconst(0xde6d));
 #endif
