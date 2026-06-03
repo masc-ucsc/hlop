@@ -280,7 +280,19 @@ public:
           if (sel_ch != 'b') {
             throw std::runtime_error("ERROR: unknown pyrope encoding (only 0sb...)");
           }
+        } else if (sel_ch == 'u') {
+          // Explicit `0u` prefix: unsigned, followed by a base selector
+          // (x/b/d/o). Matches pyrope syntax `0ub10101`, `0ux3F`, …
+          ++skip_chars;
+          sel_ch          = lower(orig_txt[skip_chars]);
+          unsigned_result = true;
         } else {
+          // No explicit sign. A binary literal MUST be explicit about its
+          // signedness — `0b…` is rejected; use `0ub…` (unsigned) or `0sb…`
+          // (signed). Other bases stay unsigned by default.
+          if (sel_ch == 'b') {
+            throw std::runtime_error("ERROR: binary literal needs an explicit sign: use 0ub... or 0sb...");
+          }
           unsigned_result = true;
         }
 

@@ -42,7 +42,7 @@ TEST_F(Slop_test, from_pyrope_constexpr) {
   static_assert(neg.to_i() == -7);
   static constexpr auto hex = Slop<32>::from_pyrope("0x1f");
   static_assert(hex.to_i() == 0x1f);
-  static constexpr auto bin = Slop<8>::from_pyrope("0b1010");
+  static constexpr auto bin = Slop<8>::from_pyrope("0ub1010");
   static_assert(bin.to_i() == 0b1010);
 }
 
@@ -63,7 +63,7 @@ TEST_F(Slop_test, from_pyrope_hex) {
 }
 
 TEST_F(Slop_test, from_pyrope_binary) {
-  auto a = S::from_pyrope("0b1010");
+  auto a = S::from_pyrope("0ub1010");
   EXPECT_EQ(a.to_i(), 10);
 
   auto sb = S::from_pyrope("0sb1010");
@@ -140,22 +140,22 @@ TEST_F(Slop_test, neg_op) {
 // Bitwise tests
 // =========================================================================
 TEST_F(Slop_test, or_op) {
-  auto a = S::from_pyrope("0b1010");
-  auto b = S::from_pyrope("0b0101");
+  auto a = S::from_pyrope("0ub1010");
+  auto b = S::from_pyrope("0ub0101");
   auto c = a.or_op(b);
   EXPECT_EQ(c.to_i(), 0xF);
 }
 
 TEST_F(Slop_test, and_op) {
-  auto a = S::from_pyrope("0b1110");
-  auto b = S::from_pyrope("0b1011");
+  auto a = S::from_pyrope("0ub1110");
+  auto b = S::from_pyrope("0ub1011");
   auto c = a.and_op(b);
   EXPECT_EQ(c.to_i(), 0b1010);
 }
 
 TEST_F(Slop_test, xor_op) {
-  auto a = S::from_pyrope("0b1100");
-  auto b = S::from_pyrope("0b1010");
+  auto a = S::from_pyrope("0ub1100");
+  auto b = S::from_pyrope("0ub1010");
   auto c = a.xor_op(b);
   EXPECT_EQ(c.to_i(), 0b0110);
 }
@@ -238,13 +238,13 @@ TEST_F(Slop_test, is_power2) {
 }
 
 TEST_F(Slop_test, popcount_test) {
-  EXPECT_EQ(S::from_pyrope("0b1010").popcount(), 2);
+  EXPECT_EQ(S::from_pyrope("0ub1010").popcount(), 2);
   EXPECT_EQ(S::from_pyrope("0xFF").popcount(), 8);
 }
 
 TEST_F(Slop_test, popcount_op_test) {
   // Slop has no unknowns, so popcount_op is always the exact count as a value.
-  EXPECT_EQ(S::from_pyrope("0b1010").popcount_op().to_i(), 2);
+  EXPECT_EQ(S::from_pyrope("0ub1010").popcount_op().to_i(), 2);
   EXPECT_EQ(S::from_pyrope("0xFF").popcount_op().to_i(), 8);
   EXPECT_EQ(S::from_pyrope("0").popcount_op().to_i(), 0);
 }
@@ -300,7 +300,7 @@ TEST_F(Slop_test, hotmux_op) {
 
 TEST_F(Slop_test, lut_op) {
   using S8   = Slop<8>;
-  auto table = S8::from_pyrope("0b1010");  // bit0=0 bit1=1 bit2=0 bit3=1
+  auto table = S8::from_pyrope("0ub1010");  // bit0=0 bit1=1 bit2=0 bit3=1
 
   EXPECT_TRUE(S8::lut_op(table, S8::create_integer(0)).is_known_false());
   EXPECT_TRUE(S8::lut_op(table, S8::create_integer(1)).is_known_true());

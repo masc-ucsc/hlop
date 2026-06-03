@@ -311,7 +311,19 @@ Lconst Lconst::from_pyrope(std::string_view orig_txt) {
           throw std::runtime_error(std::format("ERROR: {} unknown pyrope encoding only binary can be signed 0sb...\n", orig_txt));
         }
         I(!unsigned_result);
+      } else if (sel_ch == 'u') {
+        // Explicit `0u` prefix: unsigned, then a base selector (x/b/d/o).
+        ++skip_chars;
+        sel_ch          = txt[skip_chars];
+        unsigned_result = true;
       } else {
+        // No explicit sign. Binary literals MUST be explicit — `0b…` is
+        // rejected; use `0ub…` (unsigned) or `0sb…` (signed). Other bases
+        // stay unsigned by default.
+        if (sel_ch == 'b') {
+          throw std::runtime_error(
+              std::format("ERROR: {} binary literal needs an explicit sign: use 0ub… (unsigned) or 0sb… (signed)\n", orig_txt));
+        }
         unsigned_result = true;
       }
 
@@ -1141,7 +1153,7 @@ Lconst Lconst::rsh_op(Bits_t amount) const {
         return Lconst::from_pyrope("0sb?");
       }
       if (is_positive()) {
-        return Lconst::from_pyrope("0b?");
+        return Lconst::from_pyrope("0ub?");
       }
       I(is_negative());
       return Lconst::from_pyrope("0sb1?");
@@ -1429,7 +1441,7 @@ std::string Lconst::to_pyrope() const {
 
       std::string str;
       if (sign == '0') {
-        str = "0b";
+        str = "0ub";  // bare `0b…` is no longer valid pyrope — emit explicit unsigned
       } else {
         str = "0sb";
       }

@@ -401,6 +401,14 @@ void Dlop::init_from_pyrope(std::string_view orig_txt) {
         sel_ch          = lower(orig_txt[skip_chars]);
         unsigned_result = true;
       } else {
+        // No explicit sign. Binary literals MUST be explicit about their
+        // signedness — `0b…` is no longer accepted; use `0ub…` (unsigned) or
+        // `0sb…` (signed). Other bases (hex/decimal/octal) stay unsigned by
+        // default.
+        if (sel_ch == 'b') {
+          throw std::runtime_error(
+              std::format("ERROR: {} binary literal needs an explicit sign: use 0ub… (unsigned) or 0sb… (signed)\n", orig_txt));
+        }
         unsigned_result = true;
       }
 
@@ -2459,7 +2467,9 @@ std::string Dlop::to_pyrope() const {
     if (is_negative()) {
       return std::format("0sb{}", bin);
     }
-    return std::format("0b{}", bin);
+    // Emit the explicit unsigned prefix — bare `0b…` is no longer valid pyrope
+    // (from_pyrope rejects it), so to_pyrope must round-trip as `0ub…`.
+    return std::format("0ub{}", bin);
   }
 
   if (is_i()) {

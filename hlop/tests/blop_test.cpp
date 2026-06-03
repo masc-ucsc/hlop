@@ -62,14 +62,14 @@ TEST_F(Blop_test, add_op) {
 
   Dlop::from_pyrope("0xbee1_dea2_bee3_dea4_bee5_dea6_bee7_dea8_bee9_deaa_beeb_deec_beed_deaf")->dump();
 
-  auto a = Dlop::from_pyrope("0b111000???");
-  auto b = Dlop::from_pyrope("0b?10?10?10");
+  auto a = Dlop::from_pyrope("0ub111000???");
+  auto b = Dlop::from_pyrope("0ub?10?10?10");
   a->dump();
   b->dump();
 
   auto sum1 = a->add_op(b);
 
-  auto sum2 = Dlop::from_pyrope("0b??01?1????");
+  auto sum2 = Dlop::from_pyrope("0ub??01?1????");
 
   sum1->dump();
   sum2->dump();
@@ -81,13 +81,13 @@ TEST_F(Blop_test, add_op) {
 // TODO(???) implement and/or in dlop.hpp with unknowns
 
 TEST_F(Blop_test, and_or_op) {
-  auto a = Dlop::from_pyrope("0b111000???");
-  auto b = Dlop::from_pyrope("0b01?01?01?");
+  auto a = Dlop::from_pyrope("0ub111000???");
+  auto b = Dlop::from_pyrope("0ub01?01?01?");
   a->dump();
   b->dump();
 
   auto and1 = a->add_op(b);
-  auto and2 = Dlop::from_pyrope("0b01?0000??");
+  auto and2 = Dlop::from_pyrope("0ub01?0000??");
 
   EXPECT_EQ(and1,and2);
 
@@ -95,7 +95,7 @@ TEST_F(Blop_test, and_or_op) {
   and2->dump();
 
   auto or1 = a->or_op(b);
-  auto or2 = Dlop::from_pyrope("0b11101??1?");
+  auto or2 = Dlop::from_pyrope("0ub11101??1?");
 
   or1->dump();
   or2->dump();

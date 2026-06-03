@@ -24,21 +24,21 @@ class EvalSlopTest : public ::testing::Test {};
 // --- Pure single-sink ops ---
 
 TEST_F(EvalSlopTest, eval_or) {
-  std::array<V8, 3> ins{V8::from_pyrope("0b0011"), V8::from_pyrope("0b1000"), V8::from_pyrope("0b0100")};
+  std::array<V8, 3> ins{V8::from_pyrope("0ub0011"), V8::from_pyrope("0ub1000"), V8::from_pyrope("0ub0100")};
   auto              out = hlop::eval_or<V8>(ins);
-  EXPECT_TRUE(out.is_known_eq(V8::from_pyrope("0b1111")));
+  EXPECT_TRUE(out.is_known_eq(V8::from_pyrope("0ub1111")));
 }
 
 TEST_F(EvalSlopTest, eval_and) {
-  std::array<V8, 2> ins{V8::from_pyrope("0b1110"), V8::from_pyrope("0b1011")};
+  std::array<V8, 2> ins{V8::from_pyrope("0ub1110"), V8::from_pyrope("0ub1011")};
   auto              out = hlop::eval_and<V8>(ins);
-  EXPECT_TRUE(out.is_known_eq(V8::from_pyrope("0b1010")));
+  EXPECT_TRUE(out.is_known_eq(V8::from_pyrope("0ub1010")));
 }
 
 TEST_F(EvalSlopTest, eval_xor) {
-  std::array<V8, 2> ins{V8::from_pyrope("0b1110"), V8::from_pyrope("0b1011")};
+  std::array<V8, 2> ins{V8::from_pyrope("0ub1110"), V8::from_pyrope("0ub1011")};
   auto              out = hlop::eval_xor<V8>(ins);
-  EXPECT_TRUE(out.is_known_eq(V8::from_pyrope("0b0101")));
+  EXPECT_TRUE(out.is_known_eq(V8::from_pyrope("0ub0101")));
 }
 
 TEST_F(EvalSlopTest, eval_ror_true) {
@@ -60,7 +60,7 @@ TEST_F(EvalSlopTest, eval_mult) {
 }
 
 TEST_F(EvalSlopTest, eval_not) {
-  auto out = hlop::eval_not(V8::from_pyrope("0b1010"));
+  auto out = hlop::eval_not(V8::from_pyrope("0ub1010"));
   // ~0b...1010 = 0b...0101 (sign-extended, so ~0x0a = 0xf5 in 8-bit = -11)
   EXPECT_TRUE(out.is_known_eq(V8::create_integer(~0x0a)));
 }
@@ -92,7 +92,7 @@ TEST_F(EvalSlopTest, eval_eq_false) {
 
 TEST_F(EvalSlopTest, eval_sext) {
   // 0b1010 sign-extended from bit 3 -> 0b...11111010 = -6
-  auto out = hlop::eval_sext(V32::from_pyrope("0b1010"), 3);
+  auto out = hlop::eval_sext(V32::from_pyrope("0ub1010"), 3);
   EXPECT_TRUE(out.is_known_eq(V32::create_integer(-6)));
 }
 
@@ -281,37 +281,37 @@ TEST_F(EvalDlopTest, or_basic) {
   hlop::DCall call{
       .op     = hlop::Ntype_op::Or,
       .inputs = {
-          {.value = V("0b0011")},
-          {.value = V("0b1000")},
-          {.value = V("0b0100")},
+          {.value = V("0ub0011")},
+          {.value = V("0ub1000")},
+          {.value = V("0ub0100")},
       },
   };
   auto res = ctx.execute(call);
-  EXPECT_TRUE(res.outputs[0]->is_known_eq(*V("0b1111")));
+  EXPECT_TRUE(res.outputs[0]->is_known_eq(*V("0ub1111")));
 }
 
 TEST_F(EvalDlopTest, and_basic) {
   hlop::DCall call{
       .op     = hlop::Ntype_op::And,
       .inputs = {
-          {.value = V("0b1110")},
-          {.value = V("0b1011")},
+          {.value = V("0ub1110")},
+          {.value = V("0ub1011")},
       },
   };
   auto res = ctx.execute(call);
-  EXPECT_TRUE(res.outputs[0]->is_known_eq(*V("0b1010")));
+  EXPECT_TRUE(res.outputs[0]->is_known_eq(*V("0ub1010")));
 }
 
 TEST_F(EvalDlopTest, xor_basic) {
   hlop::DCall call{
       .op     = hlop::Ntype_op::Xor,
       .inputs = {
-          {.value = V("0b1110")},
-          {.value = V("0b1011")},
+          {.value = V("0ub1110")},
+          {.value = V("0ub1011")},
       },
   };
   auto res = ctx.execute(call);
-  EXPECT_TRUE(res.outputs[0]->is_known_eq(*V("0b0101")));
+  EXPECT_TRUE(res.outputs[0]->is_known_eq(*V("0ub0101")));
 }
 
 TEST_F(EvalDlopTest, sum_with_AB) {

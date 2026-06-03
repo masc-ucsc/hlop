@@ -49,7 +49,7 @@ TEST_F(Dlop_test, from_pyrope_hex) {
 }
 
 TEST_F(Dlop_test, from_pyrope_binary) {
-  auto a = Dlop::from_pyrope("0b1010");
+  auto a = Dlop::from_pyrope("0ub1010");
   EXPECT_EQ(a->to_i(), 10);
 
   auto sb = Dlop::from_pyrope("0sb1010");
@@ -141,8 +141,8 @@ TEST_F(Dlop_test, concat_op_integer_unchanged) {
   // Integer ++ integer stays a numeric bit-concat (signed-positive
   // integers carry a leading-zero sign bit; 0b1010 occupies 5 bits in
   // pyrope, 0b11 occupies 3 bits, so the concat is (10 << 3) | 3 = 83).
-  auto a = Dlop::from_pyrope("0b1010");
-  auto b = Dlop::from_pyrope("0b11");
+  auto a = Dlop::from_pyrope("0ub1010");
+  auto b = Dlop::from_pyrope("0ub11");
   auto c = a->concat_op(*b);
   EXPECT_FALSE(c->is_string());
   EXPECT_EQ(c->to_i(), 83);
@@ -229,22 +229,22 @@ TEST_F(Dlop_test, neg_op) {
 // Bitwise tests
 // =========================================================================
 TEST_F(Dlop_test, or_op) {
-  auto a = Dlop::from_pyrope("0b1010");
-  auto b = Dlop::from_pyrope("0b0101");
+  auto a = Dlop::from_pyrope("0ub1010");
+  auto b = Dlop::from_pyrope("0ub0101");
   auto c = a->or_op(b);
   EXPECT_EQ(c->to_i(), 0xF);
 }
 
 TEST_F(Dlop_test, and_op) {
-  auto a = Dlop::from_pyrope("0b1110");
-  auto b = Dlop::from_pyrope("0b1011");
+  auto a = Dlop::from_pyrope("0ub1110");
+  auto b = Dlop::from_pyrope("0ub1011");
   auto c = a->and_op(b);
   EXPECT_EQ(c->to_i(), 0b1010);
 }
 
 TEST_F(Dlop_test, xor_op) {
-  auto a = Dlop::from_pyrope("0b1100");
-  auto b = Dlop::from_pyrope("0b1010");
+  auto a = Dlop::from_pyrope("0ub1100");
+  auto b = Dlop::from_pyrope("0ub1010");
   auto c = a->xor_op(b);
   EXPECT_EQ(c->to_i(), 0b0110);
 }
@@ -357,13 +357,13 @@ TEST_F(Dlop_test, is_power2) {
 }
 
 TEST_F(Dlop_test, popcount_test) {
-  EXPECT_EQ(Dlop::from_pyrope("0b1010")->popcount(), 2);
+  EXPECT_EQ(Dlop::from_pyrope("0ub1010")->popcount(), 2);
   EXPECT_EQ(Dlop::from_pyrope("0xFF")->popcount(), 8);
 }
 
 TEST_F(Dlop_test, popcount_op_known) {
   // No unknowns → exact count, fully known.
-  auto a = Dlop::from_pyrope("0b1010")->popcount_op();
+  auto a = Dlop::from_pyrope("0ub1010")->popcount_op();
   EXPECT_FALSE(a->has_unknowns());
   EXPECT_EQ(a->to_i(), 2);
 
@@ -438,7 +438,7 @@ TEST_F(Dlop_test, to_pyrope_roundtrip) {
   check("-42");
   check("0xff");
   check("-0xff");
-  check("0b1010");
+  check("0ub1010");
   // "true"/"false" differ: Dlop has Boolean type returning "true"/"false",
   // Lconst stores as numeric -1/0 returning "-1"/"0"
 }
@@ -467,7 +467,7 @@ TEST_F(Dlop_test, to_hex_string) {
 // Unknown propagation tests
 // =========================================================================
 TEST_F(Dlop_test, unknown_basic) {
-  auto a = Dlop::from_pyrope("0b1?0");
+  auto a = Dlop::from_pyrope("0ub1?0");
   EXPECT_TRUE(a->has_unknowns());
 
   auto bin = a->to_binary();
@@ -477,8 +477,8 @@ TEST_F(Dlop_test, unknown_basic) {
 TEST_F(Dlop_test, and_unknown) {
   // 0 AND ? = 0 (known)
   // 1 AND ? = ? (unknown)
-  auto a = Dlop::from_pyrope("0b10");
-  auto b = Dlop::from_pyrope("0b??");
+  auto a = Dlop::from_pyrope("0ub10");
+  auto b = Dlop::from_pyrope("0ub??");
   auto c = a->and_op(b);
   // bit 0: 0 AND ? = 0 (known 0)
   // bit 1: 1 AND ? = ? (unknown)
@@ -488,8 +488,8 @@ TEST_F(Dlop_test, and_unknown) {
 TEST_F(Dlop_test, or_unknown) {
   // 1 OR ? = 1 (known)
   // 0 OR ? = ? (unknown)
-  auto a = Dlop::from_pyrope("0b10");
-  auto b = Dlop::from_pyrope("0b??");
+  auto a = Dlop::from_pyrope("0ub10");
+  auto b = Dlop::from_pyrope("0ub??");
   auto c = a->or_op(b);
   // bit 0: 0 OR ? = ? (unknown)
   // bit 1: 1 OR ? = 1 (known 1)
@@ -863,10 +863,10 @@ TEST_F(Dlop_test, and_with_zero_is_zero) {
 }
 
 TEST_F(Dlop_test, and_unknown_truth_table_across_bits) {
-  auto a = Dlop::from_pyrope("0b111_000_???");
-  auto b = Dlop::from_pyrope("0b01?_01?_01?");
+  auto a = Dlop::from_pyrope("0ub111_000_???");
+  auto b = Dlop::from_pyrope("0ub01?_01?_01?");
   auto r = a->and_op(*b);
-  EXPECT_TRUE(r->same_repr(*Dlop::from_pyrope("0b01?_000_0??")));
+  EXPECT_TRUE(r->same_repr(*Dlop::from_pyrope("0ub01?_000_0??")));
 }
 
 TEST_F(Dlop_test, or_with_minus_one_is_minus_one) {
@@ -881,10 +881,10 @@ TEST_F(Dlop_test, or_with_minus_one_is_minus_one) {
 }
 
 TEST_F(Dlop_test, or_unknown_truth_table_across_bits) {
-  auto a = Dlop::from_pyrope("0b111_000_???");
-  auto b = Dlop::from_pyrope("0b01?_01?_01?");
+  auto a = Dlop::from_pyrope("0ub111_000_???");
+  auto b = Dlop::from_pyrope("0ub01?_01?_01?");
   auto r = a->or_op(*b);
-  EXPECT_TRUE(r->same_repr(*Dlop::from_pyrope("0b111_01?_?1?")));
+  EXPECT_TRUE(r->same_repr(*Dlop::from_pyrope("0ub111_01?_?1?")));
 }
 
 TEST_F(Dlop_test, or_with_all_ones_byte_forces_known) {
@@ -971,7 +971,7 @@ TEST_F(Dlop_test, hotmux_unknown_select_merges) {
 }
 
 TEST_F(Dlop_test, lut_known_addr) {
-  auto table = Dlop::from_pyrope("0b1010");  // bit0=0 bit1=1 bit2=0 bit3=1
+  auto table = Dlop::from_pyrope("0ub1010");  // bit0=0 bit1=1 bit2=0 bit3=1
 
   EXPECT_TRUE(Dlop::lut_op(*table, *Dlop::create_integer(0))->is_known_false());
   EXPECT_TRUE(Dlop::lut_op(*table, *Dlop::create_integer(1))->is_known_true());
@@ -981,11 +981,11 @@ TEST_F(Dlop_test, lut_known_addr) {
 
 TEST_F(Dlop_test, lut_unknown_addr) {
   // table bits 0 and 1 are both 0 -> a ?-low-bit address still folds to false.
-  auto table = Dlop::from_pyrope("0b1100");  // bit0=0 bit1=0 bit2=1 bit3=1
+  auto table = Dlop::from_pyrope("0ub1100");  // bit0=0 bit1=0 bit2=1 bit3=1
   EXPECT_TRUE(Dlop::lut_op(*table, *Dlop::from_pyrope("0ub?"))->is_known_false());
   // index in {2,3}: both table bits are 1 -> folds to true.
   EXPECT_TRUE(Dlop::lut_op(*table, *Dlop::from_pyrope("0ub1?"))->is_known_true());
   // reachable table bits disagree (bit0=0, bit1=1) -> unknown.
-  auto mixed = Dlop::from_pyrope("0b1010");
+  auto mixed = Dlop::from_pyrope("0ub1010");
   EXPECT_TRUE(Dlop::lut_op(*mixed, *Dlop::from_pyrope("0ub?"))->has_unknowns());
 }
