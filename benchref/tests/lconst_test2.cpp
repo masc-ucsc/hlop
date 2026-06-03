@@ -276,7 +276,7 @@ TEST_F(Lconst2_test, unknowns_compare_returns_unknown_bit) {
   auto a = Lconst::from_pyrope("0sb?");
   auto r = a.eq_op(Lconst(1));
   // The expected result is a single unknown bit (representable as 0sb?
-  // or 0b? — a 1-bit Lconst with the unknown flag), NOT a nil.
+  // or 0ub? — a 1-bit Lconst with the unknown flag), NOT a nil.
   EXPECT_FALSE(r.is_nil());
   EXPECT_TRUE(r.has_unknowns());
 }

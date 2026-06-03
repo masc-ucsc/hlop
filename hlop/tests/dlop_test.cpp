@@ -139,8 +139,8 @@ TEST_F(Dlop_test, from_pyrope_unsigned_prefix) {
 
 TEST_F(Dlop_test, concat_op_integer_unchanged) {
   // Integer ++ integer stays a numeric bit-concat (signed-positive
-  // integers carry a leading-zero sign bit; 0b1010 occupies 5 bits in
-  // pyrope, 0b11 occupies 3 bits, so the concat is (10 << 3) | 3 = 83).
+  // integers carry a leading-zero sign bit; 0ub1010 occupies 5 bits in
+  // pyrope, 0ub11 occupies 3 bits, so the concat is (10 << 3) | 3 = 83).
   auto a = Dlop::from_pyrope("0ub1010");
   auto b = Dlop::from_pyrope("0ub11");
   auto c = a->concat_op(*b);
@@ -554,7 +554,7 @@ TEST_F(Dlop_test, get_neg_mask_value_static) {
 }
 
 TEST_F(Dlop_test, get_mask_range_continuous) {
-  // 0b0000_1111 -> (0, range_end)
+  // 0ub0000_1111 -> (0, range_end)
   auto a = Dlop::create_integer(0xF);
   auto r = a->get_mask_range();
   EXPECT_EQ(r.first, 0);
@@ -562,14 +562,14 @@ TEST_F(Dlop_test, get_mask_range_continuous) {
 }
 
 TEST_F(Dlop_test, get_mask_range_shifted) {
-  // 0b1111_0000 -> trailing 4 zeros + mask
+  // 0ub1111_0000 -> trailing 4 zeros + mask
   auto a = Dlop::create_integer(0xF0);
   auto r = a->get_mask_range();
   EXPECT_EQ(r.first, 4);
 }
 
 TEST_F(Dlop_test, get_mask_range_pairs_two_runs) {
-  // 0b0011_0011 -> two runs of 2 ones each at positions 0 and 4
+  // 0ub0011_0011 -> two runs of 2 ones each at positions 0 and 4
   auto a     = Dlop::create_integer(0x33);
   auto pairs = a->get_mask_range_pairs();
   ASSERT_EQ(pairs.size(), 2u);
@@ -610,7 +610,7 @@ TEST_F(Dlop_test, get_mask_op_negative_source_sign_extends) {
 // get_mask_op(mask) — single-bit mask returns the signed 1-bit integer
 // (-1 if the bit is set, 0 if clear), not the unsigned 1/0.
 TEST_F(Dlop_test, get_mask_op_single_bit_set_is_neg_one) {
-  // 0b1010, bit 1 mask → bit is set → -1
+  // 0ub1010, bit 1 mask → bit is set → -1
   auto v = Dlop::create_integer(0b1010);
   auto r = v->get_mask_op(Dlop::create_integer(0b0010));
   EXPECT_EQ(r->to_i(), -1);
@@ -618,7 +618,7 @@ TEST_F(Dlop_test, get_mask_op_single_bit_set_is_neg_one) {
 }
 
 TEST_F(Dlop_test, get_mask_op_single_bit_clear_is_zero) {
-  // 0b1010, bit 0 mask → bit clear → 0
+  // 0ub1010, bit 0 mask → bit clear → 0
   auto v = Dlop::create_integer(0b1010);
   auto r = v->get_mask_op(Dlop::create_integer(0b0001));
   EXPECT_EQ(r->to_i(), 0);
@@ -927,8 +927,8 @@ TEST_F(Dlop_test, mux_known_select) {
 TEST_F(Dlop_test, mux_unknown_select_merges) {
   // sel selects index 0 or 1; the two values agree on every bit except bit 3,
   // so the merge keeps bits 0..2 known and marks bit 3 unknown.
-  auto                         v0 = Dlop::from_pyrope("0x0f");  // 0b0_1111
-  auto                         v1 = Dlop::from_pyrope("0x07");  // 0b0_0111
+  auto                         v0 = Dlop::from_pyrope("0x0f");  // 0ub0_1111
+  auto                         v1 = Dlop::from_pyrope("0x07");  // 0ub0_0111
   std::vector<spool_ptr<Dlop>> vals{v0, v1};
 
   auto r = Dlop::mux_op(*Dlop::from_pyrope("0ub?"), vals);

@@ -1424,16 +1424,16 @@ TEST_F(Lconst_test, lconst_get_bits) {
   EXPECT_EQ(Lconst::from_pyrope("0xFFF").get_mask_op(Lconst::from_pyrope("-1")), Lconst::from_pyrope("0xFFF"));
   EXPECT_EQ(Lconst::from_pyrope("0xfeef").get_mask_op(Lconst::from_pyrope("-1")), Lconst::from_pyrope("0xfeef"));
 
-  // a  =0b1111_1110_1110_1111 mask=11111.111110
-  // out=0b 1111_1110_1110_111
+  // a  =0ub1111_1110_1110_1111 mask=11111.111110
+  // out=0ub 1111_1110_1110_111
   EXPECT_EQ(Lconst::from_pyrope("0xfeef").get_mask_op(Lconst::from_pyrope("-2")), Lconst::from_pyrope("0x7F77"));
   EXPECT_EQ(Lconst::from_pyrope("0xfeef").get_mask_op(Lconst::from_pyrope("-3")), Lconst::from_pyrope("0x7F77"));
 
-  // a  =0b1111_1110_1110_1[11]1 mask=11111.111001
-  // out=  0b1111_1110_1110_11
+  // a  =0ub1111_1110_1110_1[11]1 mask=11111.111001
+  // out=  0ub1111_1110_1110_11
   //
   // out = {foo[1],foo[3],foo[5]}
-  // out = getmask(foo,0b1_1010)
+  // out = getmask(foo,0ub1_1010)
   //
   // out = getmask(foo,-1) // convert to unsign
   //
@@ -1469,11 +1469,11 @@ TEST_F(Lconst_test, lconst_get_bits) {
   EXPECT_EQ(Lconst::from_pyrope("0xfeef").get_mask_op(Lconst::from_pyrope("1")), Lconst::from_pyrope("1"));
   EXPECT_EQ(Lconst::from_pyrope("-1").get_mask_op(Lconst::from_pyrope("0x3")), Lconst::from_pyrope("0ub11"));
   EXPECT_EQ(Lconst::from_pyrope("-1").get_mask_op(Lconst::from_pyrope("0")), Lconst::from_pyrope("0"));
-  EXPECT_EQ(Lconst::from_pyrope("-2").get_mask_op(Lconst::from_pyrope("1")), Lconst::from_pyrope("0"));  // 0b....1 & 0x1 == 1
-  EXPECT_EQ(Lconst::from_pyrope("-3").get_mask_op(Lconst::from_pyrope("1")), Lconst::from_pyrope("1"));  // 0b....1 & 0x1 == 1
+  EXPECT_EQ(Lconst::from_pyrope("-2").get_mask_op(Lconst::from_pyrope("1")), Lconst::from_pyrope("0"));  // 0sb....1 & 0x1 == 1
+  EXPECT_EQ(Lconst::from_pyrope("-3").get_mask_op(Lconst::from_pyrope("1")), Lconst::from_pyrope("1"));  // 0sb....1 & 0x1 == 1
   // Lconst::from_pyrope("-123123").dump();
   // Lconst::from_pyrope("-123123").get_mask_op(Lconst::from_pyrope("1")).dump();
-  // Lconst::from_pyrope("-123123").get_mask_op(Lconst::from_pyrope("1")), Lconst::from_pyrope("1"));  // 0b....1 & 0x1 == 1
+  // Lconst::from_pyrope("-123123").get_mask_op(Lconst::from_pyrope("1")), Lconst::from_pyrope("1"));  // 0sb....1 & 0x1 == 1
 
   EXPECT_EQ(Lconst::from_pyrope("0xfeef").get_mask_op(Lconst::from_pyrope("0xFF")), Lconst::from_pyrope("0xEF"));
 
@@ -1509,19 +1509,19 @@ TEST_F(Lconst_test, lconst_set_bits) {
 
   // base  is 0
   // mask  is      111..11_0_1111 (-17)
-  // value is  0b1_1111_1110_1111
-  // res   is 0b11_1111_1100_1111
+  // value is  0ub1_1111_1110_1111
+  // res   is 0ub11_1111_1100_1111
   EXPECT_EQ(Lconst(0).set_mask_op(Lconst::from_pyrope("-17"), Lconst(0x1FEF)), Lconst(0x3FCF));
 
   // base  is              1_0000
   // mask  is      111..11_0_1111 (-17)
-  // value is  0b1_1111_1110_1111
-  // res   is 0b11_1111_1101_1111
+  // value is  0ub1_1111_1110_1111
+  // res   is 0ub11_1111_1101_1111
   Lconst(0x10).set_mask_op(Lconst::from_pyrope("-17"), Lconst(0x1FEF)).dump();
   EXPECT_EQ(Lconst(0x10).set_mask_op(Lconst::from_pyrope("-17"), Lconst(0x1FEF)), Lconst(0x3FDF));
 
   // out[0:300] = xxxx
-  // out[2:3] = bar  // out = set_mask(out, 0b01100, bar)
+  // out[2:3] = bar  // out = set_mask(out, 0ub01100, bar)
 
   src.set_mask_op(Lconst::from_pyrope("-1"), Lconst(0x3abcd)).dump();
 
@@ -1530,8 +1530,8 @@ TEST_F(Lconst_test, lconst_set_bits) {
 
   // base  is                xxxx_010x
   // mask  is           111..1111_0001 (-15)
-  // value is   0b1_1011_1100_110    1
-  // res   is    0b1101_1110_0110_0101
+  // value is   0ub1_1011_1100_110    1
+  // res   is    0ub1101_1110_0110_0101
   Lconst(0x14).set_mask_op(Lconst::from_pyrope("-15"), Lconst(0x1bcd)).dump();
   EXPECT_EQ(Lconst(0x14).set_mask_op(Lconst::from_pyrope("-15"), Lconst(0x1bcd)), Lconst(0xde65));
 
@@ -1540,14 +1540,14 @@ TEST_F(Lconst_test, lconst_set_bits) {
 
   // base  is           111..1110_0100 (-28)
   // mask  is           111..1111_0001 (-15)
-  // value is   0b1_1011_1100_110    1
-  // res   is    0b1101_1110_0110_0101
+  // value is   0ub1_1011_1100_110    1
+  // res   is    0ub1101_1110_0110_0101
   Lconst(-28).set_mask_op(Lconst::from_pyrope("-15"), Lconst(0x1bcd)).dump();
   EXPECT_EQ(Lconst(-28).set_mask_op(Lconst::from_pyrope("-15"), Lconst(0x1bcd)), Lconst(0xde65));
 
   // base  is           111..1111_1110 (-2)
   // mask  is           111..1111_0001 (-15)
-  // value is   0b1_1011_1100_110    1
+  // value is   0ub1_1011_1100_110    1
   // res   is    0b1101_1110_0110_1110
   Lconst(-2).set_mask_op(Lconst::from_pyrope("-15"), Lconst(0x1bcd)).dump();
   EXPECT_EQ(Lconst(-2).set_mask_op(Lconst::from_pyrope("-15"), Lconst(0x1bcd)), Lconst(0xde6d));

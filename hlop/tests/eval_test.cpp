@@ -61,7 +61,7 @@ TEST_F(EvalSlopTest, eval_mult) {
 
 TEST_F(EvalSlopTest, eval_not) {
   auto out = hlop::eval_not(V8::from_pyrope("0ub1010"));
-  // ~0b...1010 = 0b...0101 (sign-extended, so ~0x0a = 0xf5 in 8-bit = -11)
+  // ~0ub...1010 = 0sb...0101 (sign-extended, so ~0x0a = 0xf5 in 8-bit = -11)
   EXPECT_TRUE(out.is_known_eq(V8::create_integer(~0x0a)));
 }
 
@@ -91,7 +91,7 @@ TEST_F(EvalSlopTest, eval_eq_false) {
 }
 
 TEST_F(EvalSlopTest, eval_sext) {
-  // 0b1010 sign-extended from bit 3 -> 0b...11111010 = -6
+  // 0ub1010 sign-extended from bit 3 -> 0sb...11111010 = -6
   auto out = hlop::eval_sext(V32::from_pyrope("0ub1010"), 3);
   EXPECT_TRUE(out.is_known_eq(V32::create_integer(-6)));
 }
@@ -154,13 +154,13 @@ TEST_F(EvalSlopTest, eval_mux_first) {
 }
 
 TEST_F(EvalSlopTest, eval_lut_basic) {
-  // 2-input AND gate: truth table = 0b1000 = 8
+  // 2-input AND gate: truth table = 0ub1000 = 8
   V8                lut_val = V8::create_integer(8);
   std::array<V8, 2> ins{V8::create_integer(1), V8::create_integer(1)};
   auto              out = hlop::eval_lut<V8>({.lut_val = lut_val, .inputs = ins});
   EXPECT_TRUE(out.is_known_true());
 
-  // Input 0=1, 1=0 -> index=1 -> bit 1 of 0b1000 = 0
+  // Input 0=1, 1=0 -> index=1 -> bit 1 of 0ub1000 = 0
   std::array<V8, 2> ins2{V8::create_integer(1), V8::create_integer(0)};
   auto              out2 = hlop::eval_lut<V8>({.lut_val = lut_val, .inputs = ins2});
   EXPECT_TRUE(out2.is_known_false());

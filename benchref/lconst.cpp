@@ -402,7 +402,7 @@ Lconst Lconst::from_pyrope(std::string_view orig_txt) {
         throw std::runtime_error(std::format("ERROR: {} encoding could not use {}\n", orig_txt, txt[i]));
       }
     }
-  } else if (shift_mode == 1) {  // 0b binary
+  } else if (shift_mode == 1) {  // binary (0ub/0sb)
     auto v = from_binary(txt.substr(skip_chars), unsigned_result);
     if (!negative) {
       return v;
@@ -681,7 +681,7 @@ Lconst Lconst::sext_op(Bits_t ebits) const {
   if (is_nil()) {
     return nil();
   }
-  I(!is_string());  // FIXME: handle 0b0??
+  I(!is_string());  // FIXME: handle 0ub0??
 
   if (ebits >= bits) {
     return *this;
@@ -735,7 +735,7 @@ Lconst Lconst::get_mask_op() const {
       return Lconst(explicit_str, bits, num);
     }
     Number res_num  = get_num() << 8;
-    res_num        |= '0';  // add ZERO to be 0b0whatever
+    res_num        |= '0';  // add ZERO to be 0ub0whatever
     return Lconst(explicit_str, bits + 8, res_num);
   }
 
@@ -816,7 +816,7 @@ Lconst Lconst::get_mask_op(const Lconst& mask) const {
 // set_mask(0xFFF, 0xF, 0xa) -> 0xFFa
 // set_mask(0xFFF, -16, 0xa) -> 0x0aF
 // set_mask(0xFFF, -16, -1)  -> -1
-// set_mask(0xFF0, 0xF, -1)  -> -16 == 0b11111...111_0000
+// set_mask(0xFF0, 0xF, -1)  -> -16 == 0sb11111...111_0000
 // set_mask(foo, -1, bar)  -> bar
 // set_mask(foo, -2, bar)  -> (bar& (~1)) | (foo&1)
 // set_mask(foo,  0, bar)  -> foo
@@ -1147,7 +1147,7 @@ Lconst Lconst::rsh_op(Bits_t amount) const {
   }
 
   if (has_unknowns()) {
-    // rsh_op(0b??00??,3) -> 0b??0
+    // rsh_op(0ub??00??,3) -> 0ub??0
     if (amount >= get_bits()) {
       if (has_unknown_sign()) {
         return Lconst::from_pyrope("0sb?");
