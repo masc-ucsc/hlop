@@ -989,3 +989,91 @@ TEST_F(Dlop_test, lut_unknown_addr) {
   auto mixed = Dlop::from_pyrope("0ub1010");
   EXPECT_TRUE(Dlop::lut_op(*mixed, *Dlop::from_pyrope("0ub?"))->has_unknowns());
 }
+
+// =========================================================================
+// Storage layout tests — the 16-byte Dlop relies on three encodings: Zero
+// (known value, extra implicit 0), Mirror (fully unknown, extra == base),
+// and Heap (multi-word or mixed known/unknown). These tests pin the design
+// goal: the common cases (int < 64 bits, bool, nil, 0sb?) never touch the
+// heap, and representation changes never change the observable value.
+// =========================================================================
+TEST_F(Dlop_test, layout_is_16_bytes) { EXPECT_EQ(sizeof(Dlop), 16u); }
+
+TEST_F(Dlop_test, common_values_stay_inline) {
+  EXPECT_FALSE(Dlop::create_integer(0)->on_heap());
+  EXPECT_FALSE(Dlop::create_integer(42)->on_heap());
+  EXPECT_FALSE(Dlop::create_integer(-1)->on_heap());
+  EXPECT_FALSE(Dlop::create_integer(INT64_MAX)->on_heap());
+  EXPECT_FALSE(Dlop::create_bool(true)->on_heap());
+  EXPECT_FALSE(Dlop::nil()->on_heap());
+  EXPECT_FALSE(Dlop::invalid()->on_heap());
+  EXPECT_FALSE(Dlop::from_pyrope("0xdeadbeef")->on_heap());
+}
+
+TEST_F(Dlop_test, fully_unknown_values_stay_inline) {
+  // The fully-unknown family satisfies extra == base (Mirror): no heap.
+  auto q = Dlop::from_pyrope("0sb?");
+  EXPECT_FALSE(q->on_heap());
+  EXPECT_TRUE(q->has_unknowns());
+  EXPECT_TRUE(Dlop::from_pyrope(q->to_pyrope())->same_repr(*q));  // pyrope round-trip
+
+  EXPECT_FALSE(Dlop::unknown(1)->on_heap());
+  EXPECT_FALSE(Dlop::unknown(20)->on_heap());
+  EXPECT_FALSE(Dlop::unknown(63)->on_heap());
+  EXPECT_FALSE(Dlop::unknown_bool()->on_heap());
+
+  // Ops over fully-unknown inline values keep the encoding inline.
+  auto sum = q->add_op(Dlop::create_integer(0));
+  EXPECT_FALSE(sum->on_heap());
+  EXPECT_TRUE(sum->has_unknowns());
+}
+
+TEST_F(Dlop_test, mixed_unknowns_round_trip_through_heap) {
+  // Mixed known/unknown bits need real extra storage; value must be intact.
+  auto m = Dlop::from_pyrope("0sb?1");
+  EXPECT_TRUE(m->on_heap());
+  EXPECT_TRUE(m->has_unknowns());
+  EXPECT_TRUE(m->bit_test(0));
+  EXPECT_FALSE(m->unknown_bit_test(0));
+  EXPECT_TRUE(m->unknown_bit_test(1));
+  EXPECT_TRUE(Dlop::from_pyrope(m->to_pyrope())->same_repr(*m));  // pyrope round-trip
+
+  // serialize/unserialize must preserve the mixed pattern.
+  auto rt = Dlop::unserialize(m->serialize());
+  EXPECT_TRUE(rt->same_repr(*m));
+}
+
+TEST_F(Dlop_test, normalize_reclaims_inline_storage) {
+  // A wide value shrunk back into one word ends up inline again.
+  auto wide = Dlop::from_pyrope("0x1_0000_0000_0000_0000_0000_0000");  // 97 bits
+  EXPECT_TRUE(wide->on_heap());
+  auto small = wide->sra_op(*Dlop::create_integer(96));
+  EXPECT_FALSE(small->on_heap());
+  EXPECT_EQ(small->to_i(), 1);
+
+  // A mixed-unknown value whose unknowns get masked away collapses to known
+  // (and back inline): 0sb?1 & 0b1 == 1-bit known.
+  auto m   = Dlop::from_pyrope("0sb?1");
+  auto one = Dlop::create_integer(1);
+  auto r   = m->and_op(one);
+  EXPECT_FALSE(r->has_unknowns());
+  EXPECT_TRUE(r->is_known_true());
+}
+
+TEST_F(Dlop_test, copies_preserve_storage_and_value) {
+  auto check_copy = [](const char* txt) {
+    auto src = Dlop::from_pyrope(txt);
+    Dlop a(*src);            // copy ctor
+    Dlop b;
+    b = a;                   // copy assign
+    Dlop c(std::move(a));    // move ctor
+    EXPECT_TRUE(b.same_repr(*src)) << txt;
+    EXPECT_TRUE(c.same_repr(*src)) << txt;
+    EXPECT_EQ(c.to_pyrope(), src->to_pyrope()) << txt;
+  };
+  check_copy("42");
+  check_copy("0sb?");
+  check_copy("0sb?1");
+  check_copy("0x1234_5678_9abc_def0_1234_5678");
+  check_copy("'hello world, long string'");
+}

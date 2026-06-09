@@ -10,6 +10,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <cassert>
 #include <cstdint>
 #include <span>
@@ -130,11 +131,42 @@ template <class V>
 struct RegState {
   std::vector<V> curr;
   std::vector<V> next;
+  std::vector<std::vector<V>> pipe_curr;
+  std::vector<std::vector<V>> pipe_next;
+  std::vector<uint32_t>       pipe_depth;
 
   RegState() = default;
-  RegState(size_t n, const V& init) : curr(n, init), next(n, init) {}
+  RegState(size_t n, const V& init) : curr(n, init), next(n, init), pipe_curr(n), pipe_next(n), pipe_depth(n, 1) {}
 
-  void advance_clock() { curr = next; }
+  void advance_clock() {
+    curr = next;
+    for (size_t i = 0; i < pipe_curr.size(); ++i) {
+      if (pipe_depth[i] > 1) {
+        pipe_curr[i] = pipe_next[i];
+      }
+    }
+  }
+
+  template <uint32_t Depth>
+  void ensure_pipe(uint32_t slot, const V& init) {
+    static_assert(Depth >= 1, "flop pipe depth must be >= 1");
+    assert(slot < curr.size());
+    if (pipe_curr.size() < curr.size()) {
+      pipe_curr.resize(curr.size());
+      pipe_next.resize(curr.size());
+      pipe_depth.resize(curr.size(), 1);
+    }
+    if constexpr (Depth <= 1) {
+      return;
+    }
+    if (pipe_depth[slot] != Depth || pipe_curr[slot].size() != Depth) {
+      pipe_curr[slot].assign(Depth, init);
+      pipe_next[slot] = pipe_curr[slot];
+      pipe_depth[slot] = Depth;
+      curr[slot] = init;
+      next[slot] = init;
+    }
+  }
 };
 
 // Memory state for slop
@@ -378,36 +410,46 @@ V eval_lut(const LutArgs<V>& args) {
 // --- Flop: edge-triggered register ---
 // Returns current value. Schedules din -> next (based on clock/enable).
 // Write becomes visible only after advance_clock().
-template <class V, class State>
-V eval_flop(State& st, uint32_t slot, const FlopArgs<V>& args) {
+template <uint32_t Pipe, class V, class State>
+V eval_flop_pipe(State& st, uint32_t slot, const FlopArgs<V>& args) {
+  static_assert(Pipe >= 1, "flop pipe depth must be >= 1");
   assert(slot < st.curr.size());
+
+  V init_val = args.initial ? *args.initial : V::create_integer(0);
+  st.template ensure_pipe<Pipe>(slot, init_val);
+
+  auto reset_to_initial = [&]() -> V {
+    if constexpr (Pipe > 1) {
+      std::fill(st.pipe_next[slot].begin(), st.pipe_next[slot].end(), init_val);
+      st.next[slot] = init_val;
+      if (args.async_ && args.async_->is_known_true()) {
+        std::fill(st.pipe_curr[slot].begin(), st.pipe_curr[slot].end(), init_val);
+        st.curr[slot] = init_val;
+        return init_val;
+      }
+      return st.pipe_curr[slot].back();
+    }
+    st.next[slot] = init_val;
+    if (args.async_ && args.async_->is_known_true()) {
+      st.curr[slot] = init_val;
+      return init_val;
+    }
+    return st.curr[slot];
+  };
 
   // Handle reset
   if (args.reset_pin && args.reset_pin->is_known_true()) {
     bool neg_reset = args.negreset && args.negreset->is_known_true();
     if (!neg_reset) {
       // Active-high reset is asserted
-      V init_val    = args.initial ? *args.initial : V::create_integer(0);
-      st.next[slot] = init_val;
-      if (args.async_ && args.async_->is_known_true()) {
-        // Async reset: immediately visible
-        st.curr[slot] = init_val;
-        return init_val;
-      }
-      return st.curr[slot];
+      return reset_to_initial();
     }
   }
   if (args.reset_pin && args.reset_pin->is_known_false()) {
     bool neg_reset = args.negreset && args.negreset->is_known_true();
     if (neg_reset) {
       // Active-low reset, signal is low -> reset asserted
-      V init_val    = args.initial ? *args.initial : V::create_integer(0);
-      st.next[slot] = init_val;
-      if (args.async_ && args.async_->is_known_true()) {
-        st.curr[slot] = init_val;
-        return init_val;
-      }
-      return st.curr[slot];
+      return reset_to_initial();
     }
   }
 
@@ -422,11 +464,27 @@ V eval_flop(State& st, uint32_t slot, const FlopArgs<V>& args) {
     // Check enable
     bool enabled = !args.enable || args.enable->is_known_true();
     if (enabled) {
-      st.next[slot] = args.din;
+      if constexpr (Pipe > 1) {
+        st.pipe_next[slot][0] = args.din;
+        for (uint32_t i = 1; i < Pipe; ++i) {
+          st.pipe_next[slot][i] = st.pipe_curr[slot][i - 1];
+        }
+        st.next[slot] = st.pipe_next[slot].back();
+      } else {
+        st.next[slot] = args.din;
+      }
     }
   }
 
+  if constexpr (Pipe > 1) {
+    return st.pipe_curr[slot].back();
+  }
   return st.curr[slot];
+}
+
+template <class V, class State>
+V eval_flop(State& st, uint32_t slot, const FlopArgs<V>& args) {
+  return eval_flop_pipe<1>(st, slot, args);
 }
 
 // --- Latch: level-sensitive ---

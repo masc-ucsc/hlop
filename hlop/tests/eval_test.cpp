@@ -200,6 +200,69 @@ TEST_F(EvalSlopTest, eval_flop_enable_false) {
   EXPECT_TRUE(q.is_known_eq(V32::create_integer(0)));  // enable was false, so no update
 }
 
+TEST_F(EvalSlopTest, eval_flop_pipe_depth_three) {
+  hlop::RegState<V32> regs(4, V32::create_integer(0));
+  V32                 clk = V32::create_integer(1);
+
+  V32                 din1 = V32::create_integer(11);
+  hlop::FlopArgs<V32> a1{.din = din1, .clock_pin = clk};
+  EXPECT_TRUE(hlop::eval_flop_pipe<3>(regs, 0, a1).is_known_eq(V32::create_integer(0)));
+  regs.advance_clock();
+
+  V32                 din2 = V32::create_integer(22);
+  hlop::FlopArgs<V32> a2{.din = din2, .clock_pin = clk};
+  EXPECT_TRUE(hlop::eval_flop_pipe<3>(regs, 0, a2).is_known_eq(V32::create_integer(0)));
+  regs.advance_clock();
+
+  V32                 din3 = V32::create_integer(33);
+  hlop::FlopArgs<V32> a3{.din = din3, .clock_pin = clk};
+  EXPECT_TRUE(hlop::eval_flop_pipe<3>(regs, 0, a3).is_known_eq(V32::create_integer(0)));
+  regs.advance_clock();
+
+  V32                 din4 = V32::create_integer(44);
+  hlop::FlopArgs<V32> a4{.din = din4, .clock_pin = clk};
+  EXPECT_TRUE(hlop::eval_flop_pipe<3>(regs, 0, a4).is_known_eq(V32::create_integer(11)));
+}
+
+TEST_F(EvalSlopTest, eval_flop_pipe_enable_false_holds_all_stages) {
+  hlop::RegState<V32> regs(4, V32::create_integer(0));
+  V32                 clk = V32::create_integer(1);
+  V32                 en0 = V32::create_integer(0);
+
+  V32                 din1 = V32::create_integer(7);
+  hlop::FlopArgs<V32> a1{.din = din1, .clock_pin = clk};
+  hlop::eval_flop_pipe<2>(regs, 0, a1);
+  regs.advance_clock();
+
+  V32                 din2 = V32::create_integer(9);
+  hlop::FlopArgs<V32> hold{.din = din2, .clock_pin = clk, .enable = &en0};
+  EXPECT_TRUE(hlop::eval_flop_pipe<2>(regs, 0, hold).is_known_eq(V32::create_integer(0)));
+  regs.advance_clock();
+
+  hlop::FlopArgs<V32> observe{.din = din2, .clock_pin = clk};
+  EXPECT_TRUE(hlop::eval_flop_pipe<2>(regs, 0, observe).is_known_eq(V32::create_integer(0)));
+  regs.advance_clock();
+  EXPECT_TRUE(hlop::eval_flop_pipe<2>(regs, 0, observe).is_known_eq(V32::create_integer(7)));
+}
+
+TEST_F(EvalSlopTest, eval_flop_pipe_async_reset_resets_all_stages) {
+  hlop::RegState<V32> regs(4, V32::create_integer(0));
+  V32                 clk     = V32::create_integer(1);
+  V32                 initial = V32::create_integer(5);
+  V32                 reset   = V32::create_integer(1);
+  V32                 async   = V32::create_integer(1);
+
+  V32                 din = V32::create_integer(42);
+  hlop::FlopArgs<V32> run{.din = din, .clock_pin = clk, .initial = &initial};
+  hlop::eval_flop_pipe<3>(regs, 0, run);
+  regs.advance_clock();
+
+  hlop::FlopArgs<V32> rst{.din = din, .clock_pin = clk, .reset_pin = &reset, .initial = &initial, .async_ = &async};
+  EXPECT_TRUE(hlop::eval_flop_pipe<3>(regs, 0, rst).is_known_eq(initial));
+  regs.advance_clock();
+  EXPECT_TRUE(hlop::eval_flop_pipe<3>(regs, 0, run).is_known_eq(initial));
+}
+
 TEST_F(EvalSlopTest, eval_latch_transparent) {
   hlop::RegState<V32> regs(4, V32::create_integer(0));
   V32                 en  = V32::create_integer(1);

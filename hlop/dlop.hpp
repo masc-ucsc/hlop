@@ -38,7 +38,7 @@ private:
          -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
          -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1};
 
-  enum class Type : int16_t {
+  enum class Type : int8_t {
     Invalid  = -1,
     Integer  = 0,
     Boolean  = 1,
@@ -50,108 +50,271 @@ private:
     Nil      = 4
   };
 
-  static inline thread_local std::vector<raw_ptr_pool*> free_pool;
+  // Where the unknown-bit (extra) plane lives. The two dominant cases need no
+  // second word: a fully known value has extra == 0 everywhere (Zero), and the
+  // fully-unknown family (0sb?, unknown(n), unknown_bool) has extra identical
+  // to base (Mirror) thanks to the base == base|extra invariant. Only values
+  // mixing known and unknown bits, or wider than one word, pay for pool
+  // storage (Heap).
+  enum class XKind : uint8_t {
+    Zero   = 0,  // extra is implicitly all-zero; base word inline in `data`
+    Mirror = 1,  // extra == base (and base != 0); base word inline in `data`
+    Heap   = 2,  // combined pool buffer: base = bp[0..size), extra = bp[size..2*size)
+  };
+
+  // Per-thread free-list of word buffers, bucketed by size. Intentionally
+  // immortal (heap-allocated, never destroyed): ~Dlop returns buffers here, and
+  // it runs during thread-local teardown via spool_ptr_pool<Dlop>. Because
+  // free_pool is touched (lazily, on the first big Dlop) *after* that pool is
+  // constructed, a plain `thread_local` vector is destroyed *before* the pool
+  // (reverse construction order), so teardown free() would touch a dead vector
+  // — a destruction-order fiasco that surfaced as flaky heap corruption. A
+  // function-local thread_local pointer is never registered for destruction, so
+  // the vector it owns stays valid for the whole thread lifetime.
+  static std::vector<raw_ptr_pool*>& free_pool() {
+    static thread_local auto* pool = new std::vector<raw_ptr_pool*>();
+    return *pool;
+  }
 
 public:
   static void     free(size_t sz, int64_t* ptr);
   static int64_t* alloc(size_t sz);
 
-  // Layout: type+size+shared_count packs into 8 bytes; storage union is 16 bytes.
-  // For size <= 1 the value bits live inline in `data[]`; for size > 1 the
-  // pool-allocated buffers live in `big.bp` / `big.ep`. `shared_count` is touched
-  // only by spool_ptr<Dlop>; embedded Dlops never use it.
+  // Layout: type+xkind+size+shared_count packs into 8 bytes; the storage union
+  // is one more 8-byte slot — either the inline base word (`data`) or the
+  // combined pool buffer (`bp`). Invariants:
+  //   size > 1  ⇒ xkind == Heap
+  //   Mirror    ⇒ size == 1 and data != 0
+  //   Heap      ⇒ size >= 1 and bp was alloc(2*size)
+  // `shared_count` is touched only by spool_ptr<Dlop>; embedded Dlops never
+  // use it.
   Type     type;
-  int16_t  size;          // bucket size in 64-bit words
+  XKind    xkind;
+  int16_t  size;          // value width in 64-bit words
   uint32_t shared_count;  // touched only by spool_ptr_pool<Dlop>
   union {
-    int64_t data[2];  // size <= 1: data[0]=base word, data[1]=extra word
-    struct {
-      int64_t* bp;
-      int64_t* ep;
-    } big;  // size  > 1: pool buffers
+    int64_t  data;  // xkind != Heap: the base word (extra is implicit)
+    int64_t* bp;    // xkind == Heap: base words, then extra words
   };
 
-  // --- Storage accessors ---
-  // base()/extra() return the value-bit / unknown-bit word pointer regardless
-  // of inline vs pool storage. One predictable branch; the compiler hoists it
-  // out of loops in most callers.
-  int64_t*       base() noexcept { return size > 1 ? big.bp : &data[0]; }
-  int64_t*       extra() noexcept { return size > 1 ? big.ep : &data[1]; }
-  const int64_t* base() const noexcept { return size > 1 ? big.bp : &data[0]; }
-  const int64_t* extra() const noexcept { return size > 1 ? big.ep : &data[1]; }
+  // Shared read-only word for the Zero extra plane of inline values.
+  inline static constexpr int64_t zero_word = 0;
 
-  // Release pool-allocated word buffers, if any. Leaves size unchanged; the
-  // caller is expected to reset size/type next (or destruct).
+  bool on_heap() const noexcept { return xkind == XKind::Heap; }
+
+  // --- Storage accessors ---
+  // base() is writable in place for every storage kind. extra() is const-only:
+  // for inline values it returns the shared zero word (Zero) or aliases base
+  // (Mirror). Writers use set_word_pair/set_extra_word (scalar fast paths) or
+  // extra_mut (full-plane access, materializes pool storage).
+  int64_t*       base() noexcept { return on_heap() ? bp : &data; }
+  const int64_t* base() const noexcept { return on_heap() ? bp : &data; }
+  const int64_t* extra() const noexcept {
+    if (on_heap()) {
+      return bp + size;
+    }
+    return xkind == XKind::Mirror ? &data : &zero_word;
+  }
+
+  // Materialize heap storage (combined base+extra buffer) for a size-1 inline
+  // value, seeding the extra word with `e`.
+  void heapify_set_extra(int64_t e) {
+    assert(!on_heap() && size == 1);
+    int64_t* p = alloc(2);
+    p[0]       = data;
+    p[1]       = e;
+    bp         = p;
+    xkind      = XKind::Heap;
+  }
+
+  // Base is about to be mutated in place. Mirror aliases extra to base, so the
+  // old extra must be snapshotted into heap storage first; Zero/Heap are safe.
+  void unmirror() {
+    if (xkind == XKind::Mirror) {
+      heapify_set_extra(data);
+    }
+  }
+
+  // Set the single extra word of a size<=1 value, picking the cheapest
+  // storage: Zero, Mirror (e == base), or heap for a mixed pattern. For heap
+  // values writes extra word 0 in place. Base must be final before the call.
+  void set_extra_word(int64_t e) {
+    if (on_heap()) {
+      bp[size] = e;
+      return;
+    }
+    if (e == 0) {
+      xkind = XKind::Zero;
+    } else if (e == data) {
+      xkind = XKind::Mirror;
+    } else {
+      heapify_set_extra(e);
+    }
+  }
+
+  // Write the base/extra word pair of a size<=1 value (the kernels' scalar
+  // fast path), classifying storage.
+  void set_word_pair(int64_t b, int64_t e) {
+    if (on_heap()) {
+      bp[0]    = b;
+      bp[size] = e;
+      return;
+    }
+    data  = b;
+    xkind = XKind::Zero;
+    set_extra_word(e);
+  }
+
+  // Writable extra plane, materializing heap storage when needed. Call BEFORE
+  // caching base() in result-building loops: materialization moves base from
+  // the inline word into the pool buffer.
+  int64_t* extra_mut() {
+    if (!on_heap()) {
+      heapify_set_extra(xkind == XKind::Mirror ? data : 0);
+    }
+    return bp + size;
+  }
+
+  // Zero the whole extra plane.
+  void zero_extra() {
+    if (on_heap()) {
+      memset(bp + size, 0, size * sizeof(int64_t));
+    } else {
+      xkind = XKind::Zero;
+    }
+  }
+
+  // Copy the full payload (both planes) from a same-size value.
+  void copy_payload_from(const Dlop& o) {
+    assert(size == o.size);
+    if (on_heap() && o.on_heap()) {
+      memcpy(bp, o.bp, 2 * size * sizeof(int64_t));
+    } else if (!on_heap() && !o.on_heap()) {
+      data  = o.data;
+      xkind = o.xkind;
+    } else if (o.on_heap()) {  // this inline, o heap (size == 1)
+      set_word_pair(o.bp[0], o.bp[1]);
+    } else {  // this heap, o inline (size == 1)
+      bp[0]    = o.base()[0];
+      bp[size] = o.extra()[0];
+    }
+  }
+
+  // Reclaim inline storage for a size-1 heap value whose extra plane fits the
+  // Zero/Mirror encodings. Representation-only: type/size/value unchanged.
+  void compact_inline() {
+    if (!on_heap() || size > 1) {
+      return;
+    }
+    int64_t b = bp[0];
+    int64_t e = bp[1];
+    if (e != 0 && e != b) {
+      return;  // genuinely mixed known/unknown bits: keep heap storage
+    }
+    free(2, bp);
+    data  = b;
+    xkind = (e == 0) ? XKind::Zero : XKind::Mirror;
+  }
+
+  // Release the pool buffer, if any. Leaves size/xkind unchanged; the caller
+  // is expected to reset size/type/xkind next (or destruct).
   void free_storage() noexcept {
-    if (size > 1) {
-      free(size, big.bp);
-      free(size, big.ep);
+    if (on_heap()) {
+      free(2 * size, bp);
     }
   }
 
   // --- Internal helpers for building values ---
-  void shl_base(int64_t amt) { Blop::shln(base(), size, base(), amt); }
-  void shl_extra(int64_t amt) { Blop::shln(extra(), size, extra(), amt); }
+  // The base-mutating helpers unmirror() first: mutating a Mirror-aliased base
+  // in place would silently drag extra along with it.
+  void shl_base(int64_t amt) {
+    unmirror();
+    Blop::shln(base(), size, base(), amt);
+  }
+
+  void shl_extra(int64_t amt) {
+    if (on_heap()) {
+      Blop::shln(bp + size, size, bp + size, amt);
+      return;
+    }
+    if (xkind == XKind::Zero) {
+      return;  // shifting an all-zero plane
+    }
+    int64_t e = data;  // Mirror
+    Blop::shln(&e, 1, &e, amt);
+    set_extra_word(e);
+  }
 
   void mult_base(int64_t v) {
+    unmirror();
     if (size == 1) {
-      data[0] *= v;
+      base()[0] *= v;
     } else {
       int64_t* tmp = alloc(size);
-      memcpy(tmp, big.bp, size * sizeof(int64_t));
-      Blop::multn(big.bp, size, tmp, size, v);
+      memcpy(tmp, bp, size * sizeof(int64_t));
+      Blop::multn(bp, size, tmp, size, v);
       free(size, tmp);
     }
   }
 
-  void extend_base(int64_t v) { Blop::extend(base(), size, v); }
-  void extend_extra(int64_t v) { Blop::extend(extra(), size, v); }
+  void extend_base(int64_t v) {
+    unmirror();
+    Blop::extend(base(), size, v);
+  }
+
+  void extend_extra(int64_t v) {
+    if (on_heap()) {
+      Blop::extend(bp + size, size, v);
+    } else {
+      set_extra_word(v);
+    }
+  }
 
   void add_base(int64_t v) {
+    unmirror();
     if (size == 1) {
-      data[0] += v;
+      base()[0] += v;
     } else {
       int64_t* tmp = alloc(size);
       Blop::extend(tmp, size, v);
-      Blop::addn(big.bp, size, big.bp, tmp);
+      Blop::addn(bp, size, bp, tmp);
       free(size, tmp);
     }
   }
 
   void or_base(int64_t v) {
+    unmirror();
     if (size == 1) {
-      data[0] |= v;
+      base()[0] |= v;
     } else {
-      Blop::orn(big.bp, size, big.bp, v);
+      Blop::orn(bp, size, bp, v);
     }
   }
 
   void or_extra(int64_t v) {
-    if (size == 1) {
-      data[1] |= v;
+    if (on_heap()) {
+      Blop::orn(bp + size, size, bp + size, v);
     } else {
-      Blop::orn(big.ep, size, big.ep, v);
+      set_extra_word(extra()[0] | v);
     }
   }
 
   void negate_mut() {
     assert(type == Type::Integer);
+    unmirror();
     if (size == 1) {
-      data[0] = -data[0];
+      base()[0] = -base()[0];
     } else {
-      Blop::negn(big.bp, size, big.bp);
+      Blop::negn(bp, size, bp);
     }
   }
 
   void clear() {
-    if (size <= 1) {
-      data[0] = 0;
-      data[1] = 0;
+    if (on_heap()) {
+      memset(bp, 0, 2 * size * sizeof(int64_t));
     } else {
-      for (int i = 0; i < size; ++i) {
-        big.bp[i] = 0;
-        big.ep[i] = 0;
-      }
+      data  = 0;
+      xkind = XKind::Zero;
     }
   }
 
@@ -160,15 +323,12 @@ public:
     type = tp;
     size = static_cast<int16_t>(sz);
     if (sz > 1) {
-      big.bp = alloc(sz);
-      big.ep = alloc(sz);
-      for (size_t i = 0; i < sz; ++i) {
-        big.bp[i] = 0;
-        big.ep[i] = 0;
-      }
+      bp = alloc(2 * sz);
+      memset(bp, 0, 2 * sz * sizeof(int64_t));
+      xkind = XKind::Heap;
     } else {
-      data[0] = 0;
-      data[1] = 0;
+      data  = 0;
+      xkind = XKind::Zero;
     }
   }
 
@@ -197,11 +357,15 @@ public:
   bool                   unknown_bit_test(int pos) const;
 
   bool has_extra() const {
-    if (size <= 1) {
-      return data[1] != 0;
+    if (xkind == XKind::Zero) {
+      return false;
     }
+    if (xkind == XKind::Mirror) {
+      return true;  // Mirror keeps data != 0
+    }
+    const int64_t* ep = bp + size;
     for (int i = 0; i < size; ++i) {
-      if (big.ep[i] != 0) {
+      if (ep[i] != 0) {
         return true;
       }
     }
@@ -215,53 +379,49 @@ public:
   bool cmp_less_known(const Dlop& other) const;
 
 public:
-  Dlop() noexcept : type(Type::Invalid), size(0), shared_count(0), data{0, 0} {}
+  Dlop() noexcept : type(Type::Invalid), xkind(XKind::Zero), size(0), shared_count(0), data(0) {}
 
   ~Dlop() { free_storage(); }
 
   // Embedded Dlops can be moved cheaply; the source is left empty so its
   // destructor is a no-op.
-  Dlop(Dlop&& o) noexcept : type(o.type), size(o.size), shared_count(0) {
-    if (size > 1) {
-      big = o.big;
+  Dlop(Dlop&& o) noexcept : type(o.type), xkind(o.xkind), size(o.size), shared_count(0) {
+    if (o.on_heap()) {
+      bp = o.bp;
     } else {
-      data[0] = o.data[0];
-      data[1] = o.data[1];
+      data = o.data;
     }
-    o.size = 0;
-    o.type = Type::Invalid;
+    o.size  = 0;
+    o.type  = Type::Invalid;
+    o.xkind = XKind::Zero;
   }
 
   Dlop& operator=(Dlop&& o) noexcept {
     if (this != &o) {
       free_storage();
-      type = o.type;
-      size = o.size;
-      if (size > 1) {
-        big = o.big;
+      type  = o.type;
+      xkind = o.xkind;
+      size  = o.size;
+      if (o.on_heap()) {
+        bp = o.bp;
       } else {
-        data[0] = o.data[0];
-        data[1] = o.data[1];
+        data = o.data;
       }
-      o.size = 0;
-      o.type = Type::Invalid;
+      o.size  = 0;
+      o.type  = Type::Invalid;
+      o.xkind = XKind::Zero;
     }
     return *this;
   }
 
   // Deep copy: each Dlop owns its own word buffers. spool_ptr<Dlop> handles
   // ref-counted sharing separately.
-  Dlop(const Dlop& o) : type(o.type), size(o.size), shared_count(0) {
-    if (size > 1) {
-      big.bp = alloc(size);
-      big.ep = alloc(size);
-      for (int i = 0; i < size; ++i) {
-        big.bp[i] = o.big.bp[i];
-        big.ep[i] = o.big.ep[i];
-      }
+  Dlop(const Dlop& o) : type(o.type), xkind(o.xkind), size(o.size), shared_count(0) {
+    if (o.on_heap()) {
+      bp = alloc(2 * size);
+      memcpy(bp, o.bp, 2 * size * sizeof(int64_t));
     } else {
-      data[0] = o.data[0];
-      data[1] = o.data[1];
+      data = o.data;
     }
   }
 
@@ -558,9 +718,11 @@ public:
   void dump() const;
 };
 
-// Lock the layout win: type+size+shared_count (8) + union (16) = 24 bytes,
-// down from the previous ~40 bytes (extra base/extra pointers).
-static_assert(sizeof(Dlop) == 24, "Dlop layout regressed; expected 24-byte object");
+// Lock the layout win: type+xkind+size+shared_count (8) + union (8) = 16 bytes,
+// down from the previous 24 (inline base/extra pair) and the original ~40.
+// The common cases — known values up to 64 bits and the fully-unknown family
+// (0sb?) — fit entirely inline with zero heap traffic.
+static_assert(sizeof(Dlop) == 16, "Dlop layout regressed; expected 16-byte object");
 
 #include <format>
 
