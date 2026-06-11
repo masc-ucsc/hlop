@@ -15,11 +15,11 @@ class Dlop_test : public ::testing::Test {};
 // =========================================================================
 TEST_F(Dlop_test, create_integer) {
   auto a = Dlop::create_integer(42);
-  EXPECT_EQ(a->to_i(), 42);
-  EXPECT_TRUE(a->is_i());
+  EXPECT_EQ(a->to_just_i64(), 42);
+  EXPECT_TRUE(a->is_just_i64());
 
   auto b = Dlop::create_integer(-7);
-  EXPECT_EQ(b->to_i(), -7);
+  EXPECT_EQ(b->to_just_i64(), -7);
   EXPECT_TRUE(b->is_negative());
 }
 
@@ -34,26 +34,26 @@ TEST_F(Dlop_test, create_bool) {
 
 TEST_F(Dlop_test, from_pyrope_decimal) {
   auto a = Dlop::from_pyrope("123");
-  EXPECT_EQ(a->to_i(), 123);
+  EXPECT_EQ(a->to_just_i64(), 123);
 
   auto b = Dlop::from_pyrope("-456");
-  EXPECT_EQ(b->to_i(), -456);
+  EXPECT_EQ(b->to_just_i64(), -456);
 }
 
 TEST_F(Dlop_test, from_pyrope_hex) {
   auto a = Dlop::from_pyrope("0xdeadbeef");
-  EXPECT_EQ(a->to_i(), 0xdeadbeef);
+  EXPECT_EQ(a->to_just_i64(), 0xdeadbeef);
 
   auto b = Dlop::from_pyrope("-0xff");
-  EXPECT_EQ(b->to_i(), -0xff);
+  EXPECT_EQ(b->to_just_i64(), -0xff);
 }
 
 TEST_F(Dlop_test, from_pyrope_binary) {
   auto a = Dlop::from_pyrope("0ub1010");
-  EXPECT_EQ(a->to_i(), 10);
+  EXPECT_EQ(a->to_just_i64(), 10);
 
   auto sb = Dlop::from_pyrope("0sb1010");
-  EXPECT_EQ(sb->to_i(), -6);
+  EXPECT_EQ(sb->to_just_i64(), -6);
 }
 
 TEST_F(Dlop_test, from_pyrope_bool) {
@@ -125,16 +125,16 @@ TEST_F(Dlop_test, from_pyrope_unsigned_prefix) {
   // `0u<base>...` is explicit-unsigned with a following base selector.
   auto ub = Dlop::from_pyrope("0ub10101");
   EXPECT_FALSE(ub->is_string());
-  EXPECT_EQ(ub->to_i(), 0b10101);
+  EXPECT_EQ(ub->to_just_i64(), 0b10101);
 
   auto ux = Dlop::from_pyrope("0uxFF");
-  EXPECT_EQ(ux->to_i(), 0xFF);
+  EXPECT_EQ(ux->to_just_i64(), 0xFF);
 
   auto uo = Dlop::from_pyrope("0uo17");
-  EXPECT_EQ(uo->to_i(), 017);
+  EXPECT_EQ(uo->to_just_i64(), 017);
 
   auto ud = Dlop::from_pyrope("0ud42");
-  EXPECT_EQ(ud->to_i(), 42);
+  EXPECT_EQ(ud->to_just_i64(), 42);
 }
 
 TEST_F(Dlop_test, concat_op_integer_unchanged) {
@@ -145,7 +145,7 @@ TEST_F(Dlop_test, concat_op_integer_unchanged) {
   auto b = Dlop::from_pyrope("0ub11");
   auto c = a->concat_op(*b);
   EXPECT_FALSE(c->is_string());
-  EXPECT_EQ(c->to_i(), 83);
+  EXPECT_EQ(c->to_just_i64(), 83);
 }
 
 TEST_F(Dlop_test, from_pyrope_nil) {
@@ -181,48 +181,48 @@ TEST_F(Dlop_test, add_op) {
   auto a = Dlop::from_pyrope("100");
   auto b = Dlop::from_pyrope("200");
   auto c = a->add_op(b);
-  EXPECT_EQ(c->to_i(), 300);
+  EXPECT_EQ(c->to_just_i64(), 300);
 }
 
 TEST_F(Dlop_test, add_op_negative) {
   auto a = Dlop::from_pyrope("10");
   auto b = Dlop::from_pyrope("-20");
   auto c = a->add_op(b);
-  EXPECT_EQ(c->to_i(), -10);
+  EXPECT_EQ(c->to_just_i64(), -10);
 }
 
 TEST_F(Dlop_test, sub_op) {
   auto a = Dlop::from_pyrope("100");
   auto b = Dlop::from_pyrope("30");
   auto c = a->sub_op(b);
-  EXPECT_EQ(c->to_i(), 70);
+  EXPECT_EQ(c->to_just_i64(), 70);
 }
 
 TEST_F(Dlop_test, mult_op) {
   auto a = Dlop::from_pyrope("7");
   auto b = Dlop::from_pyrope("6");
   auto c = a->mult_op(b);
-  EXPECT_EQ(c->to_i(), 42);
+  EXPECT_EQ(c->to_just_i64(), 42);
 }
 
 TEST_F(Dlop_test, mult_op_negative) {
   auto a = Dlop::from_pyrope("-3");
   auto b = Dlop::from_pyrope("4");
   auto c = a->mult_op(b);
-  EXPECT_EQ(c->to_i(), -12);
+  EXPECT_EQ(c->to_just_i64(), -12);
 }
 
 TEST_F(Dlop_test, div_op) {
   auto a = Dlop::from_pyrope("42");
   auto b = Dlop::from_pyrope("6");
   auto c = a->div_op(b);
-  EXPECT_EQ(c->to_i(), 7);
+  EXPECT_EQ(c->to_just_i64(), 7);
 }
 
 TEST_F(Dlop_test, neg_op) {
   auto a = Dlop::from_pyrope("42");
   auto b = a->neg_op();
-  EXPECT_EQ(b->to_i(), -42);
+  EXPECT_EQ(b->to_just_i64(), -42);
 }
 
 // =========================================================================
@@ -232,31 +232,31 @@ TEST_F(Dlop_test, or_op) {
   auto a = Dlop::from_pyrope("0ub1010");
   auto b = Dlop::from_pyrope("0ub0101");
   auto c = a->or_op(b);
-  EXPECT_EQ(c->to_i(), 0xF);
+  EXPECT_EQ(c->to_just_i64(), 0xF);
 }
 
 TEST_F(Dlop_test, and_op) {
   auto a = Dlop::from_pyrope("0ub1110");
   auto b = Dlop::from_pyrope("0ub1011");
   auto c = a->and_op(b);
-  EXPECT_EQ(c->to_i(), 0b1010);
+  EXPECT_EQ(c->to_just_i64(), 0b1010);
 }
 
 TEST_F(Dlop_test, xor_op) {
   auto a = Dlop::from_pyrope("0ub1100");
   auto b = Dlop::from_pyrope("0ub1010");
   auto c = a->xor_op(b);
-  EXPECT_EQ(c->to_i(), 0b0110);
+  EXPECT_EQ(c->to_just_i64(), 0b0110);
 }
 
 TEST_F(Dlop_test, not_op) {
   auto a = Dlop::create_integer(0);
   auto b = a->not_op();
-  EXPECT_EQ(b->to_i(), -1);
+  EXPECT_EQ(b->to_just_i64(), -1);
 
   auto c = Dlop::create_integer(5);
   auto d = c->not_op();
-  EXPECT_EQ(d->to_i(), -6);
+  EXPECT_EQ(d->to_just_i64(), -6);
 }
 
 // Nil propagates through bitwise/logical ops, with the boolean short-circuit
@@ -295,13 +295,13 @@ TEST_F(Dlop_test, and_or_xor_not_propagate_nil) {
 TEST_F(Dlop_test, shl_op) {
   auto a = Dlop::from_pyrope("1");
   auto b = a->shl_op(Dlop::create_integer(4));
-  EXPECT_EQ(b->to_i(), 16);
+  EXPECT_EQ(b->to_just_i64(), 16);
 }
 
 TEST_F(Dlop_test, sra_op) {
   auto a = Dlop::from_pyrope("0xff");
   auto b = a->sra_op(Dlop::create_integer(4));
-  EXPECT_EQ(b->to_i(), 0xf);
+  EXPECT_EQ(b->to_just_i64(), 0xf);
 }
 
 // =========================================================================
@@ -365,15 +365,15 @@ TEST_F(Dlop_test, popcount_op_known) {
   // No unknowns → exact count, fully known.
   auto a = Dlop::from_pyrope("0ub1010")->popcount_op();
   EXPECT_FALSE(a->has_unknowns());
-  EXPECT_EQ(a->to_i(), 2);
+  EXPECT_EQ(a->to_just_i64(), 2);
 
   auto b = Dlop::from_pyrope("0xFF")->popcount_op();
   EXPECT_FALSE(b->has_unknowns());
-  EXPECT_EQ(b->to_i(), 8);
+  EXPECT_EQ(b->to_just_i64(), 8);
 
   auto z = Dlop::from_pyrope("0")->popcount_op();
   EXPECT_FALSE(z->has_unknowns());
-  EXPECT_EQ(z->to_i(), 0);
+  EXPECT_EQ(z->to_just_i64(), 0);
 }
 
 TEST_F(Dlop_test, popcount_op_unknown_range) {
@@ -449,7 +449,7 @@ TEST_F(Dlop_test, to_decimal_string) {
   EXPECT_EQ(Dlop::create_integer(100)->to_decimal_string(), "100");  // decimal, not 0x64
   EXPECT_EQ(Dlop::create_integer(-100)->to_decimal_string(), "-100");
   EXPECT_EQ(Dlop::create_integer(1234567890123LL)->to_decimal_string(), "1234567890123");
-  // Wider than 64 bits: 2^100 = 1267650600228229401496703205376 (to_i would overflow).
+  // Wider than 64 bits: 2^100 = 1267650600228229401496703205376 (to_just_i64 would overflow).
   auto big = Dlop::create_integer(1)->shl_op(*Dlop::create_integer(100));
   EXPECT_EQ(big->to_decimal_string(), "1267650600228229401496703205376");
 }
@@ -528,29 +528,29 @@ TEST_F(Dlop_test, nil_is_distinct) {
 // Mask helpers
 // =========================================================================
 TEST_F(Dlop_test, get_mask_value_static) {
-  EXPECT_EQ(Dlop::get_mask_value(0)->to_i(), 1);  // bits==0 -> 1 per the contract
-  EXPECT_EQ(Dlop::get_mask_value(1)->to_i(), 1);
-  EXPECT_EQ(Dlop::get_mask_value(4)->to_i(), 0xF);
-  EXPECT_EQ(Dlop::get_mask_value(8)->to_i(), 0xFF);
-  EXPECT_EQ(Dlop::get_mask_value(16)->to_i(), 0xFFFF);
+  EXPECT_EQ(Dlop::get_mask_value(0)->to_just_i64(), 1);  // bits==0 -> 1 per the contract
+  EXPECT_EQ(Dlop::get_mask_value(1)->to_just_i64(), 1);
+  EXPECT_EQ(Dlop::get_mask_value(4)->to_just_i64(), 0xF);
+  EXPECT_EQ(Dlop::get_mask_value(8)->to_just_i64(), 0xFF);
+  EXPECT_EQ(Dlop::get_mask_value(16)->to_just_i64(), 0xFFFF);
 }
 
 TEST_F(Dlop_test, get_mask_value_range) {
   // bits [3..0] -> 0xF
-  EXPECT_EQ(Dlop::get_mask_value(3, 0)->to_i(), 0xF);
+  EXPECT_EQ(Dlop::get_mask_value(3, 0)->to_just_i64(), 0xF);
   // bits [7..4] -> 0xF0
-  EXPECT_EQ(Dlop::get_mask_value(7, 4)->to_i(), 0xF0);
+  EXPECT_EQ(Dlop::get_mask_value(7, 4)->to_just_i64(), 0xF0);
   // single bit h==l
-  EXPECT_EQ(Dlop::get_mask_value(5, 5)->to_i(), 0x20);
+  EXPECT_EQ(Dlop::get_mask_value(5, 5)->to_just_i64(), 0x20);
 }
 
 TEST_F(Dlop_test, get_neg_mask_value_static) {
   // -1 << 4 == -16
-  EXPECT_EQ(Dlop::get_neg_mask_value(4)->to_i(), -16);
+  EXPECT_EQ(Dlop::get_neg_mask_value(4)->to_just_i64(), -16);
   // -1 << 0 == -1  (but bits<=1 returns 1 per legacy semantics)
-  EXPECT_EQ(Dlop::get_neg_mask_value(0)->to_i(), 1);
-  EXPECT_EQ(Dlop::get_neg_mask_value(1)->to_i(), 1);
-  EXPECT_EQ(Dlop::get_neg_mask_value(8)->to_i(), -256);
+  EXPECT_EQ(Dlop::get_neg_mask_value(0)->to_just_i64(), 1);
+  EXPECT_EQ(Dlop::get_neg_mask_value(1)->to_just_i64(), 1);
+  EXPECT_EQ(Dlop::get_neg_mask_value(8)->to_just_i64(), -256);
 }
 
 TEST_F(Dlop_test, get_mask_range_continuous) {
@@ -583,9 +583,9 @@ TEST_F(Dlop_test, get_mask_range_pairs_two_runs) {
 TEST_F(Dlop_test, get_mask_op_multibit_packed) {
   auto v = Dlop::create_integer(0xfeed);
   // mask 0xff selects the low byte → 0xed
-  EXPECT_EQ(v->get_mask_op(Dlop::create_integer(0xff))->to_i(), 0xed);
+  EXPECT_EQ(v->get_mask_op(Dlop::create_integer(0xff))->to_just_i64(), 0xed);
   // non-contiguous mask 0xf00 selects nibble [11..8] → 0xe (packed low)
-  EXPECT_EQ(v->get_mask_op(Dlop::create_integer(0xf00))->to_i(), 0xe);
+  EXPECT_EQ(v->get_mask_op(Dlop::create_integer(0xf00))->to_just_i64(), 0xe);
 }
 
 // get_mask_op(mask) — a NEGATIVE source is sign-extended past its minimal
@@ -594,17 +594,17 @@ TEST_F(Dlop_test, get_mask_op_multibit_packed) {
 // returned 1 instead of 0xff for get_mask(-1, 0xff).
 TEST_F(Dlop_test, get_mask_op_negative_source_sign_extends) {
   auto neg1 = Dlop::create_integer(-1);
-  EXPECT_EQ(neg1->get_mask_op(Dlop::create_integer(0xff))->to_i(), 0xff);    // low 8 bits of ...1111
-  EXPECT_EQ(neg1->get_mask_op(Dlop::create_integer(0xf))->to_i(), 0xf);      // low 4 bits
-  EXPECT_EQ(neg1->get_mask_op(Dlop::create_integer(0xffff))->to_i(), 0xffff);
+  EXPECT_EQ(neg1->get_mask_op(Dlop::create_integer(0xff))->to_just_i64(), 0xff);    // low 8 bits of ...1111
+  EXPECT_EQ(neg1->get_mask_op(Dlop::create_integer(0xf))->to_just_i64(), 0xf);      // low 4 bits
+  EXPECT_EQ(neg1->get_mask_op(Dlop::create_integer(0xffff))->to_just_i64(), 0xffff);
 
   // -2 == ...11111110 → low byte is 0xfe.
   auto neg2 = Dlop::create_integer(-2);
-  EXPECT_EQ(neg2->get_mask_op(Dlop::create_integer(0xff))->to_i(), 0xfe);
+  EXPECT_EQ(neg2->get_mask_op(Dlop::create_integer(0xff))->to_just_i64(), 0xfe);
 
   // Positive sources are unaffected (sign bit is 0 above their width).
   auto p511 = Dlop::create_integer(0x1ff);
-  EXPECT_EQ(p511->get_mask_op(Dlop::create_integer(0xff))->to_i(), 0xff);
+  EXPECT_EQ(p511->get_mask_op(Dlop::create_integer(0xff))->to_just_i64(), 0xff);
 }
 
 // get_mask_op(mask) — single-bit mask returns the signed 1-bit integer
@@ -613,7 +613,7 @@ TEST_F(Dlop_test, get_mask_op_single_bit_set_is_neg_one) {
   // 0ub1010, bit 1 mask → bit is set → -1
   auto v = Dlop::create_integer(0b1010);
   auto r = v->get_mask_op(Dlop::create_integer(0b0010));
-  EXPECT_EQ(r->to_i(), -1);
+  EXPECT_EQ(r->to_just_i64(), -1);
   EXPECT_TRUE(r->is_negative());
 }
 
@@ -621,7 +621,7 @@ TEST_F(Dlop_test, get_mask_op_single_bit_clear_is_zero) {
   // 0ub1010, bit 0 mask → bit clear → 0
   auto v = Dlop::create_integer(0b1010);
   auto r = v->get_mask_op(Dlop::create_integer(0b0001));
-  EXPECT_EQ(r->to_i(), 0);
+  EXPECT_EQ(r->to_just_i64(), 0);
   EXPECT_FALSE(r->is_negative());
 }
 
@@ -639,12 +639,12 @@ TEST_F(Dlop_test, get_mask_op_single_bit_unknown) {
   // Selecting bit 3 (known 1) → -1.
   auto r_set = v->get_mask_op(Dlop::create_integer(0b1000));
   EXPECT_FALSE(r_set->has_unknowns());
-  EXPECT_EQ(r_set->to_i(), -1);
+  EXPECT_EQ(r_set->to_just_i64(), -1);
 
   // Selecting bit 0 (known 0) → 0.
   auto r_clr = v->get_mask_op(Dlop::create_integer(0b0001));
   EXPECT_FALSE(r_clr->has_unknowns());
-  EXPECT_EQ(r_clr->to_i(), 0);
+  EXPECT_EQ(r_clr->to_just_i64(), 0);
 }
 
 // Unknown bits inside a multi-bit selection propagate to the packed result.
@@ -663,7 +663,7 @@ TEST_F(Dlop_test, serialize_roundtrip_int) {
   auto a = Dlop::create_integer(0x12345678);
   auto s = a->serialize();
   auto b = Dlop::unserialize(s);
-  EXPECT_EQ(a->to_i(), b->to_i());
+  EXPECT_EQ(a->to_just_i64(), b->to_just_i64());
   EXPECT_EQ(a->type, b->type);
 }
 
@@ -671,7 +671,7 @@ TEST_F(Dlop_test, serialize_roundtrip_negative) {
   auto a = Dlop::create_integer(-12345);
   auto s = a->serialize();
   auto b = Dlop::unserialize(s);
-  EXPECT_EQ(a->to_i(), b->to_i());
+  EXPECT_EQ(a->to_just_i64(), b->to_just_i64());
 }
 
 TEST_F(Dlop_test, serialize_roundtrip_unknown) {
@@ -732,7 +732,7 @@ TEST_F(Dlop_test, to_known_rand_no_unknowns_identity) {
   auto a = Dlop::create_integer(0xA5);
   auto b = a->to_known_rand();
   EXPECT_FALSE(b->has_unknowns());
-  EXPECT_EQ(b->to_i(), 0xA5);
+  EXPECT_EQ(b->to_just_i64(), 0xA5);
 }
 
 TEST_F(Dlop_test, to_known_rand_strips_unknowns) {
@@ -877,7 +877,7 @@ TEST_F(Dlop_test, or_with_minus_one_is_minus_one) {
   EXPECT_FALSE(r->has_unknowns());
   EXPECT_TRUE(r->is_known_true());
   // All-ones value reads as -1.
-  EXPECT_EQ(r->to_i(), int64_t(-1));
+  EXPECT_EQ(r->to_just_i64(), int64_t(-1));
 }
 
 TEST_F(Dlop_test, or_unknown_truth_table_across_bits) {
@@ -908,8 +908,8 @@ TEST_F(Dlop_test, sum_op_adds_a_subtracts_b) {
   std::vector<spool_ptr<Dlop>> a{a0, a1};
   std::vector<spool_ptr<Dlop>> b{b0};
 
-  EXPECT_EQ(Dlop::sum_op(a, b)->to_i(), 9);
-  EXPECT_EQ(Dlop::sum_op({Dlop::create_integer(1), Dlop::create_integer(2)}, {})->to_i(), 3);
+  EXPECT_EQ(Dlop::sum_op(a, b)->to_just_i64(), 9);
+  EXPECT_EQ(Dlop::sum_op({Dlop::create_integer(1), Dlop::create_integer(2)}, {})->to_just_i64(), 3);
 }
 
 TEST_F(Dlop_test, mux_known_select) {
@@ -918,8 +918,8 @@ TEST_F(Dlop_test, mux_known_select) {
   auto                         v2 = Dlop::from_pyrope("0x33");
   std::vector<spool_ptr<Dlop>> vals{v0, v1, v2};
 
-  EXPECT_EQ(Dlop::mux_op(*Dlop::create_integer(0), vals)->to_i(), 0x11);
-  EXPECT_EQ(Dlop::mux_op(*Dlop::create_integer(2), vals)->to_i(), 0x33);
+  EXPECT_EQ(Dlop::mux_op(*Dlop::create_integer(0), vals)->to_just_i64(), 0x11);
+  EXPECT_EQ(Dlop::mux_op(*Dlop::create_integer(2), vals)->to_just_i64(), 0x33);
   // Out-of-range known selector -> invalid.
   EXPECT_TRUE(Dlop::mux_op(*Dlop::create_integer(9), vals)->is_invalid());
 }
@@ -943,9 +943,9 @@ TEST_F(Dlop_test, hotmux_known_onehot) {
   std::vector<spool_ptr<Dlop>> vals{v0, v1, v2};
 
   // one-hot bit 0 -> values[0], bit 1 -> values[1], bit 2 -> values[2]
-  EXPECT_EQ(Dlop::hotmux_op(*Dlop::create_integer(0b001), vals)->to_i(), 0x11);
-  EXPECT_EQ(Dlop::hotmux_op(*Dlop::create_integer(0b010), vals)->to_i(), 0x22);
-  EXPECT_EQ(Dlop::hotmux_op(*Dlop::create_integer(0b100), vals)->to_i(), 0x33);
+  EXPECT_EQ(Dlop::hotmux_op(*Dlop::create_integer(0b001), vals)->to_just_i64(), 0x11);
+  EXPECT_EQ(Dlop::hotmux_op(*Dlop::create_integer(0b010), vals)->to_just_i64(), 0x22);
+  EXPECT_EQ(Dlop::hotmux_op(*Dlop::create_integer(0b100), vals)->to_just_i64(), 0x33);
 }
 
 TEST_F(Dlop_test, hotmux_known_bit_with_unknown_elsewhere) {
@@ -955,7 +955,7 @@ TEST_F(Dlop_test, hotmux_known_bit_with_unknown_elsewhere) {
   std::vector<spool_ptr<Dlop>> vals{v0, v1};
 
   auto r = Dlop::hotmux_op(*Dlop::from_pyrope("0ub?0010"), vals);
-  EXPECT_EQ(r->to_i(), 0x22);
+  EXPECT_EQ(r->to_just_i64(), 0x22);
 }
 
 TEST_F(Dlop_test, hotmux_unknown_select_merges) {
@@ -1049,7 +1049,7 @@ TEST_F(Dlop_test, normalize_reclaims_inline_storage) {
   EXPECT_TRUE(wide->on_heap());
   auto small = wide->sra_op(*Dlop::create_integer(96));
   EXPECT_FALSE(small->on_heap());
-  EXPECT_EQ(small->to_i(), 1);
+  EXPECT_EQ(small->to_just_i64(), 1);
 
   // A mixed-unknown value whose unknowns get masked away collapses to known
   // (and back inline): 0sb?1 & 0b1 == 1-bit known.

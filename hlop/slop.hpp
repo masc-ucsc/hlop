@@ -735,10 +735,10 @@ public:
   // returns invalid().
   static Slop mux_op(const Slop& sel, std::span<const Slop> values) {
     assert(!values.empty());
-    if (!sel.is_i()) {
+    if (!sel.is_just_i64()) {
       return invalid();
     }
-    int64_t idx = sel.to_i();
+    int64_t idx = sel.to_just_i64();
     if (idx < 0 || static_cast<size_t>(idx) >= values.size()) {
       return invalid();
     }
@@ -766,10 +766,10 @@ public:
   // lut_op: Yosys `$lut` semantics — 1-bit result `table[addr]` (bit `addr` of
   // the truth table, addr's LSB = first input).
   static Slop lut_op(const Slop& table, const Slop& addr) {
-    if (!addr.is_i()) {
+    if (!addr.is_just_i64()) {
       return invalid();
     }
-    int64_t idx = addr.to_i();
+    int64_t idx = addr.to_just_i64();
     if (idx < 0) {
       return invalid();
     }
@@ -894,10 +894,10 @@ public:
     return Blop::ctz<n_words>(base_);
   }
 
-  constexpr bool is_i() const { return get_bits() <= 62; }
+  constexpr bool is_just_i64() const { return get_bits() <= 62; }
 
-  constexpr int64_t to_i() const {
-    assert(is_i());
+  constexpr int64_t to_just_i64() const {
+    assert(is_just_i64());
     return base_[0];
   }
 
@@ -959,8 +959,8 @@ public:
       return is_known_true() ? "true" : "false";
     }
 
-    if (is_i()) {
-      int64_t val = to_i();
+    if (is_just_i64()) {
+      int64_t val = to_just_i64();
       if (val >= -63 && val <= 63) {
         return std::to_string(val);
       }
@@ -1003,7 +1003,7 @@ public:
       return std::format("\"{}\"", to_string());
     }
     int nbits = get_bits();
-    if (is_i()) {
+    if (is_just_i64()) {
       return std::format("{}'sh{:x}", nbits, static_cast<uint64_t>(base_[0]));
     }
     std::string hex;

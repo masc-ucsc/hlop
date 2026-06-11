@@ -190,7 +190,7 @@ DResult DContext::exec_sext(const DCall& call) {
   assert(call.inputs.size() >= 2);
   auto value = call.inputs[0].value;
   auto bits  = call.inputs[1].value;
-  assert(bits->is_i());
+  assert(bits->is_just_i64());
   return {.outputs = {value->sext_op(bits)}};
 }
 
@@ -256,8 +256,8 @@ DResult DContext::exec_mux(const DCall& call) {
     return {.outputs = {Dlop::unknown(result->get_bits())}};
   }
 
-  assert(sel->is_i());
-  int64_t idx = sel->to_i();
+  assert(sel->is_just_i64());
+  int64_t idx = sel->to_just_i64();
   if (idx < 0 || static_cast<size_t>(idx) >= data.size()) {
     return {.outputs = {Dlop::create_integer(0)}};
   }
@@ -400,8 +400,8 @@ DResult DContext::exec_memory(const DCall& call) {
 
   // Initialize memory if needed
   if (!ms.initialized && size_v && bits_v) {
-    ms.size   = size_v->to_i();
-    ms.bits   = bits_v->to_i();
+    ms.size   = size_v->to_just_i64();
+    ms.bits   = bits_v->to_just_i64();
     ms.fwd    = fwd_v && fwd_v->is_known_true();
     auto zero = Dlop::create_integer(0);
     ms.curr.resize(ms.size, zero);
@@ -441,8 +441,8 @@ DResult DContext::exec_memory(const DCall& call) {
       auto data   = find_pid(call.inputs, port_base + 3);
       auto wmask  = find_pid(call.inputs, port_base + 4);
 
-      if (clk_en && clk_en->is_known_true() && data && addr->is_i()) {
-        int64_t a = addr->to_i();
+      if (clk_en && clk_en->is_known_true() && data && addr->is_just_i64()) {
+        int64_t a = addr->to_just_i64();
         if (a >= 0 && a < ms.size) {
           if (wmask) {
             auto not_mask = wmask->not_op();
@@ -458,8 +458,8 @@ DResult DContext::exec_memory(const DCall& call) {
       // Read port
       auto ren = find_pid(call.inputs, port_base + 3);
 
-      if (ren && ren->is_known_true() && addr->is_i()) {
-        int64_t a = addr->to_i();
+      if (ren && ren->is_known_true() && addr->is_just_i64()) {
+        int64_t a = addr->to_just_i64();
         if (a >= 0 && a < ms.size) {
           auto fwd_flag = find_pid(call.inputs, port_base + 5);
           bool do_fwd   = ms.fwd && fwd_flag && fwd_flag->is_known_true();

@@ -17,11 +17,11 @@ using S = Slop<128>;
 // =========================================================================
 TEST_F(Slop_test, create_integer) {
   auto a = S::create_integer(42);
-  EXPECT_EQ(a.to_i(), 42);
-  EXPECT_TRUE(a.is_i());
+  EXPECT_EQ(a.to_just_i64(), 42);
+  EXPECT_TRUE(a.is_just_i64());
 
   auto b = S::create_integer(-7);
-  EXPECT_EQ(b.to_i(), -7);
+  EXPECT_EQ(b.to_just_i64(), -7);
   EXPECT_TRUE(b.is_negative());
 }
 
@@ -37,37 +37,37 @@ TEST_F(Slop_test, create_bool) {
 // at compile time for typical literal forms (decimal, hex, binary, signed).
 TEST_F(Slop_test, from_pyrope_constexpr) {
   static constexpr auto three = Slop<8>::from_pyrope("3");
-  static_assert(three.to_i() == 3);
+  static_assert(three.to_just_i64() == 3);
   static constexpr auto neg = Slop<8>::from_pyrope("-7");
-  static_assert(neg.to_i() == -7);
+  static_assert(neg.to_just_i64() == -7);
   static constexpr auto hex = Slop<32>::from_pyrope("0x1f");
-  static_assert(hex.to_i() == 0x1f);
+  static_assert(hex.to_just_i64() == 0x1f);
   static constexpr auto bin = Slop<8>::from_pyrope("0ub1010");
-  static_assert(bin.to_i() == 0b1010);
+  static_assert(bin.to_just_i64() == 0b1010);
 }
 
 TEST_F(Slop_test, from_pyrope_decimal) {
   auto a = S::from_pyrope("123");
-  EXPECT_EQ(a.to_i(), 123);
+  EXPECT_EQ(a.to_just_i64(), 123);
 
   auto b = S::from_pyrope("-456");
-  EXPECT_EQ(b.to_i(), -456);
+  EXPECT_EQ(b.to_just_i64(), -456);
 }
 
 TEST_F(Slop_test, from_pyrope_hex) {
   auto a = S::from_pyrope("0xdeadbeef");
-  EXPECT_EQ(a.to_i(), 0xdeadbeef);
+  EXPECT_EQ(a.to_just_i64(), 0xdeadbeef);
 
   auto b = S::from_pyrope("-0xff");
-  EXPECT_EQ(b.to_i(), -0xff);
+  EXPECT_EQ(b.to_just_i64(), -0xff);
 }
 
 TEST_F(Slop_test, from_pyrope_binary) {
   auto a = S::from_pyrope("0ub1010");
-  EXPECT_EQ(a.to_i(), 10);
+  EXPECT_EQ(a.to_just_i64(), 10);
 
   auto sb = S::from_pyrope("0sb1010");
-  EXPECT_EQ(sb.to_i(), -6);
+  EXPECT_EQ(sb.to_just_i64(), -6);
 }
 
 TEST_F(Slop_test, from_pyrope_string) {
@@ -83,57 +83,57 @@ TEST_F(Slop_test, add_op) {
   auto a = S::from_pyrope("100");
   auto b = S::from_pyrope("200");
   auto c = a.add_op(b);
-  EXPECT_EQ(c.to_i(), 300);
+  EXPECT_EQ(c.to_just_i64(), 300);
 }
 
 TEST_F(Slop_test, add_op_negative) {
   auto a = S::from_pyrope("10");
   auto b = S::from_pyrope("-20");
   auto c = a.add_op(b);
-  EXPECT_EQ(c.to_i(), -10);
+  EXPECT_EQ(c.to_just_i64(), -10);
 }
 
 TEST_F(Slop_test, sub_op) {
   auto a = S::from_pyrope("100");
   auto b = S::from_pyrope("30");
   auto c = a.sub_op(b);
-  EXPECT_EQ(c.to_i(), 70);
+  EXPECT_EQ(c.to_just_i64(), 70);
 }
 
 TEST_F(Slop_test, sum_op) {
   std::vector<S> a{S::from_pyrope("100"), S::from_pyrope("30")};
   std::vector<S> b{S::from_pyrope("7"), S::from_pyrope("3")};
   auto           c = S::sum_op(a, b);
-  EXPECT_EQ(c.to_i(), 120);
+  EXPECT_EQ(c.to_just_i64(), 120);
 
-  EXPECT_EQ(S::sum_op({S::create_integer(1), S::create_integer(2)}, {}).to_i(), 3);
+  EXPECT_EQ(S::sum_op({S::create_integer(1), S::create_integer(2)}, {}).to_just_i64(), 3);
 }
 
 TEST_F(Slop_test, mult_op) {
   auto a = S::from_pyrope("7");
   auto b = S::from_pyrope("6");
   auto c = a.mult_op(b);
-  EXPECT_EQ(c.to_i(), 42);
+  EXPECT_EQ(c.to_just_i64(), 42);
 }
 
 TEST_F(Slop_test, mult_op_negative) {
   auto a = S::from_pyrope("-3");
   auto b = S::from_pyrope("4");
   auto c = a.mult_op(b);
-  EXPECT_EQ(c.to_i(), -12);
+  EXPECT_EQ(c.to_just_i64(), -12);
 }
 
 TEST_F(Slop_test, div_op) {
   auto a = S::from_pyrope("42");
   auto b = S::from_pyrope("6");
   auto c = a.div_op(b);
-  EXPECT_EQ(c.to_i(), 7);
+  EXPECT_EQ(c.to_just_i64(), 7);
 }
 
 TEST_F(Slop_test, neg_op) {
   auto a = S::from_pyrope("42");
   auto b = a.neg_op();
-  EXPECT_EQ(b.to_i(), -42);
+  EXPECT_EQ(b.to_just_i64(), -42);
 }
 
 // =========================================================================
@@ -143,31 +143,31 @@ TEST_F(Slop_test, or_op) {
   auto a = S::from_pyrope("0ub1010");
   auto b = S::from_pyrope("0ub0101");
   auto c = a.or_op(b);
-  EXPECT_EQ(c.to_i(), 0xF);
+  EXPECT_EQ(c.to_just_i64(), 0xF);
 }
 
 TEST_F(Slop_test, and_op) {
   auto a = S::from_pyrope("0ub1110");
   auto b = S::from_pyrope("0ub1011");
   auto c = a.and_op(b);
-  EXPECT_EQ(c.to_i(), 0b1010);
+  EXPECT_EQ(c.to_just_i64(), 0b1010);
 }
 
 TEST_F(Slop_test, xor_op) {
   auto a = S::from_pyrope("0ub1100");
   auto b = S::from_pyrope("0ub1010");
   auto c = a.xor_op(b);
-  EXPECT_EQ(c.to_i(), 0b0110);
+  EXPECT_EQ(c.to_just_i64(), 0b0110);
 }
 
 TEST_F(Slop_test, not_op) {
   auto a = S(0);
   auto b = a.not_op();
-  EXPECT_EQ(b.to_i(), -1);
+  EXPECT_EQ(b.to_just_i64(), -1);
 
   auto c = S(5);
   auto d = c.not_op();
-  EXPECT_EQ(d.to_i(), -6);
+  EXPECT_EQ(d.to_just_i64(), -6);
 }
 
 // =========================================================================
@@ -176,13 +176,13 @@ TEST_F(Slop_test, not_op) {
 TEST_F(Slop_test, shl_op) {
   auto a = S::from_pyrope("1");
   auto b = a.shl_op(4);
-  EXPECT_EQ(b.to_i(), 16);
+  EXPECT_EQ(b.to_just_i64(), 16);
 }
 
 TEST_F(Slop_test, sra_op) {
   auto a = S::from_pyrope("0xff");
   auto b = a.sra_op(4);
-  EXPECT_EQ(b.to_i(), 0xf);
+  EXPECT_EQ(b.to_just_i64(), 0xf);
 }
 
 // =========================================================================
@@ -244,9 +244,9 @@ TEST_F(Slop_test, popcount_test) {
 
 TEST_F(Slop_test, popcount_op_test) {
   // Slop has no unknowns, so popcount_op is always the exact count as a value.
-  EXPECT_EQ(S::from_pyrope("0ub1010").popcount_op().to_i(), 2);
-  EXPECT_EQ(S::from_pyrope("0xFF").popcount_op().to_i(), 8);
-  EXPECT_EQ(S::from_pyrope("0").popcount_op().to_i(), 0);
+  EXPECT_EQ(S::from_pyrope("0ub1010").popcount_op().to_just_i64(), 2);
+  EXPECT_EQ(S::from_pyrope("0xFF").popcount_op().to_just_i64(), 8);
+  EXPECT_EQ(S::from_pyrope("0").popcount_op().to_just_i64(), 0);
 }
 
 TEST_F(Slop_test, popcount_op_negative_test) {
@@ -254,9 +254,9 @@ TEST_F(Slop_test, popcount_op_negative_test) {
   // negative, so popcount_op returns the exact count of set bits across the
   // full width. S is Slop<128>, so -1 (all 128 bits set) → 128.
   EXPECT_TRUE(S::from_pyrope("-1").is_negative());
-  EXPECT_EQ(S::from_pyrope("-1").popcount_op().to_i(), 128);
+  EXPECT_EQ(S::from_pyrope("-1").popcount_op().to_just_i64(), 128);
   // -2 = ...11111110 → all bits set except bit 0 → 127.
-  EXPECT_EQ(S::from_pyrope("-2").popcount_op().to_i(), 127);
+  EXPECT_EQ(S::from_pyrope("-2").popcount_op().to_just_i64(), 127);
 }
 
 // =========================================================================
@@ -266,14 +266,14 @@ TEST_F(Slop_test, slop_8bit) {
   auto a = Slop<8>::from_pyrope("5");
   auto b = Slop<8>::from_pyrope("3");
   auto c = a.add_op(b);
-  EXPECT_EQ(c.to_i(), 8);
+  EXPECT_EQ(c.to_just_i64(), 8);
 }
 
 TEST_F(Slop_test, slop_1bit) {
   auto a = Slop<1>(0);
   auto b = Slop<1>(1);
-  EXPECT_EQ(a.to_i(), 0);
-  EXPECT_EQ(b.to_i(), 1);
+  EXPECT_EQ(a.to_just_i64(), 0);
+  EXPECT_EQ(b.to_just_i64(), 1);
 }
 
 // =========================================================================
@@ -283,19 +283,19 @@ TEST_F(Slop_test, mux_op) {
   using S8 = Slop<8>;
   std::vector<S8> vals{S8::from_pyrope("0x11"), S8::from_pyrope("0x22"), S8::from_pyrope("0x33")};
 
-  EXPECT_EQ(S8::mux_op(S8::create_integer(0), vals).to_i(), 0x11);
-  EXPECT_EQ(S8::mux_op(S8::create_integer(2), vals).to_i(), 0x33);
+  EXPECT_EQ(S8::mux_op(S8::create_integer(0), vals).to_just_i64(), 0x11);
+  EXPECT_EQ(S8::mux_op(S8::create_integer(2), vals).to_just_i64(), 0x33);
   // Brace-list overload.
-  EXPECT_EQ(S8::mux_op(S8::create_integer(1), {S8::create_integer(5), S8::create_integer(9)}).to_i(), 9);
+  EXPECT_EQ(S8::mux_op(S8::create_integer(1), {S8::create_integer(5), S8::create_integer(9)}).to_just_i64(), 9);
 }
 
 TEST_F(Slop_test, hotmux_op) {
   using S8 = Slop<8>;
   std::vector<S8> vals{S8::from_pyrope("0x11"), S8::from_pyrope("0x22"), S8::from_pyrope("0x33")};
 
-  EXPECT_EQ(S8::hotmux_op(S8::create_integer(0b001), vals).to_i(), 0x11);
-  EXPECT_EQ(S8::hotmux_op(S8::create_integer(0b010), vals).to_i(), 0x22);
-  EXPECT_EQ(S8::hotmux_op(S8::create_integer(0b100), vals).to_i(), 0x33);
+  EXPECT_EQ(S8::hotmux_op(S8::create_integer(0b001), vals).to_just_i64(), 0x11);
+  EXPECT_EQ(S8::hotmux_op(S8::create_integer(0b010), vals).to_just_i64(), 0x22);
+  EXPECT_EQ(S8::hotmux_op(S8::create_integer(0b100), vals).to_just_i64(), 0x33);
 }
 
 TEST_F(Slop_test, lut_op) {
@@ -313,9 +313,9 @@ TEST_F(Slop_test, get_mask_op_multibit_packed) {
   using S32 = Slop<32>;
   auto v    = S32::create_integer(0xABCD);
   // 0xff selects the low byte -> 0xCD.
-  EXPECT_EQ(v.get_mask_op(S32::create_integer(0xff)).to_i(), 0xCD);
+  EXPECT_EQ(v.get_mask_op(S32::create_integer(0xff)).to_just_i64(), 0xCD);
   // 0xf00 selects bits 8..11 -> 0xB, packed down to the low nibble.
-  EXPECT_EQ(v.get_mask_op(S32::create_integer(0xf00)).to_i(), 0xB);
+  EXPECT_EQ(v.get_mask_op(S32::create_integer(0xf00)).to_just_i64(), 0xB);
 }
 
 // get_mask_op(mask) — a NEGATIVE source is sign-extended past its minimal
@@ -326,17 +326,17 @@ TEST_F(Slop_test, get_mask_op_multibit_packed) {
 TEST_F(Slop_test, get_mask_op_negative_source_sign_extends) {
   using S32 = Slop<32>;
   auto neg1 = S32::create_integer(-1);
-  EXPECT_EQ(neg1.get_mask_op(S32::create_integer(0xff)).to_i(), 0xff);    // low 8 bits of ...1111
-  EXPECT_EQ(neg1.get_mask_op(S32::create_integer(0xf)).to_i(), 0xf);      // low 4 bits
-  EXPECT_EQ(neg1.get_mask_op(S32::create_integer(0xffff)).to_i(), 0xffff);
+  EXPECT_EQ(neg1.get_mask_op(S32::create_integer(0xff)).to_just_i64(), 0xff);    // low 8 bits of ...1111
+  EXPECT_EQ(neg1.get_mask_op(S32::create_integer(0xf)).to_just_i64(), 0xf);      // low 4 bits
+  EXPECT_EQ(neg1.get_mask_op(S32::create_integer(0xffff)).to_just_i64(), 0xffff);
 
   // -2 == ...11111110 -> low byte is 0xfe.
   auto neg2 = S32::create_integer(-2);
-  EXPECT_EQ(neg2.get_mask_op(S32::create_integer(0xff)).to_i(), 0xfe);
+  EXPECT_EQ(neg2.get_mask_op(S32::create_integer(0xff)).to_just_i64(), 0xfe);
 
   // Positive sources are unaffected (sign bit is 0 above their width).
   auto p511 = S32::create_integer(0x1ff);
-  EXPECT_EQ(p511.get_mask_op(S32::create_integer(0xff)).to_i(), 0xff);
+  EXPECT_EQ(p511.get_mask_op(S32::create_integer(0xff)).to_just_i64(), 0xff);
 }
 
 // get_mask_op(mask) — single-bit mask returns the signed 1-bit integer
@@ -344,6 +344,6 @@ TEST_F(Slop_test, get_mask_op_negative_source_sign_extends) {
 TEST_F(Slop_test, get_mask_op_single_bit) {
   using S32 = Slop<32>;
   auto v    = S32::create_integer(0b1010);
-  EXPECT_EQ(v.get_mask_op(S32::create_integer(0b0010)).to_i(), -1);  // bit set
-  EXPECT_EQ(v.get_mask_op(S32::create_integer(0b0001)).to_i(), 0);   // bit clear
+  EXPECT_EQ(v.get_mask_op(S32::create_integer(0b0010)).to_just_i64(), -1);  // bit set
+  EXPECT_EQ(v.get_mask_op(S32::create_integer(0b0001)).to_just_i64(), 0);   // bit clear
 }

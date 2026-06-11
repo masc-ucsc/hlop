@@ -1246,20 +1246,20 @@ spool_ptr<Dlop> Dlop::shl_op(const Dlop& amount) const {
   if (amount.has_unknowns()) {
     return unknown(get_bits() + 64);
   }
-  if (!amount.is_i()) {
+  if (!amount.is_just_i64()) {
     return invalid();
   }
-  return shl_op(amount.to_i());
+  return shl_op(amount.to_just_i64());
 }
 
 spool_ptr<Dlop> Dlop::sra_op(const Dlop& amount) const {
   if (amount.has_unknowns()) {
     return unknown(get_bits());
   }
-  if (!amount.is_i()) {
+  if (!amount.is_just_i64()) {
     return invalid();
   }
-  return sra_op(amount.to_i());
+  return sra_op(amount.to_just_i64());
 }
 
 // =========================================================================
@@ -1359,10 +1359,10 @@ spool_ptr<Dlop> Dlop::mux_op(const Dlop& sel, std::span<const spool_ptr<Dlop>> v
   };
 
   if (!sel.has_unknowns()) {
-    if (!sel.is_i()) {
+    if (!sel.is_just_i64()) {
       return invalid();
     }
-    int64_t idx = sel.to_i();
+    int64_t idx = sel.to_just_i64();
     if (idx < 0 || static_cast<size_t>(idx) >= values.size()) {
       return invalid();
     }
@@ -1418,10 +1418,10 @@ spool_ptr<Dlop> Dlop::hotmux_op(const Dlop& sel, std::span<const spool_ptr<Dlop>
 
 spool_ptr<Dlop> Dlop::lut_op(const Dlop& table, const Dlop& addr) {
   if (!addr.has_unknowns()) {
-    if (!addr.is_i()) {
+    if (!addr.is_just_i64()) {
       return invalid();
     }
-    int64_t idx = addr.to_i();
+    int64_t idx = addr.to_just_i64();
     if (idx < 0) {
       return invalid();
     }
@@ -1697,10 +1697,10 @@ spool_ptr<Dlop> Dlop::ge_op(const Dlop& other) const {
 // Dlop-typed sext wrapper: forward to the int form once the bit count is
 // confirmed numeric and known. Non-numeric / unknown bit count is invalid.
 spool_ptr<Dlop> Dlop::sext_op(const Dlop& bits) const {
-  if (!bits.is_i()) {
+  if (!bits.is_just_i64()) {
     return invalid();
   }
-  return sext_op(static_cast<int>(bits.to_i()));
+  return sext_op(static_cast<int>(bits.to_just_i64()));
 }
 
 spool_ptr<Dlop> Dlop::sext_op(int from_bit) const {
@@ -2391,15 +2391,15 @@ int Dlop::get_trailing_zeroes() const {
   return 0;
 }
 
-bool Dlop::is_i() const {
+bool Dlop::is_just_i64() const {
   if (has_unknowns()) {
     return false;
   }
   return get_bits() <= 62;
 }
 
-int64_t Dlop::to_i() const {
-  assert(is_i());
+int64_t Dlop::to_just_i64() const {
+  assert(is_just_i64());
   return base()[0];
 }
 
@@ -2496,8 +2496,8 @@ std::string Dlop::to_pyrope() const {
     return std::format("0ub{}", bin);
   }
 
-  if (is_i()) {
-    int64_t val = to_i();
+  if (is_just_i64()) {
+    int64_t val = to_just_i64();
     if (val >= -63 && val <= 63) {
       return std::to_string(val);
     }
@@ -2640,7 +2640,7 @@ std::string Dlop::to_verilog() const {
     src = pos.get();
   }
 
-  if (src->is_i()) {
+  if (src->is_just_i64()) {
     return std::format("{}'sh{:x}", nbits, static_cast<uint64_t>(src->base()[0]));
   }
 
@@ -2883,8 +2883,8 @@ std::string Dlop::to_field() const {
     auto pos = neg_op();
     return std::string("-") + pos->to_pyrope().substr(pos->to_pyrope().starts_with("0x") ? 2 : 0);
   }
-  if (is_i()) {
-    return std::to_string(to_i());
+  if (is_just_i64()) {
+    return std::to_string(to_just_i64());
   }
   // Large unsigned: hex without "0x"
   auto p = to_pyrope();

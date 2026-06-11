@@ -700,8 +700,8 @@ public:
   int             get_last_bit_set() const;
   int             popcount() const;
   int             get_trailing_zeroes() const;
-  bool            is_i() const;
-  int64_t         to_i() const;
+  bool            is_just_i64() const;
+  int64_t         to_just_i64() const;
 
   // --- Conversion ---
   std::string to_pyrope() const;

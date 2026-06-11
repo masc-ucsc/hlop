@@ -387,7 +387,7 @@ TEST_F(EvalDlopTest, sum_with_AB) {
       },
   };
   auto res = ctx.execute(call);
-  EXPECT_EQ(res.outputs[0]->to_i(), 9);  // 10 + 3 - 4
+  EXPECT_EQ(res.outputs[0]->to_just_i64(), 9);  // 10 + 3 - 4
 }
 
 TEST_F(EvalDlopTest, mult_basic) {
@@ -399,7 +399,7 @@ TEST_F(EvalDlopTest, mult_basic) {
       },
   };
   auto res = ctx.execute(call);
-  EXPECT_EQ(res.outputs[0]->to_i(), 42);
+  EXPECT_EQ(res.outputs[0]->to_just_i64(), 42);
 }
 
 TEST_F(EvalDlopTest, div_basic) {
@@ -411,7 +411,7 @@ TEST_F(EvalDlopTest, div_basic) {
       },
   };
   auto res = ctx.execute(call);
-  EXPECT_EQ(res.outputs[0]->to_i(), 7);
+  EXPECT_EQ(res.outputs[0]->to_just_i64(), 7);
 }
 
 TEST_F(EvalDlopTest, not_basic) {
@@ -422,7 +422,7 @@ TEST_F(EvalDlopTest, not_basic) {
       },
   };
   auto res = ctx.execute(call);
-  EXPECT_EQ(res.outputs[0]->to_i(), -1);  // ~0 = -1
+  EXPECT_EQ(res.outputs[0]->to_just_i64(), -1);  // ~0 = -1
 }
 
 TEST_F(EvalDlopTest, lt_basic) {
@@ -458,7 +458,7 @@ TEST_F(EvalDlopTest, shl_basic) {
       },
   };
   auto res = ctx.execute(call);
-  EXPECT_EQ(res.outputs[0]->to_i(), 16);
+  EXPECT_EQ(res.outputs[0]->to_just_i64(), 16);
 }
 
 TEST_F(EvalDlopTest, sra_basic) {
@@ -470,7 +470,7 @@ TEST_F(EvalDlopTest, sra_basic) {
       },
   };
   auto res = ctx.execute(call);
-  EXPECT_EQ(res.outputs[0]->to_i(), -4);
+  EXPECT_EQ(res.outputs[0]->to_just_i64(), -4);
 }
 
 TEST_F(EvalDlopTest, mux_basic) {
@@ -484,7 +484,7 @@ TEST_F(EvalDlopTest, mux_basic) {
       },
   };
   auto res = ctx.execute(call);
-  EXPECT_EQ(res.outputs[0]->to_i(), 0x33);
+  EXPECT_EQ(res.outputs[0]->to_just_i64(), 0x33);
 }
 
 TEST_F(EvalDlopTest, ror_true) {
@@ -525,12 +525,12 @@ TEST_F(EvalDlopTest, flop_basic) {
   };
 
   auto cur = ctx.execute(flop);
-  EXPECT_EQ(cur.outputs[0]->to_i(), 0);  // initial value
+  EXPECT_EQ(cur.outputs[0]->to_just_i64(), 0);  // initial value
 
   ctx.advance_clock();
 
   auto next = ctx.execute(flop);
-  EXPECT_EQ(next.outputs[0]->to_i(), 42);  // committed value
+  EXPECT_EQ(next.outputs[0]->to_just_i64(), 42);  // committed value
 }
 
 TEST_F(EvalDlopTest, flop_enable_false) {
@@ -549,7 +549,7 @@ TEST_F(EvalDlopTest, flop_enable_false) {
   ctx.advance_clock();
 
   auto next = ctx.execute(flop);
-  EXPECT_EQ(next.outputs[0]->to_i(), 0);  // enable=0, no update
+  EXPECT_EQ(next.outputs[0]->to_just_i64(), 0);  // enable=0, no update
 }
 
 TEST_F(EvalDlopTest, latch_transparent) {
@@ -563,7 +563,7 @@ TEST_F(EvalDlopTest, latch_transparent) {
   };
 
   auto res = ctx.execute(latch);
-  EXPECT_EQ(res.outputs[0]->to_i(), 42);  // transparent
+  EXPECT_EQ(res.outputs[0]->to_just_i64(), 42);  // transparent
 }
 
 TEST_F(EvalDlopTest, latch_opaque) {
@@ -588,7 +588,7 @@ TEST_F(EvalDlopTest, latch_opaque) {
       },
   };
   auto res = ctx.execute(latch2);
-  EXPECT_EQ(res.outputs[0]->to_i(), 42);  // holds previous value
+  EXPECT_EQ(res.outputs[0]->to_just_i64(), 42);  // holds previous value
 }
 
 // --- Equivalence: verify dlop and slop produce same results ---
@@ -610,8 +610,8 @@ TEST_F(EvalDlopTest, equivalence_sum) {
   std::array<V32, 1> minus{V32::create_integer(25)};
   auto               sres = hlop::eval_sum<V32>({.plus = plus, .minus = minus});
 
-  EXPECT_EQ(dres.outputs[0]->to_i(), sres.to_i());
-  EXPECT_EQ(dres.outputs[0]->to_i(), 125);
+  EXPECT_EQ(dres.outputs[0]->to_just_i64(), sres.to_just_i64());
+  EXPECT_EQ(dres.outputs[0]->to_just_i64(), 125);
 }
 
 TEST_F(EvalDlopTest, equivalence_mux) {
@@ -632,6 +632,6 @@ TEST_F(EvalDlopTest, equivalence_mux) {
   std::array<V32, 3> data{V32::create_integer(100), V32::create_integer(200), V32::create_integer(300)};
   auto               sres = hlop::eval_mux<V32, V32>({.sel = sel, .data = data});
 
-  EXPECT_EQ(dres.outputs[0]->to_i(), sres.to_i());
-  EXPECT_EQ(dres.outputs[0]->to_i(), 200);
+  EXPECT_EQ(dres.outputs[0]->to_just_i64(), sres.to_just_i64());
+  EXPECT_EQ(dres.outputs[0]->to_just_i64(), 200);
 }

@@ -313,8 +313,8 @@ V eval_shl(const V& value, const V& amount) {
   if (amount.has_unknowns()) {
     return V::unknown(value.get_bits() + 64);  // conservative
   }
-  assert(amount.is_i());
-  return value.shl_op(amount.to_i());
+  assert(amount.is_just_i64());
+  return value.shl_op(amount.to_just_i64());
 }
 
 // --- SRA: arithmetic shift right ---
@@ -323,8 +323,8 @@ V eval_sra(const V& value, const V& amount) {
   if (amount.has_unknowns()) {
     return V::unknown(value.get_bits());  // conservative
   }
-  assert(amount.is_i());
-  return value.sra_op(amount.to_i());
+  assert(amount.is_just_i64());
+  return value.sra_op(amount.to_just_i64());
 }
 
 // =========================================================================
@@ -362,8 +362,8 @@ V eval_mux(const MuxArgs<S, V>& args) {
     return V::unknown(result.get_bits());
   }
 
-  assert(args.sel.is_i());
-  int64_t idx = args.sel.to_i();
+  assert(args.sel.is_just_i64());
+  int64_t idx = args.sel.to_just_i64();
   if (idx < 0 || static_cast<size_t>(idx) >= args.data.size()) {
     return V::create_integer(0);  // out of range
   }
@@ -531,8 +531,8 @@ V eval_memory_read(MemState<V>& mem, const MemoryReadArgs<V>& args) {
     return V::unknown(64);  // conservative
   }
 
-  assert(args.addr.is_i());
-  int64_t addr = args.addr.to_i();
+  assert(args.addr.is_just_i64());
+  int64_t addr = args.addr.to_just_i64();
 
   if (addr < 0 || static_cast<size_t>(addr) >= mem.curr.size()) {
     return V::create_integer(0);  // out of range
@@ -557,8 +557,8 @@ void eval_memory_write(MemState<V>& mem, const MemoryWriteArgs<V>& args) {
     return;  // cannot write to unknown address
   }
 
-  assert(args.addr.is_i());
-  int64_t addr = args.addr.to_i();
+  assert(args.addr.is_just_i64());
+  int64_t addr = args.addr.to_just_i64();
 
   if (addr < 0 || static_cast<size_t>(addr) >= mem.curr.size()) {
     return;  // out of range
