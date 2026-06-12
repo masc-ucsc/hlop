@@ -1208,6 +1208,11 @@ spool_ptr<Dlop> Dlop::shl_op(int64_t amount) const {
 }
 
 spool_ptr<Dlop> Dlop::sra_op(int64_t amount) const {
+  if (size <= 0 || amount < 0) {
+    // A payload-less value (nil) or a negative amount has no shift result;
+    // Invalid instead of tripping Blop::shrn's asserts.
+    return invalid();
+  }
   if (amount == 0) {
     auto dlop = make_result(Type::Integer, size);
     dlop->copy_payload_from(*this);
