@@ -767,6 +767,16 @@ public:
     }
 
     if (top == 0) {
+      // The remaining word must be read with the ORIGINAL sign: a positive
+      // value whose low word has bit 63 set (e.g. {-1,0} == 2^64-1) is not
+      // the int64 -1, and a negative one reaching into bit 63 (e.g.
+      // {0,-1} == -2^64) is not the int64 0. Both need the full 65 bits.
+      if (sign == 0 && src[0] < 0) {
+        return 65;
+      }
+      if (sign == -1 && src[0] >= 0) {
+        return 65;
+      }
       return get_bits64(src[0]);
     }
 

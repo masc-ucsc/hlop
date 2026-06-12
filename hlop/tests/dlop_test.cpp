@@ -533,6 +533,16 @@ TEST_F(Dlop_test, get_mask_value_static) {
   EXPECT_EQ(Dlop::get_mask_value(4)->to_just_i64(), 0xF);
   EXPECT_EQ(Dlop::get_mask_value(8)->to_just_i64(), 0xFF);
   EXPECT_EQ(Dlop::get_mask_value(16)->to_just_i64(), 0xFFFF);
+
+  // 63/64/65: the word-boundary masks. 2^64-1 is the 2-word value {-1, 0}
+  // whose Blop::get_bitsn top==0 fallthrough used to misread the low word
+  // as the int64 -1 (bits=1, to_pyrope "-1").
+  EXPECT_EQ(Dlop::get_mask_value(63)->get_bits(), 64);
+  EXPECT_EQ(Dlop::get_mask_value(64)->get_bits(), 65);
+  EXPECT_FALSE(Dlop::get_mask_value(64)->is_negative());
+  EXPECT_FALSE(Dlop::get_mask_value(64)->is_just_i64());
+  EXPECT_EQ(std::string(Dlop::get_mask_value(64)->to_pyrope()), "0x0ffffffffffffffff");
+  EXPECT_EQ(Dlop::get_mask_value(65)->get_bits(), 66);
 }
 
 TEST_F(Dlop_test, get_mask_value_range) {
