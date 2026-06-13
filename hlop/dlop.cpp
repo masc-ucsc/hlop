@@ -2445,12 +2445,16 @@ bool Dlop::is_mask() const {
   while (top > 0 && base()[top] == 0) {
     --top;
   }
-  if (base()[top] <= 0) {
-    return false;
+  // The highest non-zero word is the top of a positive value (is_negative was
+  // excluded above), so read it UNSIGNED: an all-ones low word (0xFFFF…F, i.e.
+  // -1 as int64) is the valid 64-bit run of `2^64-1`, not a negative word.
+  uint64_t topw = static_cast<uint64_t>(base()[top]);
+  if (topw == 0) {
+    return false;  // the value is zero
   }
 
   // Check top word: must be (2^k - 1)
-  if (((base()[top] + 1) & base()[top]) != 0) {
+  if (((topw + 1) & topw) != 0) {
     return false;
   }
   // All lower words must be all-ones
