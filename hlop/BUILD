@@ -1,6 +1,6 @@
 # This file is distributed under the BSD 3-Clause License. See LICENSE for details.
 
-load("@rules_cc//cc:defs.bzl", "cc_library", "cc_test")
+load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library", "cc_test")
 
 CPP23_COPTS = ["-std=c++23"]
 
@@ -108,5 +108,14 @@ cc_test(
         ":hlop",
         "//benchref:benchref",
         "@com_google_googletest//:gtest_main",
+    ],
+)
+
+cc_binary(
+    name = "dlop_robust_check",
+    srcs = ["tests/dlop_robust_check.cpp"],
+    copts = CPP23_COPTS,
+    deps = [
+        ":hlop",
     ],
 )

@@ -453,6 +453,13 @@ public:
   bool is_bool() const { return type == Type::Boolean; }
   bool is_string() const { return type == Type::String; }
   bool is_invalid() const { return type == Type::Invalid; }
+  // A value arithmetic / bitwise / shift ops can meaningfully operate on: a
+  // (possibly unknown) Integer or Boolean. String, Nil, Invalid (incl. ref) and
+  // Bitwidth are not numeric — any such operand makes an op illegal, and the op
+  // returns nil() rather than crashing or producing a garbage bit-pattern.
+  // Numeric values always carry size >= 1, so the kernels' size>=1 / non-empty
+  // preconditions hold once this guard passes.
+  bool is_numeric() const { return type == Type::Integer || type == Type::Boolean; }
 
   // --- In-place initializers (no spool_ptr round-trip) ---
   // These build the value directly into `*this`. Use them when a Dlop is

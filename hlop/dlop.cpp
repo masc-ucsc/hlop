@@ -565,6 +565,10 @@ void Dlop::mut_add(int64_t other) {
 // the lowest unknown bit across both operands. Above that position we also
 // force base bits to 1 to maintain the invariant `base == base | extra`.
 spool_ptr<Dlop> Dlop::add_op(const Dlop& other) const {
+  // Illegal operand (string / nil / invalid / ref) → nil, never a crash.
+  if (!is_numeric() || !other.is_numeric()) {
+    return nil();
+  }
   // Fully-known size-1 fast path. The exact sum of two ~64-bit same-sign values
   // carries out into a second word; detect that and widen so the result stays
   // exact (Dlop is arbitrary precision — addition is never modular).
