@@ -289,6 +289,75 @@ TEST_F(Dlop_test, and_or_xor_not_propagate_nil) {
   EXPECT_TRUE(n->not_op()->is_nil());
 }
 
+// Illegal operands must never crash/assert — they yield nil. Mirrors the
+// dlop_robust_check sweep, pinning the representative cases per op. (The
+// no-arg get_mask_op / reductions / mux keep their established invalid
+// sentinels and are intentionally not asserted here.)
+TEST_F(Dlop_test, illegal_operands_return_nil) {
+  auto i   = Dlop::create_integer(42);
+  auto s   = Dlop::create_string("hi");
+  auto n   = Dlop::nil();
+  auto inv = Dlop::invalid();
+  auto ref = Dlop::from_ref("r");
+  auto z   = Dlop::create_integer(0);
+  auto neg = Dlop::create_integer(-1);
+  auto big = Dlop::from_pyrope("0x123456789ABCDEF0123456789ABCDEF0");
+
+  // Arithmetic with a non-numeric operand (string / nil / invalid / ref) → nil.
+  for (auto* bad : {&s, &n, &inv, &ref}) {
+    EXPECT_TRUE(i->add_op(**bad)->is_nil());
+    EXPECT_TRUE((*bad)->add_op(*i)->is_nil());
+    EXPECT_TRUE(i->sub_op(**bad)->is_nil());
+    EXPECT_TRUE(i->mult_op(**bad)->is_nil());
+    EXPECT_TRUE(i->div_op(**bad)->is_nil());
+    EXPECT_TRUE(i->mod_op(**bad)->is_nil());
+    EXPECT_TRUE((*bad)->neg_op()->is_nil());
+  }
+  // Bitwise with a string / invalid / ref operand → nil. (A `nil` operand keeps
+  // the documented boolean short-circuit identities — see the test above.)
+  for (auto* bad : {&s, &inv, &ref}) {
+    EXPECT_TRUE(i->or_op(**bad)->is_nil());
+    EXPECT_TRUE(i->and_op(**bad)->is_nil());
+    EXPECT_TRUE(i->xor_op(**bad)->is_nil());
+    EXPECT_TRUE((*bad)->not_op()->is_nil());
+  }
+
+  // Division / modulo by zero → nil.
+  EXPECT_TRUE(i->div_op(*z)->is_nil());
+  EXPECT_TRUE(i->mod_op(*z)->is_nil());
+  EXPECT_TRUE(big->div_op(*z)->is_nil());
+
+  // Shifts: negative, non-integer, and astronomically large amounts → nil.
+  EXPECT_TRUE(i->shl_op(*neg)->is_nil());
+  EXPECT_TRUE(i->shl_op(*s)->is_nil());
+  EXPECT_TRUE(i->shl_op(*ref)->is_nil());
+  EXPECT_TRUE(i->shl_op(*big)->is_nil());  // would need ~10^37 words
+  EXPECT_TRUE(i->sra_op(*neg)->is_nil());
+  EXPECT_TRUE(i->sra_op(*s)->is_nil());
+
+  // A small, valid shift still works.
+  EXPECT_EQ(i->shl_op(*Dlop::create_integer(4))->to_just_i64(), 42 << 4);
+
+  // sext: non-numeric base / bad bit count → nil; in-range still works.
+  EXPECT_TRUE(s->sext_op(*Dlop::create_integer(3))->is_nil());
+  EXPECT_TRUE(i->sext_op(*neg)->is_nil());
+  EXPECT_TRUE(i->sext_op(*s)->is_nil());
+  EXPECT_TRUE(i->sext_op(*Dlop::create_integer(5))->is_negative());  // bit5 of 42 set
+
+  // set_mask with an unknown mask, or non-numeric operands → nil.
+  EXPECT_TRUE(i->set_mask_op(*Dlop::unknown(4), *i)->is_nil());
+  EXPECT_TRUE(s->set_mask_op(*i, *i)->is_nil());
+
+  // hotmux with a non-one-hot selector → nil (formerly an assertion failure).
+  std::vector<spool_ptr<Dlop>> vals = {Dlop::create_integer(10), Dlop::create_integer(20)};
+  EXPECT_TRUE(Dlop::hotmux_op(*Dlop::create_integer(0b11), vals)->is_nil());
+  EXPECT_TRUE(Dlop::hotmux_op(*Dlop::create_integer(-1), vals)->is_nil());
+
+  // concat with nil / invalid → nil.
+  EXPECT_TRUE(i->concat_op(*n)->is_nil());
+  EXPECT_TRUE(n->concat_op(*i)->is_nil());
+}
+
 // =========================================================================
 // Shift tests
 // =========================================================================

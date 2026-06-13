@@ -696,6 +696,11 @@ spool_ptr<Dlop> Dlop::add_op(const Dlop& other) const {
 }
 
 spool_ptr<Dlop> Dlop::sub_op(const Dlop& other) const {
+  // Illegal operand (string / nil / invalid / ref) → nil. Guard here too so a
+  // bad `other` never reaches neg_op()'s size-0 kernel path.
+  if (!is_numeric() || !other.is_numeric()) {
+    return nil();
+  }
   // sub = add(neg(other))
   auto neg_other = other.neg_op();
   return add_op(neg_other);
@@ -718,6 +723,12 @@ spool_ptr<Dlop> Dlop::sum_op(std::span<const spool_ptr<Dlop>> a, std::span<const
 // below that, every contributing a_i, b_j is known. From that bit up, mark
 // unknown (the carry chain mirrors add).
 spool_ptr<Dlop> Dlop::mult_op(const Dlop& other) const {
+  // Illegal operand (string / nil / invalid / ref) → nil. Besides the semantic
+  // requirement this also avoids Blop::multn reading src[-1] for a size-0
+  // operand.
+  if (!is_numeric() || !other.is_numeric()) {
+    return nil();
+  }
   int16_t rsz  = size + other.size;
   auto    dlop = make_result(Type::Integer, rsz);
 
@@ -781,12 +792,14 @@ spool_ptr<Dlop> Dlop::mult_op(const Dlop& other) const {
 }
 
 spool_ptr<Dlop> Dlop::div_op(const Dlop& other) const {
+  // Illegal operand (string / nil / invalid / ref) → nil. Must precede the
+  // is_known_false() check below: a size-0 nil/invalid reads as "false" and
+  // would otherwise be mistaken for a zero divisor.
+  if (!is_numeric() || !other.is_numeric()) {
+    return nil();
+  }
   if (other.is_known_false()) {
-    // Division by zero
-    if (is_negative()) {
-      return unknown_negative(2);
-    }
-    return unknown_positive(2);
+    return nil();  // division by zero → nil
   }
 
   if (has_unknowns() || other.has_unknowns()) {
@@ -841,16 +854,17 @@ spool_ptr<Dlop> Dlop::div_op(const Dlop& other) const {
 // and a 1-bit unknown when either operand has unknowns; otherwise the exact
 // remainder at any width.
 spool_ptr<Dlop> Dlop::mod_op(const Dlop& other) const {
-  // Type guards first: a nil/invalid/string operand has zero words and would
-  // otherwise be misclassified as "mod by zero" by the is_known_false() check.
-  if (is_invalid() || other.is_invalid() || is_nil() || other.is_nil() || is_string() || other.is_string()) {
-    return invalid();
+  // Illegal operand (string / nil / invalid / ref) → nil. Must precede the
+  // is_known_false() check: a size-0 nil/invalid reads as "false" and would
+  // otherwise be misclassified as "mod by zero".
+  if (!is_numeric() || !other.is_numeric()) {
+    return nil();
   }
   if (has_unknowns() || other.has_unknowns()) {
     return unknown(1);
   }
   if (other.is_known_false()) {
-    return invalid();
+    return nil();  // mod by zero → nil
   }
   // x % ±1 == 0. Handled explicitly so the scalar fast path never evaluates
   // INT64_MIN % -1 (signed-overflow UB).
@@ -874,6 +888,12 @@ spool_ptr<Dlop> Dlop::mod_op(const Dlop& other) const {
 // neg = ~x + 1; the "+1" has a carry chain identical to add. So bits at or
 // above the lowest unknown become unknown; bits below stay deterministic.
 spool_ptr<Dlop> Dlop::neg_op() const {
+  // Illegal operand (string / nil / invalid / ref) → nil. A numeric value
+  // always has size >= 1, so the size-1 reads and Blop::negn(size>=1) below are
+  // safe once this guard passes.
+  if (!is_numeric()) {
+    return nil();
+  }
   auto dlop = make_result(Type::Integer, size);
 
   if (has_unknowns()) {
@@ -963,6 +983,10 @@ spool_ptr<Dlop> Dlop::or_op(const Dlop& other) const {
     if ((!self_nil && is_known_true()) || (!other_nil && other.is_known_true())) {
       return create_integer(1);
     }
+    return nil();
+  }
+  // Any other non-numeric operand (string / invalid / ref) is illegal → nil.
+  if (!is_numeric() || !other.is_numeric()) {
     return nil();
   }
 
@@ -1064,6 +1088,10 @@ spool_ptr<Dlop> Dlop::and_op(const Dlop& other) const {
     }
     return nil();
   }
+  // Any other non-numeric operand (string / invalid / ref) is illegal → nil.
+  if (!is_numeric() || !other.is_numeric()) {
+    return nil();
+  }
 
   int16_t rsz  = std::max(size, other.size);
   auto    dlop = make_result(Type::Integer, rsz);
@@ -1155,6 +1183,10 @@ spool_ptr<Dlop> Dlop::xor_op(const Dlop& other) const {
   if (is_nil() || other.is_nil()) {
     return nil();
   }
+  // Any other non-numeric operand (string / invalid / ref) is illegal → nil.
+  if (!is_numeric() || !other.is_numeric()) {
+    return nil();
+  }
 
   int16_t rsz  = std::max(size, other.size);
   auto    dlop = make_result(Type::Integer, rsz);
@@ -1225,6 +1257,10 @@ spool_ptr<Dlop> Dlop::not_op() const {
   if (is_nil()) {
     return nil();
   }
+  // Any other non-numeric operand (string / invalid / ref) is illegal → nil.
+  if (!is_numeric()) {
+    return nil();
+  }
 
   auto dlop = make_result(Type::Integer, size);
 
@@ -1252,15 +1288,29 @@ spool_ptr<Dlop> Dlop::not_op() const {
 // Shift operations
 // =========================================================================
 spool_ptr<Dlop> Dlop::shl_op(int64_t amount) const {
+  if (size <= 0) {
+    return nil();  // no payload to shift (nil / invalid)
+  }
+  if (amount < 0) {
+    return nil();  // negative shift amount is illegal (would trip Blop::shln)
+  }
   if (amount == 0) {
     auto dlop = make_result(Type::Integer, size);
     dlop->copy_payload_from(*this);
     return dlop;
   }
 
-  int     extra_words = (amount + 63) / 64;
-  int16_t rsz         = size + extra_words;
-  auto    dlop        = make_result(Type::Integer, rsz);
+  // A non-zero value shifted left by an astronomical amount cannot be
+  // materialized (the result width is unbounded and would overflow the int16_t
+  // word count). Reject it as nil rather than thrash the allocator. The cap is
+  // the representational limit (INT16_MAX words ≈ 2M bits), far above any real
+  // constant width.
+  int64_t extra_words = (amount + 63) / 64;
+  if (extra_words > static_cast<int64_t>(INT16_MAX) - size) {
+    return nil();
+  }
+  int16_t rsz  = static_cast<int16_t>(size + extra_words);
+  auto    dlop = make_result(Type::Integer, rsz);
 
   // Sign-extend source into larger buffer, then shift
   int64_t* tmp_base  = alloc(rsz);
@@ -1289,8 +1339,8 @@ spool_ptr<Dlop> Dlop::shl_op(int64_t amount) const {
 spool_ptr<Dlop> Dlop::sra_op(int64_t amount) const {
   if (size <= 0 || amount < 0) {
     // A payload-less value (nil) or a negative amount has no shift result;
-    // Invalid instead of tripping Blop::shrn's asserts.
-    return invalid();
+    // nil instead of tripping Blop::shrn's asserts.
+    return nil();
   }
   if (amount == 0) {
     auto dlop = make_result(Type::Integer, size);
@@ -1330,8 +1380,11 @@ spool_ptr<Dlop> Dlop::shl_op(const Dlop& amount) const {
   if (amount.has_unknowns()) {
     return unknown(get_bits() + 64);
   }
-  if (!amount.is_just_i64()) {
-    return invalid();
+  // The amount must be a plain (non-negative, in-range) integer. A non-numeric
+  // amount — string / nil / invalid / ref — is illegal → nil. (is_just_i64 by
+  // itself would accept a ref, whose Invalid type still packs i64-looking bits.)
+  if (!amount.is_numeric() || !amount.is_just_i64()) {
+    return nil();
   }
   return shl_op(amount.to_just_i64());
 }
@@ -1340,8 +1393,9 @@ spool_ptr<Dlop> Dlop::sra_op(const Dlop& amount) const {
   if (amount.has_unknowns()) {
     return unknown(get_bits());
   }
-  if (!amount.is_just_i64()) {
-    return invalid();
+  // Non-numeric amount (string / nil / invalid / ref) is illegal → nil.
+  if (!amount.is_numeric() || !amount.is_just_i64()) {
+    return nil();
   }
   return sra_op(amount.to_just_i64());
 }
@@ -1468,6 +1522,11 @@ spool_ptr<Dlop> Dlop::mux_op(const Dlop& sel, std::span<const spool_ptr<Dlop>> v
 spool_ptr<Dlop> Dlop::hotmux_op(const Dlop& sel, std::span<const spool_ptr<Dlop>> values) {
   assert(!values.empty());
 
+  // A non-numeric selector (string / nil / invalid / ref) is illegal → nil.
+  if (!sel.is_numeric()) {
+    return nil();
+  }
+
   int scan = std::max(sel.get_bits(), static_cast<int>(values.size()));
 
   int known_set   = -1;
@@ -1478,7 +1537,11 @@ spool_ptr<Dlop> Dlop::hotmux_op(const Dlop& sel, std::span<const spool_ptr<Dlop>
       known_set = b;
     }
   }
-  assert(known_count <= 1 && "hotmux select must be one-hot");
+  // Selector must be one-hot. More than one known-set bit is an illegal
+  // selector → nil (formerly an assertion failure).
+  if (known_count > 1) {
+    return nil();
+  }
 
   if (known_count == 1) {
     if (static_cast<size_t>(known_set) >= values.size()) {
@@ -1781,13 +1844,33 @@ spool_ptr<Dlop> Dlop::ge_op(const Dlop& other) const {
 // Dlop-typed sext wrapper: forward to the int form once the bit count is
 // confirmed numeric and known. Non-numeric / unknown bit count is invalid.
 spool_ptr<Dlop> Dlop::sext_op(const Dlop& bits) const {
-  if (!bits.is_just_i64()) {
-    return invalid();
+  // Sign-extending a non-number, or by a non-numeric / unknown / out-of-range
+  // bit count, is illegal → nil. (is_just_i64 alone would accept a ref.)
+  if (!is_numeric()) {
+    return nil();
+  }
+  if (!bits.is_numeric() || !bits.is_just_i64()) {
+    return nil();
   }
   return sext_op(static_cast<int>(bits.to_just_i64()));
 }
 
 spool_ptr<Dlop> Dlop::sext_op(int from_bit) const {
+  if (size <= 0) {
+    return nil();  // no payload (nil / invalid)
+  }
+  if (from_bit < 0) {
+    return nil();  // illegal bit position (would trip Blop::sext64/sextn)
+  }
+  // A sign-extend point at or beyond the stored width is a no-op — those bits
+  // are already the sign extension — and dodges Blop::sext64's from_bit < 64
+  // precondition for single-word values.
+  if (from_bit >= size * 64) {
+    auto dlop = make_result(Type::Integer, size);
+    dlop->copy_payload_from(*this);
+    dlop->normalize();
+    return dlop;
+  }
   auto dlop = make_result(Type::Integer, size);
 
   // Sign-extend both base AND extra from `from_bit`. If the sign bit is
@@ -1966,6 +2049,12 @@ spool_ptr<Dlop> Dlop::get_mask_op(const Dlop& mask) const {
 //   set_mask(foo, -1, bar)    -> bar
 //   set_mask(foo,  0, bar)    -> foo
 spool_ptr<Dlop> Dlop::set_mask_op(const Dlop& mask, const Dlop& value) const {
+  // Illegal/degenerate operands → nil: base/mask/value must be usable numbers,
+  // and the mask must be fully known (an unknown mask cannot select definite
+  // bit positions — this replaces the former assert(!mask.has_unknowns())).
+  if (!is_numeric() || !mask.is_numeric() || !value.is_numeric() || mask.has_unknowns()) {
+    return nil();
+  }
   if (mask.is_known_false()) {
     auto dlop = make_result(Type::Integer, size);
     dlop->copy_payload_from(*this);
@@ -1986,8 +2075,6 @@ spool_ptr<Dlop> Dlop::set_mask_op(const Dlop& mask, const Dlop& value) const {
       return dlop;
     }
   }
-
-  assert(!mask.has_unknowns());
 
   bool mask_neg           = mask.is_negative();
   int  mask_bits          = mask.get_bits();
@@ -2172,6 +2259,11 @@ spool_ptr<Dlop> Dlop::popcount_op() const {
 }
 
 spool_ptr<Dlop> Dlop::concat_op(const Dlop& other) const {
+  // nil / invalid / ref has no bit pattern to concatenate → nil. (String and
+  // numeric operands fall through to the text / bit-concat paths below.)
+  if (is_nil() || other.is_nil() || is_invalid() || other.is_invalid()) {
+    return nil();
+  }
   // String ++ string is a *text* concat, not a numeric bit-concat.
   // init_string stores the first character in the low byte (so "ab" is
   // numerically `b'*256 + a` = 0x6261). To make "ab" ++ "cd" produce
@@ -2228,6 +2320,12 @@ spool_ptr<Dlop> Dlop::concat_op(const Dlop& other) const {
 
 spool_ptr<Dlop> Dlop::adjust_bits(int amount) const {
   assert(amount > 0);
+  // A non-numeric value (string / nil / invalid / ref) has no meaningful bit
+  // adjustment → nil. Guarding also keeps size >= 1 for the kernels below
+  // (a size-0 value would trip extra_mut()/heapify_set_extra()).
+  if (!is_numeric()) {
+    return nil();
+  }
   auto dlop = make_result(Type::Integer, size);
 
   if (size == 1) {
