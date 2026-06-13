@@ -1,0 +1,17 @@
+#pragma once
+
+#include <array>
+#include <cstdint>
+
+struct Sample3_stage {
+  uint32_t to1_b = 0;
+
+  std::array<uint32_t, 256> memory{};
+
+  uint8_t  reset_iterator = 0;
+  uint32_t tmp            = 0;
+  uint32_t tmp2           = 0;
+
+  void reset_cycle();
+  void cycle(bool s1_to3_cValid, uint32_t s1_to3_c, bool s2_to3_dValid, uint32_t s2_to3_d);
+};

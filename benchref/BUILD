@@ -28,6 +28,18 @@ cc_library(
     ],
 )
 
+cc_library(
+    name = "vcd_writer",
+    srcs = ["vcd_writer.cpp"],
+    hdrs = [
+        "vcd_utils.hpp",
+        "vcd_writer.hpp",
+    ],
+    includes = ["."],
+    copts = CPP23_COPTS,
+    visibility = ["//visibility:public"],
+)
+
 cc_test(
     name = "lconst_test",
     srcs = ["tests/lconst_test.cpp"],

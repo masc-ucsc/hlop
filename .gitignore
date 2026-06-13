@@ -54,3 +54,15 @@ desesc.??????
 kanata_log.??????
 
 MODULE.bazel.lock
+
+# benchref/sample build + run byproducts (Makefile flows)
+benchref/sample/*/sample
+benchref/sample/*/sample_vcd
+benchref/sample/*/sample.vvp
+benchref/sample/*/sample.cc
+benchref/sample/*/vsample
+benchref/sample/*/vsample_vcd
+benchref/sample/*/obj_dir/
+benchref/sample/*/simv*
+benchref/sample/*/csrc/
+benchref/sample/*/*.vcd
