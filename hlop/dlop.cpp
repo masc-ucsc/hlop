@@ -565,19 +565,43 @@ void Dlop::mut_add(int64_t other) {
 // the lowest unknown bit across both operands. Above that position we also
 // force base bits to 1 to maintain the invariant `base == base | extra`.
 spool_ptr<Dlop> Dlop::add_op(const Dlop& other) const {
-  int16_t rsz  = std::max(size, other.size);
-  auto    dlop = make_result(Type::Integer, rsz);
+  // Fully-known size-1 fast path. The exact sum of two ~64-bit same-sign values
+  // carries out into a second word; detect that and widen so the result stays
+  // exact (Dlop is arbitrary precision — addition is never modular).
+  if (size == 1 && other.size == 1 && !has_extra() && !other.has_extra()) {
+    __int128 sum = static_cast<__int128>(base()[0]) + static_cast<__int128>(other.base()[0]);
+    int64_t  lo  = static_cast<int64_t>(static_cast<uint64_t>(sum));
+    int64_t  hi  = static_cast<int64_t>(sum >> 64);
+    if (hi == (lo < 0 ? -1 : 0)) {  // fits in one signed word
+      auto dlop = make_result(Type::Integer, 1);
+      dlop->set_word_pair(lo, 0);
+      return dlop;
+    }
+    auto dlop       = make_result(Type::Integer, 2);
+    dlop->base()[0] = lo;
+    dlop->base()[1] = hi;
+    dlop->zero_extra();
+    return dlop;
+  }
 
-  if (rsz == 1 && size == 1 && other.size == 1) {
-    // Fast path
+  // Size-1 with unknowns: bits at or above the lowest unknown become unknown,
+  // which already absorbs any carry-out, so the result stays one word.
+  if (size == 1 && other.size == 1) {
+    auto     dlop     = make_result(Type::Integer, 1);
     uint64_t combined = static_cast<uint64_t>(extra()[0]) | static_cast<uint64_t>(other.extra()[0]);
-    // hi_fill: all bits at or above the lowest set bit of combined. Zero if
-    // combined is zero. Equivalent to `~(combined - 1) & ~0` when combined>0.
+    // hi_fill: all bits at or above the lowest set bit of combined.
     uint64_t hi_fill  = 0u - (combined & (0u - combined));
     int64_t  e        = static_cast<int64_t>(hi_fill);
     int64_t  b        = (base()[0] + other.base()[0]) | e;  // maintain invariant
     dlop->set_word_pair(b, e);
-  } else {
+    return dlop;
+  }
+
+  // General path: one extra word of carry headroom, then normalize to minimal.
+  int16_t rsz  = static_cast<int16_t>(std::max(size, other.size) + 1);
+  auto    dlop = make_result(Type::Integer, rsz);
+
+  {
     // Multi-word: sign-extend shorter operand
     const int64_t* s1 = base();
     const int64_t* s2 = other.base();
@@ -663,6 +687,7 @@ spool_ptr<Dlop> Dlop::add_op(const Dlop& other) const {
     }
   }
 
+  dlop->normalize();
   return dlop;
 }
 
@@ -776,6 +801,23 @@ spool_ptr<Dlop> Dlop::div_op(const Dlop& other) const {
     return unknown_positive(b);
   }
 
+  // Division by ±1 is the one case whose quotient can overflow the dividend's
+  // width: the most-negative value over -1 is -(min) == 2^(w-1), needing an
+  // extra word, and INT64_MIN/-1 is signed-overflow UB in the scalar fast path
+  // below. Route through neg_op()/copy, which already widen correctly.
+  if (other.size == 1) {
+    if (other.base()[0] == 1) {
+      auto dlop = make_result(Type::Integer, size);
+      dlop->copy_payload_from(*this);  // x / 1 == x
+      dlop->zero_extra();
+      dlop->normalize();
+      return dlop;
+    }
+    if (other.base()[0] == -1) {
+      return neg_op();  // x / -1 == -x  (neg_op widens the most-negative value)
+    }
+  }
+
   auto dlop = make_result(Type::Integer, size);
 
   if (size == 1 && other.size == 1) {
@@ -790,10 +832,10 @@ spool_ptr<Dlop> Dlop::div_op(const Dlop& other) const {
   return dlop;
 }
 
-// mod_op: integer remainder. Returns invalid on mod-by-zero (undefined), a
-// 1-bit unknown when either operand has unknowns, and the integer remainder
-// otherwise. Only the single-word fast path is implemented; multi-word
-// callers currently fall through to invalid.
+// mod_op: integer remainder, truncating toward zero (sign follows the
+// dividend, matching C/C++ `%`). Returns invalid on mod-by-zero (undefined)
+// and a 1-bit unknown when either operand has unknowns; otherwise the exact
+// remainder at any width.
 spool_ptr<Dlop> Dlop::mod_op(const Dlop& other) const {
   // Type guards first: a nil/invalid/string operand has zero words and would
   // otherwise be misclassified as "mod by zero" by the is_known_false() check.
@@ -806,10 +848,23 @@ spool_ptr<Dlop> Dlop::mod_op(const Dlop& other) const {
   if (other.is_known_false()) {
     return invalid();
   }
+  // x % ±1 == 0. Handled explicitly so the scalar fast path never evaluates
+  // INT64_MIN % -1 (signed-overflow UB).
+  if (other.size == 1 && (other.base()[0] == 1 || other.base()[0] == -1)) {
+    return create_integer(0);
+  }
   if (size == 1 && other.size == 1) {
     return create_integer(base()[0] % other.base()[0]);
   }
-  return invalid();
+
+  // The remainder magnitude is below the divisor, so max(size, other.size)
+  // words always suffice.
+  int16_t rsz  = size > other.size ? size : other.size;
+  auto    dlop = make_result(Type::Integer, rsz);
+  Blop::modn(dlop->base(), rsz, base(), size, other.base(), other.size);
+  dlop->zero_extra();
+  dlop->normalize();
+  return dlop;
 }
 
 // neg = ~x + 1; the "+1" has a carry chain identical to add. So bits at or
@@ -857,6 +912,26 @@ spool_ptr<Dlop> Dlop::neg_op() const {
       }
     }
     return dlop;
+  }
+
+  // Negating the most-negative value of a given width overflows it (|min| needs
+  // one more bit: -(-2^(64k-1)) = 2^(64k-1)), so widen by a word in that case.
+  bool most_neg = static_cast<uint64_t>(base()[size - 1]) == (static_cast<uint64_t>(1) << 63);
+  for (int i = 0; most_neg && i < size - 1; ++i) {
+    if (base()[i] != 0) {
+      most_neg = false;
+    }
+  }
+  if (most_neg) {
+    auto     big = make_result(Type::Integer, static_cast<int16_t>(size + 1));
+    int64_t* b   = big->base();
+    for (int i = 0; i < size + 1; ++i) {
+      b[i] = 0;
+    }
+    b[size - 1] = static_cast<int64_t>(static_cast<uint64_t>(1) << 63);  // 2^(64*size-1)
+    big->zero_extra();
+    big->normalize();
+    return big;
   }
 
   if (size == 1) {
@@ -1738,42 +1813,38 @@ spool_ptr<Dlop> Dlop::sext_op(int from_bit) const {
 }
 
 spool_ptr<Dlop> Dlop::get_mask_op() const {
-  // Convert signed value to unsigned mask (absolute value of bits)
+  // Convert a signed value to its unsigned magnitude bit pattern. A
+  // non-negative value is already its own mask.
   if (!is_negative()) {
     auto dlop = make_result(Type::Integer, size);
     dlop->copy_payload_from(*this);
     return dlop;
   }
 
-  // Negative: mask = (1 << get_bits()) + value
-  int nbits = get_bits();
-  int words = (nbits + 63) / 64;
-  if (words < 1) {
-    words = 1;
+  // Negative: mask = (1 << nbits) + value, i.e. clear every bit at and above
+  // bit `nbits`, leaving a NON-NEGATIVE result (matches Lconst::get_mask_op).
+  // words = nbits/64 + 1 always keeps one clear word of headroom above the top
+  // kept bit so the result's sign bit is 0 (it is unsigned), including the
+  // nbits-is-a-multiple-of-64 boundary where the top word must be fully zeroed.
+  int      nbits = get_bits();
+  int      words = nbits / 64 + 1;
+  auto     dlop  = make_result(Type::Integer, static_cast<int16_t>(words));
+  int64_t* rb    = dlop->base();
+  for (int i = 0; i < words; ++i) {
+    rb[i] = (i < size) ? base()[i] : -1;  // a negative value sign-extends with 1s
   }
-  auto dlop = make_result(Type::Integer, words);
-
-  // Compute (1 << nbits) - 1 & value  (clear sign extension)
-  if (words == 1) {
-    int64_t b = (nbits < 64) ? (base()[0] & ((int64_t(1) << nbits) - 1)) : base()[0];
-    dlop->set_word_pair(b, 0);
+  int top_word = nbits / 64;  // word holding bit `nbits`
+  int top_bit  = nbits % 64;
+  if (top_bit == 0) {
+    rb[top_word] = 0;  // bit `nbits` is at a word boundary: clear the whole word
   } else {
-    int64_t* rb = dlop->base();
-    for (int i = 0; i < std::min(static_cast<int>(size), words); ++i) {
-      rb[i] = base()[i];
-    }
-    // Mask off the top
-    int top_word = (nbits - 1) / 64;
-    int top_bit  = nbits % 64;
-    if (top_bit > 0 && top_word < words) {
-      rb[top_word] &= (int64_t(1) << top_bit) - 1;
-    }
-    for (int i = top_word + 1; i < words; ++i) {
-      rb[i] = 0;
-    }
-    dlop->zero_extra();
+    rb[top_word] &= (int64_t(1) << top_bit) - 1;
   }
-
+  for (int i = top_word + 1; i < words; ++i) {
+    rb[i] = 0;
+  }
+  dlop->zero_extra();
+  dlop->normalize();
   return dlop;
 }
 
@@ -1791,20 +1862,11 @@ spool_ptr<Dlop> Dlop::get_mask_op() const {
 // matches Pyrope's `x#[i]` semantics. We detect this from the selected-bit
 // count after the loop, so no separate popcount/bit-find pass is needed.
 spool_ptr<Dlop> Dlop::get_mask_op(const Dlop& mask) const {
-  // mask == -1 falls back to the no-arg, sign-strip version.
-  if (mask.is_negative() && mask.is_known_true()) {
-    bool all_ones = true;
-    for (int i = 0; i < mask.size; ++i) {
-      if (mask.base()[i] != -1) {
-        all_ones = false;
-        break;
-      }
-    }
-    if (all_ones) {
-      return get_mask_op();
-    }
-  }
-
+  // Note: mask == -1 is NOT special-cased to the no-arg sign-strip form. They
+  // differ when exactly one bit is selected — get_mask_op(mask) applies the
+  // single-bit rule (a lone selected set bit yields the signed -1, not 1),
+  // e.g. get_mask(-1, -1) == -1 whereas the sign-strip get_mask_op() gives 1.
+  // The general path below handles an all-ones mask correctly.
   if (mask.has_unknowns()) {
     // Mask itself has unknown bits: every output bit is potentially unknown
     // because we can't tell which source bits get extracted. Width is bounded
@@ -1823,29 +1885,29 @@ spool_ptr<Dlop> Dlop::get_mask_op(const Dlop& mask) const {
   bool mask_neg           = mask.is_negative();
   int  src_bits           = get_bits();
   int  positive_mask_bits = mask_neg ? (mask_bits - 1) : mask_bits;
-  // A positive mask may select bit positions ABOVE the source's minimal width;
-  // those bits are the sign (0 for non-negative, 1 for negative), so extraction
-  // must extend to the mask width and NOT cap at src_bits. Otherwise
-  // get_mask(-1, 0xff) wrongly yields 1 instead of 255 (the source's minimal
-  // width for -1 is a single sign bit).
-  int  end_pos            = mask_neg ? src_bits : positive_mask_bits;
 
-  // Pre-size the output: number of extracted bits is bounded by positive mask
-  // width (a positive mask) or by src_bits (a negative-mask carve-out). Sizing
-  // by src_bits alone would undersize when positive_mask_bits > src_bits.
-  int  max_out_bits = mask_neg ? src_bits : positive_mask_bits;
-  int  out_words    = std::max(1, (max_out_bits + 63) / 64);
+  // Pre-size the output. A negative mask packs every selected bit in
+  // [0, positive_mask_bits) plus the carve-out region [positive_mask_bits,
+  // src_bits); when the mask is wider than the source the first range
+  // dominates, so the bound is max(src_bits, positive_mask_bits). A positive
+  // mask packs at most positive_mask_bits bits. The extracted bits may include
+  // the source's sign bits (positions >= src_bits read the two's-complement
+  // sign), so the bound must NOT cap at src_bits.
+  int max_out_bits = mask_neg ? std::max(src_bits, positive_mask_bits) : positive_mask_bits;
+  // One extra zero word above the top output bit keeps the packed result
+  // non-negative (it is an unsigned bit-extract), matching Slop's fixed-width
+  // result; normalize() shrinks it afterward.
+  int  out_words = std::max(1, (max_out_bits + 63) / 64 + 1);
   auto result    = make_result(Type::Integer, static_cast<int16_t>(out_words));  // zeroed by reconstruct
   int64_t* re    = result->extra_mut();
   int64_t* rb    = result->base();
 
   // copy_bit: write source bit at position `i` into result at `out_bit`,
   // carrying the unknown flag from extra() so an unknown source bit stays
-  // unknown in the output (invariant: unknown bits have base=1).
+  // unknown in the output (invariant: unknown bits have base=1). Positions at
+  // or beyond the stored width read the sign bit (handled below), matching the
+  // sign-extending bit_test() Slop uses.
   auto copy_bit = [&](int i, int out) {
-    if (i >= end_pos) {
-      return;
-    }
     int  sword = i / 64;
     int  sbit  = i % 64;
     int  oword = out / 64;
@@ -1934,7 +1996,11 @@ spool_ptr<Dlop> Dlop::set_mask_op(const Dlop& mask, const Dlop& value) const {
     out_bits = std::max(out_bits, positive_mask_bits + value.get_bits());
   }
 
-  int      out_words = std::max(1, (out_bits + 63) / 64);
+  // One word of headroom above the top filled bit so the result's sign stays
+  // the SOURCE's sign extension (bits past out_bits are untouched, like Slop's
+  // fixed-width result) rather than a value bit landing at a word's top bit and
+  // flipping the sign. normalize() trims it afterward.
+  int      out_words = std::max(1, out_bits / 64 + 1);
   auto     result    = make_result(Type::Integer, static_cast<int16_t>(out_words));
   int64_t* re        = result->extra_mut();
   int64_t* rb        = result->base();

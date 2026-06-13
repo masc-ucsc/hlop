@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <cstring>
 #include <type_traits>
+#include <vector>
 
 class Blop {
 public:
@@ -150,7 +151,13 @@ public:
     assert(src2 >= 0);
 
     uint64_t word_up = src2 / 64;
-    assert(word_up < dest_sz);
+    // Shifting left by at least the full width clears every word.
+    if (word_up >= dest_sz) {
+      for (size_t i = 0; i < dest_sz; ++i) {
+        dest[i] = 0;
+      }
+      return;
+    }
     uint64_t bits_up = src2 & 63;
 
     if (bits_up == 0) {
@@ -173,12 +180,17 @@ public:
   template <size_t N>
   static constexpr void shl(std::array<int64_t, N>& dest, const std::array<int64_t, N>& src1, int64_t amount) {
     if constexpr (N == 1) {
-      assert(amount >= 0 && amount < 64);
-      dest[0] = src1[0] << amount;
+      assert(amount >= 0);
+      dest[0] = (amount < 64) ? (src1[0] << amount) : 0;  // shift past the width clears the word
     } else {
       assert(amount >= 0);
       size_t word_up = amount / 64;
-      assert(word_up < N);
+      if (word_up >= N) {  // shift past the full width clears every word
+        for (size_t i = 0; i < N; ++i) {
+          dest[i] = 0;
+        }
+        return;
+      }
       size_t bits_up = amount & 63;
 
       if (bits_up == 0) {
@@ -216,6 +228,16 @@ public:
 
     int64_t sign_fill = src1[dest_sz - 1] < 0 ? -1 : 0;
 
+    // Shifting right by at least the full width collapses to all sign bits
+    // (every original bit falls off). Guard here: the loops below underflow
+    // size_t when word_down >= dest_sz.
+    if (word_down >= dest_sz) {
+      for (size_t i = 0; i < dest_sz; ++i) {
+        dest[i] = sign_fill;
+      }
+      return;
+    }
+
     if (bits_down == 0) {
       for (size_t i = word_down; i < dest_sz; i++) {
         dest[i - word_down] = src1[i];
@@ -237,14 +259,22 @@ public:
   template <size_t N>
   static void shr(std::array<int64_t, N>& dest, const std::array<int64_t, N>& src1, int64_t amount) {
     if constexpr (N == 1) {
-      assert(amount >= 0 && amount < 64);
-      dest[0] = src1[0] >> amount;
+      assert(amount >= 0);
+      // Arithmetic shift; past the width collapses to all sign bits.
+      dest[0] = (amount < 64) ? (src1[0] >> amount) : (src1[0] < 0 ? -1 : 0);
     } else {
       assert(amount >= 0);
       size_t word_down = amount / 64;
       size_t bits_down = amount & 63;
 
       int64_t sign_fill = src1[N - 1] < 0 ? -1 : 0;
+
+      if (word_down >= N) {  // shift past the full width collapses to all sign bits
+        for (size_t i = 0; i < N; ++i) {
+          dest[i] = sign_fill;
+        }
+        return;
+      }
 
       if (bits_down == 0) {
         for (size_t i = word_down; i < N; i++) {
@@ -350,49 +380,62 @@ public:
   static void mult64(int64_t& dest, const int64_t src1, const int64_t src2) { dest = src1 * src2; }
 
   // Multi-word signed multiply: dest[0..dest_sz-1] = src1[0..src1_sz-1] * src2[0..src2_sz-1]
-  // dest_sz must be >= src1_sz + src2_sz to avoid overflow.
-  // All arrays are in signed two's complement.
+  // (truncated to dest_sz words). All arrays are signed two's complement,
+  // little-endian. When dest_sz >= src1_sz + src2_sz the full product is exact.
+  //
+  // The cores below treat the words as unsigned and compute the low dest_sz
+  // words of U1*U2 (U being the unsigned reading of the words). Because each
+  // operand is congruent to its signed value mod 2^(64*dest_sz), the low words
+  // already equal the signed product — BUT only when the operand's sign bit is
+  // inside the truncation window. If dest keeps words past an operand's stored
+  // width, that operand was implicitly zero-extended by the schoolbook, so its
+  // negative sign must be corrected by subtracting the other operand shifted up
+  // past it. Both the accumulate and the correction propagate carries/borrows
+  // through every higher word.
   static void multn(int64_t* dest, size_t dest_sz, const int64_t* src1, size_t src1_sz, const int64_t* src2, size_t src2_sz) {
     using u128 = unsigned __int128;
 
-    // Clear dest
     for (size_t i = 0; i < dest_sz; i++) {
       dest[i] = 0;
     }
 
-    // Unsigned schoolbook multiply of magnitudes, then fix sign
-    // But for two's complement, we can do unsigned multiply directly
-    // if we sign-extend conceptually. The schoolbook works on unsigned
-    // words and the two's complement representation handles sign naturally
-    // as long as dest is large enough.
-
+    // Unsigned schoolbook accumulate of the word magnitudes.
     for (size_t j = 0; j < src2_sz; ++j) {
       uint64_t carry = 0;
-      for (size_t i = 0; i < src1_sz; ++i) {
-        if (i + j >= dest_sz) {
-          break;
-        }
-        u128 prod   = static_cast<u128>(static_cast<uint64_t>(src1[i])) * static_cast<uint64_t>(src2[j])
-                      + static_cast<uint64_t>(dest[i + j]) + carry;
-        dest[i + j] = static_cast<int64_t>(static_cast<uint64_t>(prod));
-        carry       = static_cast<uint64_t>(prod >> 64);
+      uint64_t b     = static_cast<uint64_t>(src2[j]);
+      for (size_t i = 0; i < src1_sz && (i + j) < dest_sz; ++i) {
+        u128 acc    = static_cast<u128>(static_cast<uint64_t>(src1[i])) * b + static_cast<uint64_t>(dest[i + j]) + carry;
+        dest[i + j] = static_cast<int64_t>(static_cast<uint64_t>(acc));
+        carry       = static_cast<uint64_t>(acc >> 64);
       }
-      if (j + src1_sz < dest_sz) {
-        dest[j + src1_sz] += carry;
+      for (size_t k = j + src1_sz; carry && k < dest_sz; ++k) {  // propagate the row's carry
+        u128 acc = static_cast<u128>(static_cast<uint64_t>(dest[k])) + carry;
+        dest[k]  = static_cast<int64_t>(static_cast<uint64_t>(acc));
+        carry    = static_cast<uint64_t>(acc >> 64);
       }
     }
 
-    // Fix for signed: if src2 is negative, subtract src1 shifted left by src2_sz words
-    // (This accounts for the two's complement of src2's top word)
-    if (src2[src2_sz - 1] < 0) {
-      for (size_t i = 0; i < src1_sz && (i + src2_sz) < dest_sz; ++i) {
-        dest[i + src2_sz] -= src1[i];
+    // Two's-complement sign corrections: subtract (other << shift words), with
+    // borrow propagation through the high words.
+    auto sub_shifted = [&](const int64_t* src, size_t src_sz, size_t shift) {
+      uint64_t borrow = 0;
+      size_t   k      = shift;
+      for (size_t i = 0; i < src_sz && k < dest_sz; ++i, ++k) {
+        u128 acc = static_cast<u128>(static_cast<uint64_t>(dest[k])) - static_cast<uint64_t>(src[i]) - borrow;
+        dest[k]  = static_cast<int64_t>(static_cast<uint64_t>(acc));
+        borrow   = (acc >> 64) ? 1u : 0u;
       }
-    }
+      for (k = src_sz + shift; borrow && k < dest_sz; ++k) {
+        u128 acc = static_cast<u128>(static_cast<uint64_t>(dest[k])) - borrow;
+        dest[k]  = static_cast<int64_t>(static_cast<uint64_t>(acc));
+        borrow   = (acc >> 64) ? 1u : 0u;
+      }
+    };
     if (src1[src1_sz - 1] < 0) {
-      for (size_t j = 0; j < src2_sz && (j + src1_sz) < dest_sz; ++j) {
-        dest[j + src1_sz] -= src2[j];
-      }
+      sub_shifted(src2, src2_sz, src1_sz);
+    }
+    if (src2[src2_sz - 1] < 0) {
+      sub_shifted(src1, src1_sz, src2_sz);
     }
   }
 
@@ -401,33 +444,10 @@ public:
     multn(dest, dest_sz, src1, dest_sz, src2);
   }
 
-  // Multiply multi-word by scalar
+  // Multiply multi-word by scalar. Reuses the array core with a 1-word src2 so
+  // the sign-correction / carry handling stays in one place.
   static void multn(int64_t* dest, size_t dest_sz, const int64_t* src1, size_t src1_sz, const int64_t src2) {
-    using u128 = unsigned __int128;
-
-    for (size_t i = 0; i < dest_sz; i++) {
-      dest[i] = 0;
-    }
-
-    uint64_t carry = 0;
-    for (size_t i = 0; i < src1_sz && i < dest_sz; ++i) {
-      u128 prod = static_cast<u128>(static_cast<uint64_t>(src1[i])) * static_cast<uint64_t>(src2) + carry;
-      dest[i]   = static_cast<int64_t>(static_cast<uint64_t>(prod));
-      carry     = static_cast<uint64_t>(prod >> 64);
-    }
-    if (src1_sz < dest_sz) {
-      dest[src1_sz] += carry;
-    }
-
-    // Sign correction
-    if (src2 < 0) {
-      for (size_t i = 0; i < src1_sz && (i + 1) < dest_sz; ++i) {
-        dest[i + 1] -= src1[i];
-      }
-    }
-    if (src1[src1_sz - 1] < 0) {
-      dest[src1_sz] -= src2;  // only 1 word for src2
-    }
+    multn(dest, dest_sz, src1, src1_sz, &src2, 1);
   }
 
   template <size_t N>
@@ -459,58 +479,100 @@ public:
   }
 
   // =========================================================================
-  // DIV (signed division, truncating toward zero)
+  // DIV / MOD (signed, truncating toward zero; remainder takes the dividend's
+  // sign — matching C/C++ `/` and `%`).
+  //
+  // The 64-bit scalar path is the fast common case. Wider operands fall back to
+  // a plain shift/subtract binary long division (`divmodn`): O(width^2) but
+  // exact at any width and trivially correct. Division on multi-word constants
+  // is rare in LiveHD's constant folding, so simplicity beats speed here.
   // =========================================================================
   static void div64(int64_t& dest, const int64_t src1, const int64_t src2) {
     assert(src2 != 0);
     dest = src1 / src2;
   }
 
-  // Multi-word division is complex. For now, provide a 64-bit fast path
-  // and a helper that converts to/from single words when possible.
-  // Full Knuth Algorithm D can be added later if needed.
+  static void mod64(int64_t& dest, const int64_t src1, const int64_t src2) {
+    assert(src2 != 0);
+    dest = src1 % src2;
+  }
+
+  // Arbitrary-width signed divide + remainder. Either output pointer may be
+  // null to skip producing it. All arrays are signed two's complement, little-
+  // endian (word 0 least significant). `src2` must be non-zero.
+  //   quo == trunc(src1 / src2)      (rounds toward zero)
+  //   rem == src1 - quo * src2       (sign follows src1, |rem| < |src2|)
+  static void divmodn(int64_t* quo, size_t quo_sz, int64_t* rem, size_t rem_sz, const int64_t* src1, size_t src1_sz,
+                      const int64_t* src2, size_t src2_sz) {
+    const bool   neg1 = src1[src1_sz - 1] < 0;
+    const bool   neg2 = src2[src2_sz - 1] < 0;
+    const size_t n    = (src1_sz > src2_sz) ? src1_sz : src2_sz;
+
+    // Operand magnitudes (unsigned), plus the running quotient/remainder.
+    std::vector<uint64_t> u(n), v(n), q(n, 0), r(n, 0);
+    sign_extend_words(u.data(), n, src1, src1_sz);
+    sign_extend_words(v.data(), n, src2, src2_sz);
+    if (neg1) {
+      uneg_words(u.data(), n);
+    }
+    if (neg2) {
+      uneg_words(v.data(), n);
+    }
+    assert(!is_zero_words(v.data(), n) && "division by zero");
+
+    // Shift/subtract long division on the magnitudes, MSB first.
+    for (int i = static_cast<int>(n * 64) - 1; i >= 0; --i) {
+      ushl1_words(r.data(), n);                            // r <<= 1
+      r[0] |= (u[i / 64] >> (i % 64)) & 1ull;              // pull in bit i of u
+      if (ucmp_words(r.data(), v.data(), n) >= 0) {        // r >= v ?
+        usub_words(r.data(), v.data(), n);                 // r -= v
+        q[i / 64] |= static_cast<uint64_t>(1) << (i % 64);
+      }
+    }
+
+    if (neg1 != neg2) {
+      uneg_words(q.data(), n);  // quotient sign is the xor of the operand signs
+    }
+    if (neg1) {
+      uneg_words(r.data(), n);  // remainder follows the dividend's sign
+    }
+
+    if (quo) {
+      store_words(quo, quo_sz, q.data(), n);
+    }
+    if (rem) {
+      store_words(rem, rem_sz, r.data(), n);
+    }
+  }
+
   static void divn(int64_t* dest, size_t dest_sz, const int64_t* src1, size_t src1_sz, const int64_t* src2, size_t src2_sz) {
-    // Check if both fit in 64 bits
-    bool    s1_fits = true;
-    int64_t s1_sign = src1[src1_sz - 1] < 0 ? -1 : 0;
-    for (size_t i = 1; i < src1_sz; ++i) {
-      if (src1[i] != s1_sign) {
-        s1_fits = false;
-        break;
-      }
-    }
+    divmodn(dest, dest_sz, nullptr, 0, src1, src1_sz, src2, src2_sz);
+  }
 
-    bool    s2_fits = true;
-    int64_t s2_sign = src2[src2_sz - 1] < 0 ? -1 : 0;
-    for (size_t i = 1; i < src2_sz; ++i) {
-      if (src2[i] != s2_sign) {
-        s2_fits = false;
-        break;
-      }
-    }
-
-    if (s1_fits && s2_fits) {
-      assert(src2[0] != 0);
-      int64_t result = src1[0] / src2[0];
-      dest[0]        = result;
-      int64_t fill   = result < 0 ? -1 : 0;
-      for (size_t i = 1; i < dest_sz; ++i) {
-        dest[i] = fill;
-      }
-      return;
-    }
-
-    // TODO: Knuth Algorithm D for full multi-word division
-    assert(false && "Multi-word division beyond 64-bit not yet implemented");
+  static void modn(int64_t* dest, size_t dest_sz, const int64_t* src1, size_t src1_sz, const int64_t* src2, size_t src2_sz) {
+    divmodn(nullptr, 0, dest, dest_sz, src1, src1_sz, src2, src2_sz);
   }
 
   template <size_t N>
   static void div(std::array<int64_t, N>& dest, const std::array<int64_t, N>& src1, const std::array<int64_t, N>& src2) {
     if constexpr (N == 1) {
       assert(src2[0] != 0);
-      dest[0] = src1[0] / src2[0];
+      // INT64_MIN / -1 overflows int64 (UB); the modular (fixed-width) result is
+      // INT64_MIN, matching the wraparound the wider paths produce.
+      dest[0] = (src1[0] == INT64_MIN && src2[0] == -1) ? INT64_MIN : (src1[0] / src2[0]);
     } else {
       divn(dest.data(), N, src1.data(), N, src2.data(), N);
+    }
+  }
+
+  template <size_t N>
+  static void mod(std::array<int64_t, N>& dest, const std::array<int64_t, N>& src1, const std::array<int64_t, N>& src2) {
+    if constexpr (N == 1) {
+      assert(src2[0] != 0);
+      // INT64_MIN % -1 is signed-overflow UB; the true remainder is 0.
+      dest[0] = (src1[0] == INT64_MIN && src2[0] == -1) ? 0 : (src1[0] % src2[0]);
+    } else {
+      modn(dest.data(), N, src1.data(), N, src2.data(), N);
     }
   }
 
@@ -830,6 +892,83 @@ public:
       return msb64(static_cast<uint64_t>(src[0]));
     } else {
       return msbn(src.data(), N);
+    }
+  }
+
+private:
+  // =========================================================================
+  // Word-array primitives for arbitrary-width long division (divmodn).
+  // Every buffer is `n` 64-bit words, little-endian (word 0 least significant),
+  // interpreted as an unsigned magnitude unless noted.
+  // =========================================================================
+
+  // Sign-extend a signed src (src_sz words) into an n-word dst.
+  static void sign_extend_words(uint64_t* dst, size_t n, const int64_t* src, size_t src_sz) {
+    uint64_t sign = (src[src_sz - 1] < 0) ? ~uint64_t(0) : uint64_t(0);
+    for (size_t i = 0; i < n; ++i) {
+      dst[i] = (i < src_sz) ? static_cast<uint64_t>(src[i]) : sign;
+    }
+  }
+
+  // a = -a  (two's complement negate, mod 2^(64n)).
+  static void uneg_words(uint64_t* a, size_t n) {
+    uint64_t carry = 1;
+    for (size_t i = 0; i < n; ++i) {
+      uint64_t t     = ~a[i] + carry;
+      carry          = (t < carry) ? 1u : 0u;
+      a[i]           = t;
+    }
+  }
+
+  // a <<= 1
+  static void ushl1_words(uint64_t* a, size_t n) {
+    uint64_t carry = 0;
+    for (size_t i = 0; i < n; ++i) {
+      uint64_t next_carry = a[i] >> 63;
+      a[i]                = (a[i] << 1) | carry;
+      carry               = next_carry;
+    }
+  }
+
+  // a -= b  (mod 2^(64n)); both treated as unsigned.
+  static void usub_words(uint64_t* a, const uint64_t* b, size_t n) {
+    uint64_t borrow = 0;
+    for (size_t i = 0; i < n; ++i) {
+      uint64_t ai = a[i];
+      uint64_t t1 = ai - b[i];
+      uint64_t b1 = (t1 > ai) ? 1u : 0u;
+      uint64_t t2 = t1 - borrow;
+      uint64_t b2 = (t2 > t1) ? 1u : 0u;
+      a[i]        = t2;
+      borrow      = b1 | b2;
+    }
+  }
+
+  // Unsigned compare: -1 if a<b, 0 if a==b, 1 if a>b.
+  static int ucmp_words(const uint64_t* a, const uint64_t* b, size_t n) {
+    for (int i = static_cast<int>(n) - 1; i >= 0; --i) {
+      if (a[i] != b[i]) {
+        return a[i] < b[i] ? -1 : 1;
+      }
+    }
+    return 0;
+  }
+
+  static bool is_zero_words(const uint64_t* a, size_t n) {
+    for (size_t i = 0; i < n; ++i) {
+      if (a[i] != 0) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  // Store an n-word signed result into a dst_sz-word signed buffer: copy the
+  // overlapping words, sign-extend (or truncate) the rest.
+  static void store_words(int64_t* dst, size_t dst_sz, const uint64_t* src, size_t n) {
+    uint64_t sign = (src[n - 1] >> 63) ? ~uint64_t(0) : uint64_t(0);
+    for (size_t i = 0; i < dst_sz; ++i) {
+      dst[i] = static_cast<int64_t>((i < n) ? src[i] : sign);
     }
   }
 };

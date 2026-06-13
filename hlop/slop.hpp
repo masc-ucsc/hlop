@@ -418,13 +418,16 @@ public:
     return result;
   }
 
-  // mod_op: integer remainder. Asserts on mod-by-zero. Single-word only (the
-  // common case in Slop's runtime kernel); multi-word callers should fall
-  // back to Dlop.
+  // mod_op: integer remainder, truncating toward zero (sign follows the
+  // dividend, matching C/C++ `%`). Asserts on mod-by-zero.
   Slop mod_op(const Slop& other) const {
     nil_check_(other);
     I(!other.is_known_false(), "Slop modulo by zero");
-    return create_integer(base_[0] % other.base_[0]);
+    Slop result;
+    // Route through Blop::mod (even for n_words==1) so the INT64_MIN % -1
+    // signed-overflow UB is guarded in one place, matching div_op.
+    Blop::mod<n_words>(result.base_, base_, other.base_);
+    return result;
   }
 
   Slop neg_op() const {
@@ -554,13 +557,27 @@ public:
     if (!is_negative()) {
       return *this;
     }
+    // Magnitude bit pattern: clear every bit at and above bit `nbits` so the
+    // result is non-negative (matches Lconst::get_mask_op). When nbits lands on
+    // a word boundary (top_bit == 0) the whole top word must be zeroed.
+    //
+    // Fixed-width caveat: a value occupying the full width (get_bits() == N) has
+    // no spare bit for the cleared sign, so its magnitude (N+1 bits) is not
+    // representable in Slop<N>; top_word reaches n_words and the value is
+    // returned unchanged. Dlop, being arbitrary precision, widens instead — so
+    // the two intentionally diverge only at that representational boundary. Keep
+    // operand widths below N (as real LiveHD values are) to avoid it.
     Slop result;
     int  nbits   = get_bits();
     result.base_ = base_;
     int top_word = nbits / 64;
     int top_bit  = nbits % 64;
-    if (top_bit > 0 && top_word < n_words) {
-      result.base_[top_word] &= (int64_t(1) << top_bit) - 1;
+    if (top_word < n_words) {
+      if (top_bit == 0) {
+        result.base_[top_word] = 0;
+      } else {
+        result.base_[top_word] &= (int64_t(1) << top_bit) - 1;
+      }
     }
     for (int i = top_word + 1; i < n_words; ++i) {
       result.base_[i] = 0;
