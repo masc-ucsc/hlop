@@ -458,10 +458,29 @@ void Dlop::init_from_pyrope(std::string_view orig_txt) {
     return;
   }
 
-  reconstruct(Type::Integer, 1 + orig_txt.size() / 16);
+  // Power-of-two decimal modifiers (02-basics.md): a single trailing K/M/G/T
+  // scales a decimal literal by 1024^n (K=2^10, M=2^20, G=2^30, T=2^40). Strip
+  // it before the digit loop so the suffix is not scanned as a digit. Only the
+  // decimal branch (shift_mode==10) is affected; hex/octal/binary are untouched.
+  int    scale_pow2 = 0;
+  size_t dec_end    = orig_txt.size();
+  if (shift_mode == 10 && dec_end > skip_chars + 1) {
+    switch (lower(orig_txt[dec_end - 1])) {
+      case 'k': scale_pow2 = 10; break;
+      case 'm': scale_pow2 = 20; break;
+      case 'g': scale_pow2 = 30; break;
+      case 't': scale_pow2 = 40; break;
+      default: break;
+    }
+    if (scale_pow2 != 0) {
+      --dec_end;  // drop the suffix from the magnitude scan
+    }
+  }
+
+  reconstruct(Type::Integer, 1 + orig_txt.size() / 16 + (scale_pow2 != 0 ? 1 : 0));
 
   if (shift_mode == 10) {
-    for (size_t i = skip_chars; i < orig_txt.size(); ++i) {
+    for (size_t i = skip_chars; i < dec_end; ++i) {
       char c = orig_txt[i];
       auto v = char_to_val[static_cast<uint8_t>(c)];
       if (likely(v >= 0 && v < 10)) {
@@ -473,6 +492,9 @@ void Dlop::init_from_pyrope(std::string_view orig_txt) {
         }
         throw std::runtime_error(std::format("ERROR: {} encoding could not use {}\n", orig_txt, c));
       }
+    }
+    if (scale_pow2 != 0) {
+      shl_base(scale_pow2);  // magnitude * 1024^n
     }
   } else if (shift_mode == 1) {
     init_from_binary(orig_txt.substr(skip_chars), unsigned_result);
@@ -2485,7 +2507,11 @@ bool Dlop::is_power2() const {
   if (nonzero_count != 1) {
     return false;
   }
-  return ((base()[nonzero_idx] - 1) & base()[nonzero_idx]) == 0;
+  // Read the lone non-zero word UNSIGNED: a positive value can carry its single
+  // set bit at position 63 of a low word (word == 0x8000…0, i.e. INT64_MIN as
+  // int64). Signed `w - 1` there is overflow UB; unsigned wraps correctly.
+  uint64_t w = static_cast<uint64_t>(base()[nonzero_idx]);
+  return ((w - 1) & w) == 0;
 }
 
 int Dlop::get_bits() const {

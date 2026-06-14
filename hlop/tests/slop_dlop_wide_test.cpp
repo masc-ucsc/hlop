@@ -383,6 +383,57 @@ TEST(SlopDlopWide, popcount_known_answers) {
   EXPECT_TRUE(ones_d->popcount_op()->is_known_eq(*Dlop::create_integer(300))) << "Dlop popcount==300";
 }
 
+// is_mask / is_power2 across 64-bit word boundaries, with answers known
+// a-priori and Dlop checked against Slop. The interesting cases are the ones
+// the single-word fast path never sees: a lone set bit at position 63 of a low
+// word (word == 0x8000…0 == INT64_MIN as int64) and an all-ones low word
+// (0xFFFF…F == -1 as int64). Reading those words SIGNED misclassifies the
+// value — power2's `w-1` is also signed-overflow UB on INT64_MIN.
+TEST(SlopDlopWide, is_mask_is_power2_word_boundaries) {
+  auto pow2_s = [](int k) { return S::create_integer(1).shl_op(k); };
+  auto pow2_d = [](int k) { return Dlop::create_integer(1)->shl_op(Dlop::create_integer(k)); };
+  // mask of `k` low ones == 2^k - 1.
+  auto mask_s = [&](int k) { return pow2_s(k).sub_op(S::create_integer(1)); };
+  auto mask_d = [&](int k) { return pow2_d(k)->sub_op(*Dlop::create_integer(1)); };
+
+  // 2^k is a power of two, and a mask only for k==0 (1 == 2^1-1); spans the
+  // on/around word-boundary positions including 63/64/127/128.
+  for (int k : {0, 1, 62, 63, 64, 65, 127, 128, 200, 499}) {
+    EXPECT_TRUE(pow2_s(k).is_power2()) << "Slop 2^" << k << " is_power2";
+    EXPECT_TRUE(pow2_d(k)->is_power2()) << "Dlop 2^" << k << " is_power2";
+    EXPECT_EQ(pow2_s(k).is_mask(), k == 0) << "Slop 2^" << k << " is_mask";
+    EXPECT_EQ(pow2_d(k)->is_mask(), k == 0) << "Dlop 2^" << k << " is_mask";
+    EXPECT_EQ(pow2_d(k)->is_power2(), pow2_s(k).is_power2()) << "2^" << k << " power2 parity";
+    EXPECT_EQ(pow2_d(k)->is_mask(), pow2_s(k).is_mask()) << "2^" << k << " mask parity";
+  }
+
+  // 2^k - 1 is a mask; it is a power of two only for k==1 (value 1).
+  for (int k : {1, 2, 63, 64, 65, 128, 256, 500}) {
+    EXPECT_TRUE(mask_s(k).is_mask()) << "Slop 2^" << k << "-1 is_mask";
+    EXPECT_TRUE(mask_d(k)->is_mask()) << "Dlop 2^" << k << "-1 is_mask";
+    EXPECT_EQ(mask_s(k).is_power2(), k == 1) << "Slop 2^" << k << "-1 is_power2";
+    EXPECT_EQ(mask_d(k)->is_power2(), k == 1) << "Dlop 2^" << k << "-1 is_power2";
+    EXPECT_EQ(mask_d(k)->is_mask(), mask_s(k).is_mask()) << "2^" << k << "-1 mask parity";
+    EXPECT_EQ(mask_d(k)->is_power2(), mask_s(k).is_power2()) << "2^" << k << "-1 power2 parity";
+  }
+
+  // Zero, negatives, and two-bits-set are neither.
+  EXPECT_FALSE(S::create_integer(0).is_mask());
+  EXPECT_FALSE(S::create_integer(0).is_power2());
+  EXPECT_FALSE(Dlop::create_integer(0)->is_mask());
+  EXPECT_FALSE(Dlop::create_integer(0)->is_power2());
+  // -(2^200): negative, so neither, in both classes.
+  EXPECT_FALSE(pow2_s(200).neg_op().is_power2()) << "Slop -2^200 !is_power2";
+  EXPECT_FALSE(pow2_d(200)->neg_op()->is_power2()) << "Dlop -2^200 !is_power2";
+  EXPECT_FALSE(pow2_s(200).neg_op().is_mask()) << "Slop -2^200 !is_mask";
+  EXPECT_FALSE(pow2_d(200)->neg_op()->is_mask()) << "Dlop -2^200 !is_mask";
+  // 2^300 + 2^100: two bits set — a power of two requires exactly one.
+  S    two_s = pow2_s(300).or_op(pow2_s(100));
+  auto two_d = pow2_d(300)->or_op(*pow2_d(100));
+  EXPECT_FALSE(two_s.is_power2()) << "Slop two-bits !is_power2";
+  EXPECT_FALSE(two_d->is_power2()) << "Dlop two-bits !is_power2";
+}
+
 // Regression tests for bugs surfaced by the adversarial review of the
 // multi-word arithmetic changes.
 

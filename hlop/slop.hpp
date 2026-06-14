@@ -847,10 +847,15 @@ public:
       while (top > 0 && base_[top] == 0) {
         --top;
       }
-      if (base_[top] <= 0) {
-        return false;
+      // The highest non-zero word is the top of a positive value (is_negative
+      // was excluded above), so read it UNSIGNED: an all-ones low word
+      // (0xFFFF…F, i.e. -1 as int64) is the valid 64-bit run of `2^64-1`, not a
+      // negative word.
+      uint64_t topw = static_cast<uint64_t>(base_[top]);
+      if (topw == 0) {
+        return false;  // the value is zero
       }
-      if (((base_[top] + 1) & base_[top]) != 0) {
+      if (((topw + 1) & topw) != 0) {
         return false;
       }
       for (int i = 0; i < top; ++i) {
@@ -880,7 +885,12 @@ public:
       if (nonzero_count != 1) {
         return false;
       }
-      return ((base_[nonzero_idx] - 1) & base_[nonzero_idx]) == 0;
+      // Read the lone non-zero word UNSIGNED: a positive value can carry its
+      // single set bit at position 63 of a low word (word == 0x8000…0, i.e.
+      // INT64_MIN as int64). Signed `w - 1` there is overflow UB; unsigned
+      // wraps correctly.
+      uint64_t w = static_cast<uint64_t>(base_[nonzero_idx]);
+      return ((w - 1) & w) == 0;
     }
   }
 
