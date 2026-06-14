@@ -8,7 +8,6 @@ cc_library(
     name = "support",
     hdrs = [
         "likely.hpp",
-        "str_tools.hpp",
     ],
     includes = ["."],
     copts = CPP23_COPTS,

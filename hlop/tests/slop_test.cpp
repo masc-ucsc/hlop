@@ -347,3 +347,34 @@ TEST_F(Slop_test, get_mask_op_single_bit) {
   EXPECT_EQ(v.get_mask_op(S32::create_integer(0b0010)).to_just_i64(), -1);  // bit set
   EXPECT_EQ(v.get_mask_op(S32::create_integer(0b0001)).to_just_i64(), 0);   // bit clear
 }
+
+// Pyrope `nil` / `null` literals parse to Type::Nil (parity with Dlop), while
+// the quoted form is the string "nil".
+TEST_F(Slop_test, nil_null_literals) {
+  EXPECT_TRUE(S::from_pyrope("nil").is_nil());
+  EXPECT_TRUE(S::from_pyrope("null").is_nil());
+  EXPECT_TRUE(S::from_pyrope("NULL").is_nil());
+  EXPECT_TRUE(S::from_pyrope("Nil").is_nil());
+  EXPECT_FALSE(S::from_pyrope("'nil'").is_nil());  // quoted -> string
+}
+
+// The signed/unsigned binary prefixes are the full 0sb / 0ub. A bare/short 0s
+// or 0u must error cleanly, not read the base char past the string_view.
+TEST_F(Slop_test, from_pyrope_short_sign_prefix_rejected) {
+  EXPECT_THROW(S::from_pyrope(std::string_view{"0sb", 2}), std::runtime_error);  // "0s"
+  EXPECT_THROW(S::from_pyrope(std::string_view{"0ub", 2}), std::runtime_error);  // "0u"
+  EXPECT_THROW(S::from_pyrope("0s"), std::runtime_error);
+  EXPECT_THROW(S::from_pyrope("0u"), std::runtime_error);
+  EXPECT_EQ(S::from_pyrope("0sb1010").to_just_i64(), -6);
+  EXPECT_EQ(S::from_pyrope("0ub1010").to_just_i64(), 10);
+}
+
+// is_mask must accept INT64_MAX (the 2^63-1 all-ones run) in the scalar
+// (n_words==1) path without signed overflow on base_[0]+1.
+TEST_F(Slop_test, is_mask_scalar_boundary) {
+  using S64 = Slop<64>;
+  EXPECT_TRUE(S64::create_integer(0x7FFFFFFFFFFFFFFFLL).is_mask());  // 2^63-1
+  EXPECT_TRUE(S64::create_integer(0xFF).is_mask());
+  EXPECT_FALSE(S64::create_integer(0xF0).is_mask());  // not anchored at bit 0
+  EXPECT_FALSE(S64::create_integer(0).is_mask());
+}

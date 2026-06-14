@@ -270,3 +270,14 @@ TEST(SlopDlopDiff, add_op_carry_chain_soundness) {
     ExpectConsistent(*da->add_op(*db), sa.add_op(sb), std::string("add_op@") + concrete);
   }
 }
+
+// to_verilog must agree between Dlop and Slop for concrete values, including
+// negatives: both emit the two's-complement magnitude, not raw sign-extended
+// words (regression for Slop emitting 0xff..f for negatives).
+TEST(SlopDlopDiff, to_verilog_parity) {
+  for (const char* txt : {"0sb1", "0sb10", "0sb1010", "0sb01010", "0sb110011", "0sb1000000000000001", "0"}) {
+    auto d = Dlop::from_pyrope(txt);
+    auto s = S::from_pyrope(txt);
+    EXPECT_EQ(d->to_verilog(), s.to_verilog()) << "to_verilog mismatch for " << txt;
+  }
+}

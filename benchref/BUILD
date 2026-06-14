@@ -12,6 +12,7 @@ cc_library(
         "lconst.hpp",
         "lrand.hpp",
         "sint.hpp",
+        "str_tools.hpp",
         "uint.hpp",
         "woothash.hpp",
     ],

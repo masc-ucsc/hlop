@@ -122,6 +122,29 @@ TEST_F(EvalSlopTest, eval_set_mask_low_nibble) {
   EXPECT_TRUE(out.is_known_eq(V32::from_pyrope("0xFFa")));
 }
 
+// Non-contiguous mask: get_mask is a gather/pack, not an AND. Selecting the two
+// separated nibbles of 0xABCD with 0xF0F concatenates them low-first -> 0xBD
+// (a plain AND would wrongly yield 0x0B0D).
+TEST_F(EvalSlopTest, eval_get_mask_non_contiguous) {
+  auto out = hlop::eval_get_mask(V32::from_pyrope("0xABCD"), V32::from_pyrope("0xF0F"));
+  EXPECT_TRUE(out.is_known_eq(V32::from_pyrope("0xBD")));
+  // Documented example: extract bits 8..11 of 0xFEED -> 0xE.
+  auto out2 = hlop::eval_get_mask(V32::from_pyrope("0xFEED"), V32::from_pyrope("0xF00"));
+  EXPECT_TRUE(out2.is_known_eq(V32::from_pyrope("0xE")));
+}
+
+// Non-contiguous mask: set_mask is a scatter (consume value's low bits into the
+// mask-selected positions), not (base&~mask)|(value&mask). 0xABC scattered into
+// the two nibbles of 0xFFF selected by 0xF0F -> 0xBFC (the in-place form would
+// wrongly yield 0xAFC).
+TEST_F(EvalSlopTest, eval_set_mask_non_contiguous) {
+  auto base = V32::from_pyrope("0xFFF");
+  auto mask = V32::from_pyrope("0xF0F");
+  auto val  = V32::from_pyrope("0xABC");
+  auto out  = hlop::eval_set_mask(base, mask, val);
+  EXPECT_TRUE(out.is_known_eq(V32::from_pyrope("0xBFC")));
+}
+
 // --- Multi-sink ops ---
 
 TEST_F(EvalSlopTest, eval_sum) {

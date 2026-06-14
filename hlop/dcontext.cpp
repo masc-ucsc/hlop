@@ -198,7 +198,9 @@ DResult DContext::exec_get_mask(const DCall& call) {
   assert(call.inputs.size() >= 2);
   auto value = call.inputs[0].value;
   auto mask  = call.inputs[1].value;
-  return {.outputs = {value->and_op(mask)}};
+  // get_mask is a gather/pack (extract the bits where mask==1 and pack them down
+  // to the low bits), not a plain AND. Route to the canonical, tested op.
+  return {.outputs = {value->get_mask_op(mask)}};
 }
 
 DResult DContext::exec_set_mask(const DCall& call) {
@@ -211,10 +213,10 @@ DResult DContext::exec_set_mask(const DCall& call) {
     return {.outputs = {base}};
   }
 
-  auto not_mask = mask->not_op();
-  auto cleared  = base->and_op(not_mask);
-  auto masked_v = value->and_op(mask);
-  return {.outputs = {cleared->or_op(masked_v)}};
+  // set_mask is a scatter (consume value's bits from bit 0 and place them into the
+  // mask-selected positions), not an in-place (base&~mask)|(value&mask). Route to
+  // the canonical, tested op.
+  return {.outputs = {base->set_mask_op(mask, value)}};
 }
 
 DResult DContext::exec_shl(const DCall& call) {

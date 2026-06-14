@@ -10,7 +10,6 @@
 #include <random>
 
 #include "likely.hpp"
-#include "str_tools.hpp"
 
 // =========================================================================
 // Memory management
@@ -177,24 +176,31 @@ void Dlop::init_unknown(int nbits) {
   }
 
   if (nbits <= 63) {
-    int64_t mask = (int64_t(1) << nbits) - 1;
+    int64_t mask = static_cast<int64_t>((uint64_t(1) << nbits) - 1);
     data         = mask;
     set_extra_word(mask);  // extra == base → Mirror, stays inline
   } else {
-    int words = (nbits + 63) / 64;
+    int leftover = nbits % 64;
+    int full     = nbits / 64;  // number of fully-unknown low words
+    // ceil(nbits/64) unknown words, plus one all-zero headroom word when nbits
+    // lands exactly on a 64-bit boundary, so bit `nbits` and above (including the
+    // sign bit) stay known 0 instead of forming an unbounded negative unknown.
+    // Matches get_mask_op()'s "words = nbits/64 + 1" headroom convention.
+    int words = full + 1;
     grow_to(static_cast<int16_t>(words));
     int64_t* e = extra_mut();
     int64_t* b = base();
     for (int i = 0; i < words; ++i) {
-      b[i] = -1;
-      e[i] = -1;
+      bool unk = i < full;
+      b[i]     = unk ? -1 : 0;
+      e[i]     = unk ? -1 : 0;
     }
-    int leftover = nbits % 64;
     if (leftover > 0) {
-      int64_t mask = (int64_t(1) << leftover) - 1;
-      b[words - 1] = mask;
-      e[words - 1] = mask;
+      int64_t mask = static_cast<int64_t>((uint64_t(1) << leftover) - 1);
+      b[full]      = mask;
+      e[full]      = mask;
     }
+    // leftover == 0: top word (index `full`) stays 0 as known-zero headroom.
   }
 }
 
@@ -397,22 +403,29 @@ void Dlop::init_from_pyrope(std::string_view orig_txt) {
   int  shift_mode      = 0;
   bool unsigned_result = false;
 
-  if (orig_txt.size() >= (1 + skip_chars) && std::isdigit(orig_txt[skip_chars])) {
+  if (orig_txt.size() >= (1 + skip_chars) && std::isdigit(static_cast<unsigned char>(orig_txt[skip_chars]))) {
     shift_mode = 10;
     if (orig_txt.size() >= (2 + skip_chars) && orig_txt[skip_chars] == '0') {
       ++skip_chars;
       char sel_ch = lower(orig_txt[skip_chars]);
       if (sel_ch == 's') {
+        // Signed literals are binary only: the prefix must be the full `0sb…`.
+        // Bounds-check before reading the base char so a bare `0s` does not read
+        // past the string_view.
         ++skip_chars;
-        sel_ch = lower(orig_txt[skip_chars]);
-        if (sel_ch != 'b') {
+        if (skip_chars >= orig_txt.size() || lower(orig_txt[skip_chars]) != 'b') {
           throw std::runtime_error(std::format("ERROR: {} unknown pyrope encoding only binary can be signed 0sb...\n", orig_txt));
         }
+        sel_ch = 'b';
         assert(!unsigned_result);
       } else if (sel_ch == 'u') {
         // Explicit `0u` prefix: unsigned, then a base selector (x/b/d/o)
-        // follows. Matches pyrope syntax `0ub10101`, `0ux3F`, …
+        // follows — the binary form is `0ub…`. Bounds-check so a bare `0u` does
+        // not read past the string_view.
         ++skip_chars;
+        if (skip_chars >= orig_txt.size()) {
+          throw std::runtime_error(std::format("ERROR: {} unknown pyrope encoding, use 0ub... (binary) or 0ux/0ud/0uo\n", orig_txt));
+        }
         sel_ch          = lower(orig_txt[skip_chars]);
         unsigned_result = true;
       } else {
@@ -436,7 +449,7 @@ void Dlop::init_from_pyrope(std::string_view orig_txt) {
       } else if (sel_ch == 'd') {
         shift_mode = 10;
         ++skip_chars;
-      } else if (std::isdigit(sel_ch)) {
+      } else if (std::isdigit(static_cast<unsigned char>(sel_ch))) {
         shift_mode = 10;
       } else if (sel_ch == 'o') {
         shift_mode = 3;
@@ -536,46 +549,6 @@ spool_ptr<Dlop> Dlop::from_pyrope(std::string_view orig_txt) {
   auto dlop = spool_ptr<Dlop>::make();
   dlop->init_from_pyrope(orig_txt);
   return dlop;
-}
-
-// =========================================================================
-// Mutating arithmetic
-// =========================================================================
-void Dlop::mut_add(const Dlop& other) {
-  if (other.size > size) {
-    grow_to(other.size);
-  }
-
-  if (size == 1 && other.size == 1) {
-    int64_t e = extra()[0] | other.extra()[0];
-    int64_t b = (base()[0] + other.base()[0]) | e;
-    set_word_pair(b, e);
-  } else {
-    unmirror();
-    int64_t* tmp = alloc(size);
-    memcpy(tmp, other.base(), other.size * sizeof(int64_t));
-    int64_t sign = (other.base()[other.size - 1] < 0) ? -1 : 0;
-    for (int i = other.size; i < size; ++i) {
-      tmp[i] = sign;
-    }
-    Blop::addn(base(), size, base(), tmp);
-    Blop::orn(base(), size, base(), extra());
-    free(size, tmp);
-  }
-}
-
-void Dlop::mut_add(int64_t other) {
-  if (size == 1) {
-    int64_t e = extra()[0];
-    int64_t b = (base()[0] + other) | e;
-    set_word_pair(b, e);
-  } else {
-    int64_t* tmp = alloc(size);
-    Blop::extend(tmp, size, other);
-    Blop::addn(base(), size, base(), tmp);
-    Blop::orn(base(), size, base(), extra());
-    free(size, tmp);
-  }
 }
 
 // =========================================================================
@@ -751,6 +724,26 @@ spool_ptr<Dlop> Dlop::mult_op(const Dlop& other) const {
   if (!is_numeric() || !other.is_numeric()) {
     return nil();
   }
+
+  // Fully-known size-1 fast path: the dominant small multiply. The general path
+  // allocates an rsz=2 pool buffer + memsets that normalize() almost always
+  // undoes (a ~31x31-bit product fits one word). Mirror add_op's fast path.
+  if (size == 1 && other.size == 1 && !has_extra() && !other.has_extra()) {
+    __int128 prod = static_cast<__int128>(base()[0]) * static_cast<__int128>(other.base()[0]);
+    int64_t  lo   = static_cast<int64_t>(static_cast<uint64_t>(prod));
+    int64_t  hi   = static_cast<int64_t>(prod >> 64);
+    if (hi == (lo < 0 ? -1 : 0)) {  // fits in one signed word
+      auto dlop = make_result(Type::Integer, 1);
+      dlop->set_word_pair(lo, 0);
+      return dlop;
+    }
+    auto dlop       = make_result(Type::Integer, 2);
+    dlop->base()[0] = lo;
+    dlop->base()[1] = hi;
+    dlop->zero_extra();
+    return dlop;
+  }
+
   int16_t rsz  = size + other.size;
   auto    dlop = make_result(Type::Integer, rsz);
 
@@ -1433,6 +1426,9 @@ spool_ptr<Dlop> Dlop::clone(const Dlop& src) {
 }
 
 bool Dlop::unknown_bit_test(int pos) const {
+  if (size <= 0) {
+    return false;  // nil / invalid empty value: treat as all-known-zero
+  }
   int word = pos / 64;
   int bit  = pos % 64;
   if (word >= size) {
@@ -1728,25 +1724,6 @@ bool Dlop::same_repr(const Dlop& other) const {
 
 bool Dlop::is_known_eq(const Dlop& other) const { return eq_op(other)->is_known_true(); }
 
-bool Dlop::cmp_less_known(const Dlop& other) const {
-  int16_t rsz    = std::max(size, other.size);
-  // Signed comparison from MSW down
-  int64_t v1_top = (rsz - 1 < size) ? base()[rsz - 1] : (base()[size - 1] < 0 ? -1 : 0);
-  int64_t v2_top = (rsz - 1 < other.size) ? other.base()[rsz - 1] : (other.base()[other.size - 1] < 0 ? -1 : 0);
-  if (v1_top != v2_top) {
-    return v1_top < v2_top;
-  }
-
-  for (int i = rsz - 2; i >= 0; --i) {
-    uint64_t v1 = (i < size) ? static_cast<uint64_t>(base()[i]) : (base()[size - 1] < 0 ? ~uint64_t(0) : 0);
-    uint64_t v2 = (i < other.size) ? static_cast<uint64_t>(other.base()[i]) : (other.base()[other.size - 1] < 0 ? ~uint64_t(0) : 0);
-    if (v1 != v2) {
-      return v1 < v2;
-    }
-  }
-  return false;
-}
-
 // Three-valued comparison: MSB→LSB walk that decides on the first known/known
 // disagreement and gives up to unknown at the first unknown bit reached before
 // any disagreement. Signed: at the top sign-extended bit, a known 1 means
@@ -1938,21 +1915,31 @@ spool_ptr<Dlop> Dlop::get_mask_op() const {
   int      nbits = get_bits();
   int      words = nbits / 64 + 1;
   auto     dlop  = make_result(Type::Integer, static_cast<int16_t>(words));
+  // extra_mut() may materialize heap storage for a size-1 result, moving base out
+  // of the inline word — so it must be called BEFORE caching base() (see dlop.hpp).
+  int64_t* re    = dlop->extra_mut();
   int64_t* rb    = dlop->base();
   for (int i = 0; i < words; ++i) {
-    rb[i] = (i < size) ? base()[i] : -1;  // a negative value sign-extends with 1s
+    rb[i] = (i < size) ? base()[i]  : -1;  // a negative value sign-extends base with 1s
+    re[i] = (i < size) ? extra()[i] : 0;   // unknown plane: no unknowns above stored width
   }
   int top_word = nbits / 64;  // word holding bit `nbits`
   int top_bit  = nbits % 64;
   if (top_bit == 0) {
     rb[top_word] = 0;  // bit `nbits` is at a word boundary: clear the whole word
+    re[top_word] = 0;
   } else {
-    rb[top_word] &= (int64_t(1) << top_bit) - 1;
+    int64_t m    = static_cast<int64_t>((uint64_t(1) << top_bit) - 1);
+    rb[top_word] &= m;
+    re[top_word] &= m;
   }
   for (int i = top_word + 1; i < words; ++i) {
     rb[i] = 0;
+    re[i] = 0;
   }
-  dlop->zero_extra();
+  // Preserve the unknown plane (do NOT zero_extra): the magnitude keeps the
+  // source's unknown bits below `nbits`, matching Lconst::get_mask_op. Masking
+  // both planes with the same mask keeps the "unknown bits have base==1" invariant.
   dlop->normalize();
   return dlop;
 }
@@ -2351,8 +2338,10 @@ spool_ptr<Dlop> Dlop::adjust_bits(int amount) const {
   auto dlop = make_result(Type::Integer, size);
 
   if (size == 1) {
-    int64_t b = (amount < 64) ? (base()[0] & ((int64_t(1) << amount) - 1)) : base()[0];
-    dlop->set_word_pair(b, extra()[0]);
+    // Mask both planes: leaving the unknown (extra) bits above `amount` set would
+    // both leak unknowns and break the "unknown bits have base==1" invariant.
+    int64_t m = (amount < 64) ? static_cast<int64_t>((uint64_t(1) << amount) - 1) : -1;
+    dlop->set_word_pair(base()[0] & m, extra()[0] & m);
   } else {
     int64_t* re = dlop->extra_mut();
     int64_t* rb = dlop->base();
@@ -2360,11 +2349,21 @@ spool_ptr<Dlop> Dlop::adjust_bits(int amount) const {
     memcpy(re, extra(), size * sizeof(int64_t));
     int top_word = amount / 64;
     int top_bit  = amount % 64;
-    if (top_word < size && top_bit > 0) {
-      rb[top_word] &= (int64_t(1) << top_bit) - 1;
+    if (top_word < size) {
+      if (top_bit == 0) {
+        // `amount` on a word boundary: clear the whole word in both planes
+        // (the previous code skipped it, leaking the high word).
+        rb[top_word] = 0;
+        re[top_word] = 0;
+      } else {
+        int64_t m = static_cast<int64_t>((uint64_t(1) << top_bit) - 1);
+        rb[top_word] &= m;
+        re[top_word] &= m;
+      }
     }
     for (int i = top_word + 1; i < size; ++i) {
       rb[i] = 0;
+      re[i] = 0;
     }
   }
 
@@ -2548,6 +2547,9 @@ int Dlop::get_bits() const {
 }
 
 bool Dlop::bit_test(int pos) const {
+  if (size <= 0) {
+    return false;  // nil / invalid empty value: treat as all-known-zero
+  }
   int word = pos / 64;
   int bit  = pos % 64;
   if (word >= size) {

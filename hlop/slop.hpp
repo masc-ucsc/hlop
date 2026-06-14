@@ -255,6 +255,11 @@ public:
     if (eq_ci(orig_txt, "false")) {
       return create_bool(false);
     }
+    // Pyrope `nil` / `null` literals parse to Type::Nil (matches Dlop). The
+    // *string* "nil" must be written in quoted form `'nil'`.
+    if (eq_ci(orig_txt, "nil") || eq_ci(orig_txt, "null")) {
+      return nil();
+    }
 
     bool   negative   = false;
     size_t skip_chars = 0;
@@ -275,15 +280,22 @@ public:
         ++skip_chars;
         char sel_ch = lower(orig_txt[skip_chars]);
         if (sel_ch == 's') {
+          // Signed literals are binary only: the prefix must be the full `0sb…`.
+          // Bounds-check before reading the base char so a bare `0s` does not
+          // read past the string_view.
           ++skip_chars;
-          sel_ch = lower(orig_txt[skip_chars]);
-          if (sel_ch != 'b') {
+          if (skip_chars >= orig_txt.size() || lower(orig_txt[skip_chars]) != 'b') {
             throw std::runtime_error("ERROR: unknown pyrope encoding (only 0sb...)");
           }
+          sel_ch = 'b';
         } else if (sel_ch == 'u') {
           // Explicit `0u` prefix: unsigned, followed by a base selector
-          // (x/b/d/o). Matches pyrope syntax `0ub10101`, `0ux3F`, …
+          // (x/b/d/o) — the binary form is `0ub…`. Bounds-check so a bare `0u`
+          // does not read past the string_view.
           ++skip_chars;
+          if (skip_chars >= orig_txt.size()) {
+            throw std::runtime_error("ERROR: unknown pyrope encoding, use 0ub... or 0ux/0ud/0uo");
+          }
           sel_ch          = lower(orig_txt[skip_chars]);
           unsigned_result = true;
         } else {
@@ -799,8 +811,16 @@ public:
     result.base_ = base_;
     int top_word = amount / 64;
     int top_bit  = amount % 64;
-    if (top_word < n_words && top_bit > 0) {
-      result.base_[top_word] &= (int64_t(1) << top_bit) - 1;
+    if (top_word < n_words) {
+      if (top_bit == 0) {
+        // `amount` lands on a word boundary: the whole word (bits amount..+63)
+        // must be cleared, not skipped — otherwise the high word leaks through.
+        result.base_[top_word] = 0;
+      } else {
+        // Build the keep-mask in unsigned space: at top_bit==63, int64_t(1)<<63
+        // would overflow (UB under -ftrapv/UBSan).
+        result.base_[top_word] &= static_cast<int64_t>((uint64_t(1) << top_bit) - 1);
+      }
     }
     for (int i = top_word + 1; i < n_words; ++i) {
       result.base_[i] = 0;
@@ -841,7 +861,11 @@ public:
       return false;
     }
     if constexpr (n_words == 1) {
-      return base_[0] > 0 && ((base_[0] + 1) & base_[0]) == 0;
+      // Read unsigned (is_negative() already excluded negatives): base_[0]+1
+      // overflows when base_[0]==INT64_MAX, a valid 2^63-1 mask. Mirrors the
+      // unsigned top-word read in the multi-word branch below.
+      uint64_t w = static_cast<uint64_t>(base_[0]);
+      return w != 0 && ((w + 1) & w) == 0;
     } else {
       int top = n_words - 1;
       while (top > 0 && base_[top] == 0) {
@@ -1030,15 +1054,24 @@ public:
       return std::format("\"{}\"", to_string());
     }
     int nbits = get_bits();
-    if (is_just_i64()) {
-      return std::format("{}'sh{:x}", nbits, static_cast<uint64_t>(base_[0]));
+    // For negatives, format the two's-complement magnitude (neg_op) as hex,
+    // matching Dlop::to_verilog. Emitting the raw sign-extended words would
+    // print the full-width 0xff..f instead of the magnitude.
+    Slop        pos;
+    const Slop* src = this;
+    if (is_negative()) {
+      pos = neg_op();
+      src = &pos;
+    }
+    if (src->is_just_i64()) {
+      return std::format("{}'sh{:x}", nbits, static_cast<uint64_t>(src->base_[0]));
     }
     std::string hex;
     for (int i = n_words - 1; i >= 0; --i) {
       if (i == n_words - 1) {
-        hex += std::format("{:x}", static_cast<uint64_t>(base_[i]));
+        hex += std::format("{:x}", static_cast<uint64_t>(src->base_[i]));
       } else {
-        hex += std::format("{:016x}", static_cast<uint64_t>(base_[i]));
+        hex += std::format("{:016x}", static_cast<uint64_t>(src->base_[i]));
       }
     }
     return std::format("{}'sh{}", nbits, hex);

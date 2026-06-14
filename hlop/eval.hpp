@@ -87,45 +87,6 @@ struct MemoryWriteArgs {
 // State containers
 // =========================================================================
 
-// Dynamic state container for dlop (keyed by string state_id)
-template <class V>
-struct DynState {
-  V curr;
-  V next;
-};
-
-template <class V>
-class DynStateMap {
-  std::unordered_map<std::string, DynState<V>> flops_;
-  std::unordered_map<std::string, DynState<V>> latches_;
-
-public:
-  DynState<V>& get_flop(const std::string& id, const V& init) {
-    auto it = flops_.find(id);
-    if (it == flops_.end()) {
-      it = flops_.emplace(id, DynState<V>{init, init}).first;
-    }
-    return it->second;
-  }
-
-  DynState<V>& get_latch(const std::string& id, const V& init) {
-    auto it = latches_.find(id);
-    if (it == latches_.end()) {
-      it = latches_.emplace(id, DynState<V>{init, init}).first;
-    }
-    return it->second;
-  }
-
-  void advance_clock() {
-    for (auto& [id, st] : flops_) {
-      st.curr = st.next;
-    }
-    for (auto& [id, st] : latches_) {
-      st.curr = st.next;
-    }
-  }
-};
-
 // Static state container for slop (index-based)
 template <class V>
 struct RegState {
@@ -279,32 +240,27 @@ V eval_sext(const V& value, int bits) {
   return value.sext_op(bits);
 }
 
-// --- Get_mask: extract bits where mask is set ---
+// --- Get_mask: gather/pack bits where mask is set ---
 template <class V>
 V eval_get_mask(const V& value, const V& mask) {
-  // get_mask extracts the mask from the value
-  // For positive mask: just AND with the mask (simplified for common case)
-  // The full semantic: extract bits at positions where mask is 1, pack them
-  return value.and_op(mask);
+  // get_mask extracts the bits at positions where mask is 1 and packs them down
+  // to the low bits (a gather/pack), not a plain AND. Route to the canonical op.
+  return value.get_mask_op(mask);
 }
 
 // --- Set_mask: scatter operation (inverse of get_mask) ---
 // set_mask(base, mask, value): replaces bits in base at positions where mask is 1
-// with bits packed from value.
+// with bits consumed sequentially from the low bits of value.
 template <class V>
 V eval_set_mask(const V& base, const V& mask, const V& value) {
   // set_mask(base, 0, value) -> base
   if (mask.is_known_false()) {
     return base;
   }
-  // set_mask(base, -1, value) -> value (all bits replaced)
-  // For the general case: clear masked bits in base, then OR in value bits at mask positions
-  // Simplified implementation for common cases:
-  // result = (base AND NOT mask) OR (value AND mask)
-  auto not_mask = mask.not_op();
-  auto cleared  = base.and_op(not_mask);
-  auto masked_v = value.and_op(mask);
-  return cleared.or_op(masked_v);
+  // Scatter value's low bits into the mask-selected positions of base. Route to
+  // the canonical op rather than the (base&~mask)|(value&mask) approximation,
+  // which only matches for a contiguous low-anchored mask.
+  return base.set_mask_op(mask, value);
 }
 
 // --- SHL: shift left ---

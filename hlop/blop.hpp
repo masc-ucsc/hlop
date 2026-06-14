@@ -755,7 +755,10 @@ public:
       dest = src;
       return;
     }
-    int64_t mask = (int64_t(1) << (from_bit + 1)) - 1;
+    // Build the keep-mask in unsigned space: at from_bit==62, int64_t(1)<<63
+    // overflows (signed-overflow UB, traps under UBSan). from_bit is in [0,62]
+    // here, so the unsigned shift is well-defined.
+    int64_t mask = static_cast<int64_t>((uint64_t(1) << (from_bit + 1)) - 1);
     if ((src >> from_bit) & 1) {
       dest = src | ~mask;  // sign bit is 1, fill upper with 1s
     } else {
@@ -774,9 +777,12 @@ public:
     }
 
     if (static_cast<size_t>(word) < dest_sz) {
-      // Sign extend within the word containing from_bit
-      int64_t mask     = (int64_t(1) << (bit + 1)) - 1;
-      bool    sign_bit = (src[word] >> bit) & 1;
+      // Sign extend within the word containing from_bit. Build the keep-mask in
+      // unsigned space and special-case bit==63 (whole word kept): int64_t(1)<<63
+      // overflows and 1<<64 is a shift past the width — both UB.
+      uint64_t um       = (bit == 63) ? ~uint64_t(0) : ((uint64_t(1) << (bit + 1)) - 1);
+      int64_t  mask     = static_cast<int64_t>(um);
+      bool     sign_bit = (src[word] >> bit) & 1;
       if (sign_bit) {
         dest[word] = src[word] | ~mask;
       } else {

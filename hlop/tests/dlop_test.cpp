@@ -1156,3 +1156,60 @@ TEST_F(Dlop_test, copies_preserve_storage_and_value) {
   check_copy("0x1234_5678_9abc_def0_1234_5678");
   check_copy("'hello world, long string'");
 }
+
+// Regression: init_unknown produced an unbounded, sign-negative unknown when the
+// width was a multiple of 64. unknown(N) must be N unknown low bits with a
+// known-0 sign, like unknown(1..63).
+TEST_F(Dlop_test, unknown_multiple_of_64_is_non_negative) {
+  EXPECT_FALSE(Dlop::unknown(64)->is_negative());
+  EXPECT_TRUE(Dlop::unknown(64)->has_unknowns());
+  EXPECT_FALSE(Dlop::unknown(128)->is_negative());
+  EXPECT_TRUE(Dlop::unknown(128)->has_unknowns());
+  // unknown_positive(N) calls init_unknown(N-1); N=65 hits the boundary.
+  EXPECT_FALSE(Dlop::unknown_positive(65)->is_negative());
+  EXPECT_FALSE(Dlop::unknown_positive(129)->is_negative());
+}
+
+// Regression: adjust_bits leaked the high word when `amount` was a multiple of
+// 64 (top_bit==0 was skipped). bit 64 must be dropped, leaving the low 64 bits.
+TEST_F(Dlop_test, adjust_bits_multiple_of_64_clears_high_word) {
+  auto v = Dlop::from_pyrope("0x1_0000_0000_0000_00FF");  // (1<<64) | 0xFF, 65 bits
+  EXPECT_TRUE(v->on_heap());
+  auto a = v->adjust_bits(64);  // top_word=1, top_bit=0 — the leak case
+  EXPECT_EQ(a->to_just_i64(), 0xFF);
+  EXPECT_FALSE(a->is_negative());
+}
+
+// Regression: no-arg get_mask_op() dropped the unknown plane on a negative
+// operand (zero_extra). The magnitude must keep the source's unknown bits.
+TEST_F(Dlop_test, get_mask_op_preserves_unknowns_on_negative) {
+  auto v = Dlop::from_pyrope("0sb1?0");  // negative, bit 1 unknown
+  ASSERT_TRUE(v->is_negative());
+  ASSERT_TRUE(v->has_unknowns());
+  auto mag = v->get_mask_op();
+  EXPECT_TRUE(mag->has_unknowns());  // unknown preserved (was lost before the fix)
+  EXPECT_FALSE(mag->is_negative());  // magnitude is the unsigned bit pattern
+}
+
+// Regression: bit_test/unknown_bit_test indexed [-1] on a size==0 (nil) value.
+TEST_F(Dlop_test, bit_test_on_nil_does_not_read_oob) {
+  auto n = Dlop::nil();
+  EXPECT_FALSE(n->bit_test(0));
+  EXPECT_FALSE(n->bit_test(5));
+  EXPECT_FALSE(n->unknown_bit_test(0));
+  EXPECT_FALSE(n->unknown_bit_test(99));
+}
+
+// The signed/unsigned binary prefixes are the full 0sb / 0ub. A bare/short 0s or
+// 0u must error cleanly, not read the base char past the string_view. The views
+// below exclude the 'b' that continues in the backing buffer, exercising the
+// out-of-bounds path the bounds check now guards.
+TEST_F(Dlop_test, from_pyrope_short_sign_prefix_rejected) {
+  EXPECT_THROW(Dlop::from_pyrope(std::string_view{"0sb", 2}), std::runtime_error);  // "0s"
+  EXPECT_THROW(Dlop::from_pyrope(std::string_view{"0ub", 2}), std::runtime_error);  // "0u"
+  EXPECT_THROW(Dlop::from_pyrope("0s"), std::runtime_error);
+  EXPECT_THROW(Dlop::from_pyrope("0u"), std::runtime_error);
+  // The full binary prefixes still parse.
+  EXPECT_EQ(Dlop::from_pyrope("0sb1010")->to_just_i64(), -6);
+  EXPECT_EQ(Dlop::from_pyrope("0ub1010")->to_just_i64(), 10);
+}

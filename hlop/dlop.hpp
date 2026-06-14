@@ -372,12 +372,6 @@ public:
     return false;
   }
 
-  // Signed less-than on base words. Callers must guarantee both sides are
-  // fully known (no unknown bits); used by the three-valued lt/le/gt/ge ops
-  // after they short-circuit on unknowns. Not exposed as operator< because
-  // hiding unknown-propagation behind `a < b` invites silent miscompares.
-  bool cmp_less_known(const Dlop& other) const;
-
 public:
   Dlop() noexcept : type(Type::Invalid), xkind(XKind::Zero), size(0), shared_count(0), data(0) {}
 
@@ -470,7 +464,6 @@ public:
   void init_string(std::string_view txt);
   void init_from_binary(std::string_view txt, bool unsigned_result);
   void init_from_pyrope(std::string_view orig_txt);
-  void init_from_string(std::string_view txt) { init_string(txt); }
   void init_from_ref(std::string_view txt);
   void init_invalid();
   void init_nil();
@@ -516,12 +509,6 @@ public:
   uint64_t hash() const;
 
 protected:
-  // --- Mutating arithmetic ---
-  // Canonical: const Dlop&. spool_ptr overload is a thin wrapper.
-  void mut_add(const Dlop& other);
-  void mut_add(spool_ptr<Dlop> other) { mut_add(*other); }
-  void mut_add(int64_t other);
-
   // --- Integer-amount op kernels ---
   // Implementation helpers for the shift / sign-extend ops. The public API
   // takes a Dlop operand; these run once the amount is confirmed numeric.
