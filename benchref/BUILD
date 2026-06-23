@@ -29,15 +29,11 @@ cc_library(
     ],
 )
 
-cc_library(
+# The VCD writer moved into //hlop (folded into the :hlop glob) so inou.cgen.sim
+# can use it via @hlop//hlop. Kept as an alias for benchref/sample.
+alias(
     name = "vcd_writer",
-    srcs = ["vcd_writer.cpp"],
-    hdrs = [
-        "vcd_utils.hpp",
-        "vcd_writer.hpp",
-    ],
-    includes = ["."],
-    copts = CPP23_COPTS,
+    actual = "//hlop:hlop",
     visibility = ["//visibility:public"],
 )
 

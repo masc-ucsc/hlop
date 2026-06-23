@@ -378,3 +378,44 @@ TEST_F(Slop_test, is_mask_scalar_boundary) {
   EXPECT_FALSE(S64::create_integer(0xF0).is_mask());  // not anchored at bit 0
   EXPECT_FALSE(S64::create_integer(0).is_mask());
 }
+
+// =========================================================================
+// Cross-width conversion: signed converting constructor + unsigned zext_to.
+// Both read the source as a declared-width quantity (so an unmasked wider
+// value is wrapped to the source width) and re-express it at the target width.
+// =========================================================================
+TEST_F(Slop_test, xwidth_signed_widen) {
+  EXPECT_EQ((Slop<8>{Slop<4>::create_integer(5)}).to_just_i64(), 5);
+  // 13 read as a SIGNED 4-bit value is -3 (0b1101); widening sign-extends.
+  EXPECT_EQ((Slop<8>{Slop<4>::create_integer(13)}).to_just_i64(), -3);
+  EXPECT_EQ((Slop<16>{Slop<8>::create_integer(-3)}).to_just_i64(), -3);
+  EXPECT_EQ((Slop<32>{Slop<8>::create_integer(-128)}).to_just_i64(), -128);
+}
+
+TEST_F(Slop_test, xwidth_signed_narrow) {
+  // low 4 bits of 45 (0b101101) = 0b1101 = -3 signed.
+  EXPECT_EQ((Slop<4>{Slop<8>::create_integer(45)}).to_just_i64(), -3);
+  EXPECT_EQ((Slop<4>{Slop<8>::create_integer(5)}).to_just_i64(), 5);
+  EXPECT_EQ((Slop<4>{Slop<8>::create_integer(-3)}).to_just_i64(), -3);
+}
+
+TEST_F(Slop_test, xwidth_unsigned_widen) {
+  // 13 read as UNSIGNED 4-bit stays 13 when widened (zero-extend).
+  EXPECT_EQ(Slop<4>::create_integer(13).zext_to<8>().to_just_i64(), 13);
+  // 200 has bit7 set, but unsigned zext keeps it +200 ...
+  EXPECT_EQ(Slop<8>::create_integer(200).zext_to<16>().to_just_i64(), 200);
+  // ... whereas the SIGNED constructor reads 200-as-8bit as -56.
+  EXPECT_EQ((Slop<16>{Slop<8>::create_integer(200)}).to_just_i64(), -56);
+}
+
+TEST_F(Slop_test, xwidth_unsigned_narrow) {
+  EXPECT_EQ(Slop<8>::create_integer(45).zext_to<4>().to_just_i64(), 13);    // low 4 bits
+  EXPECT_EQ(Slop<16>::create_integer(600).zext_to<9>().to_just_i64(), 88);  // 600 wraps mod 512
+}
+
+TEST_F(Slop_test, xwidth_multiword) {
+  EXPECT_EQ((Slop<100>{Slop<8>::create_integer(-1)}).to_just_i64(), -1);  // signed widen across words
+  EXPECT_EQ((Slop<70>{Slop<8>::create_integer(5)}).to_just_i64(), 5);
+  EXPECT_EQ(Slop<8>::create_integer(200).zext_to<100>().to_just_i64(), 200);  // unsigned widen across words
+  EXPECT_EQ((Slop<8>{Slop<100>::create_integer(-3)}).to_just_i64(), -3);  // narrow wide -> one word
+}

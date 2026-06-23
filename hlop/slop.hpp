@@ -31,6 +31,11 @@ template <int N>
 class Slop {
   static_assert(N >= 1, "Slop bit width must be >= 1");
 
+  // Every Slop<M> is a friend so the cross-width converting constructor below
+  // can read another width's private base_/type_/n_words.
+  template <int>
+  friend class Slop;
+
   static constexpr int n_words = (N + 63) / 64;
 
   enum class Type : int16_t {
@@ -102,6 +107,50 @@ public:
   constexpr Slop() : type_(Type::Integer), base_(zero_array()) {}
 
   constexpr Slop(int64_t val) : type_(Type::Integer), base_(fill_array(val)) {}
+
+  // Cross-width conversion: build a Slop<N> from a Slop<M> of a DIFFERENT width
+  // (the non-template copy constructor still wins when M == N). Value-preserving
+  // signed reinterpretation — the source is read as a signed M-bit quantity and
+  // re-expressed as a canonical signed N-bit value:
+  //   widen  (N >= M): sign-extend from bit M-1
+  //   narrow (N <  M): two's-complement truncate to the low N bits, then
+  //                    sign-extend from bit N-1
+  // i.e. sign-extend from bit min(M,N)-1 after copying the overlapping words.
+  // This is the canonicalization point cgen.sim (inou.cgen.sim) relies on: every
+  // operand is wrapped Slop<Wresult>{op} before a same-width Slop op, so
+  // signed-sensitive ops (SRA, signed compares, Div) always see a clean sign.
+  // Not constexpr: Blop::sext is a runtime helper, and codegen only converts
+  // runtime values (constants use create_integer/from_pyrope at the target width).
+  template <int M>
+  explicit Slop(const Slop<M>& src)
+      // Type is a per-instantiation nested enum (Slop<M>::Type != Slop<N>::Type),
+      // but the enumerators are identical, so round-trip through the int16_t base.
+      : type_(static_cast<Type>(static_cast<int16_t>(src.type_))), base_(zero_array()) {
+    constexpr int cw = (Slop<M>::n_words < n_words) ? Slop<M>::n_words : n_words;
+    for (int i = 0; i < cw; ++i) {
+      base_[i] = src.base_[i];
+    }
+    constexpr int sign_bit = (M < N ? M : N) - 1;
+    Blop::sext<n_words>(base_, base_, sign_bit);
+  }
+
+  // Unsigned width change: reinterpret this width-N value as an UNSIGNED N-bit
+  // quantity and re-express it at width W — keep the low min(N,W) bits, zero
+  // every bit above (zero-extend on widen, mask on narrow). The companion to the
+  // signed converting constructor above: cgen.sim picks per is_unsign(pin) — op
+  // outputs are tagged unsigned by tolg's bind_result, so this is the common
+  // path. Like the constructor, it also enforces the SOURCE's declared width on
+  // read (a value an unmasked op left wider than N is wrapped to N bits here).
+  template <int W>
+  Slop<W> zext_to() const {
+    Slop<W>       r;  // default ctor: Integer, zeroed
+    constexpr int cw = (n_words < Slop<W>::n_words) ? n_words : Slop<W>::n_words;
+    for (int i = 0; i < cw; ++i) {
+      r.base_[i] = base_[i];
+    }
+    constexpr int keep = (N < W ? N : W);
+    return r.adjust_bits(keep);  // clears bits >= keep -> zero-extended / masked
+  }
 
   // --- Factory methods ---
   static constexpr Slop create_bool(bool val) { return Slop(Type::Boolean, fill_array(val ? -1 : 0)); }

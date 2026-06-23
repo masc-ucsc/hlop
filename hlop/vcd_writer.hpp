@@ -14,7 +14,28 @@
 
 namespace vcd {
 
-static unsigned global_timestamp;
+// inline (not static): one shared definition across translation units, so a
+// consumer (e.g. the inou.cgen.sim driver) and VCDWriter::change() — compiled in
+// different TUs — observe the same timestamp. advance_to_*() still update it.
+inline unsigned global_timestamp = 0;
+
+// VCD value string for a `width`-bit value (anything with bit_test(int)->bool,
+// e.g. hlop's Slop<N>): a scalar is a bare "0"/"1", a vector is "b<bits>" MSB
+// first. change() requires exactly this form (it adds no 'b' and treats a
+// 1-char value as a scalar). Used by inou.cgen.sim-generated traces.
+template <typename T>
+inline std::string to_vcd_bits(const T& v, int width) {
+  if (width <= 1) {
+    return v.bit_test(0) ? "1" : "0";
+  }
+  std::string s;
+  s.reserve(width + 1);
+  s.push_back('b');
+  for (int i = width - 1; i >= 0; --i) {
+    s.push_back(v.bit_test(i) ? '1' : '0');
+  }
+  return s;
+}
 
 namespace utils {
 // -----------------------------
