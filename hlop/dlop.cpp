@@ -8,6 +8,9 @@
 #include <format>
 #include <print>
 #include <random>
+#include <string>
+#include <string_view>
+#include <unordered_map>
 
 #include "likely.hpp"
 
@@ -549,6 +552,29 @@ spool_ptr<Dlop> Dlop::from_pyrope(std::string_view orig_txt) {
   auto dlop = spool_ptr<Dlop>::make();
   dlop->init_from_pyrope(orig_txt);
   return dlop;
+}
+
+const Dlop& Dlop::from_pyrope_cached(std::string_view txt) {
+  // Thread-local so it shares the calling thread's raw_ptr_pool and needs no
+  // lock. std::unordered_map keeps references stable across inserts (node-based);
+  // a transparent hash/eq lets us look up by string_view without allocating a key
+  // on a hit. The immortal raw_ptr_pool keeps the cached Dlops' word buffers
+  // valid through thread teardown, so the cache is safe to destroy at thread end.
+  struct Sv_hash {
+    using is_transparent = void;
+    size_t operator()(std::string_view s) const noexcept { return std::hash<std::string_view>{}(s); }
+  };
+  struct Sv_eq {
+    using is_transparent = void;
+    bool operator()(std::string_view a, std::string_view b) const noexcept { return a == b; }
+  };
+  static thread_local std::unordered_map<std::string, Dlop, Sv_hash, Sv_eq> cache;
+  if (auto it = cache.find(txt); it != cache.end()) {
+    return it->second;
+  }
+  Dlop parsed;
+  parsed.init_from_pyrope(txt);  // throws on a malformed literal; not cached (matches from_pyrope)
+  return cache.emplace(std::string(txt), std::move(parsed)).first->second;
 }
 
 // =========================================================================

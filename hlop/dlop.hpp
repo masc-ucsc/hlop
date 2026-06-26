@@ -482,6 +482,17 @@ public:
   // call site and stays in the static stack-allocated path.
   static spool_ptr<Dlop> from_pyrope(std::string_view orig_txt);
   static spool_ptr<Dlop> from_string(std::string_view txt);
+
+  // Interned from_pyrope: a literal is parsed ONCE per distinct text and the
+  // result is memoized (init_from_pyrope -> Blop::shln is per-digit and showed
+  // up re-parsing the same constants repeatedly in large IR walks). Returns a
+  // const reference into a thread-local std::unordered_map (so callers on one
+  // thread can hold it; copy it to outlive the thread or cross threads). The
+  // node-based map keeps the reference stable across later inserts. Throws like
+  // from_pyrope on a malformed literal (the failure is NOT cached). The cached
+  // Dlop owns its own words via the immortal raw_ptr_pool, so the cache is safe
+  // at thread teardown.
+  static const Dlop& from_pyrope_cached(std::string_view txt);
   static spool_ptr<Dlop> from_ref(std::string_view txt);
   static spool_ptr<Dlop> invalid();
 
