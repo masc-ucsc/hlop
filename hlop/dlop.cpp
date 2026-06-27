@@ -3,9 +3,11 @@
 #include "dlop.hpp"
 
 #include <algorithm>
+#include <charconv>
 #include <cstdlib>
 #include <cstring>
 #include <format>
+#include <limits>
 #include <print>
 #include <random>
 #include <string>
@@ -298,6 +300,26 @@ spool_ptr<Dlop> Dlop::unknown_bool() {
 // from_binary
 // =========================================================================
 void Dlop::init_from_binary(std::string_view txt, bool unsigned_result) {
+  // Fast path: a "clean" binary string (0/1 only — no `_`, no `?`/`x`/`z` unknown
+  // bits) that fits a signed 64-bit int. std::from_chars(base 2) consumes the
+  // whole string iff it is all 0/1, which is exactly the no-unknowns condition;
+  // then the value is one init_integer instead of the per-bit shl_base/shl_extra
+  // loop (the Blop::shln hot spot for masks). Signed literals are two's
+  // complement, so a leading 1 is negative. Unknown-bit or wider-than-64
+  // patterns fall through to the exact, unchanged loop.
+  if (!txt.empty() && txt.size() <= (unsigned_result ? 63u : 62u)) {
+    uint64_t   mag = 0;
+    const auto r   = std::from_chars(txt.data(), txt.data() + txt.size(), mag, 2);
+    if (r.ec == std::errc{} && r.ptr == txt.data() + txt.size()) {
+      int64_t val = static_cast<int64_t>(mag);
+      if (!unsigned_result && txt.front() == '1') {
+        val -= (static_cast<int64_t>(1) << txt.size());  // two's complement: leading 1 → negative
+      }
+      init_integer(val);
+      return;
+    }
+  }
+
   reconstruct(Type::Integer, 1 + txt.size() / 64);
   if (!unsigned_result) {
     for (size_t i = 0; i < txt.size(); ++i) {
@@ -490,6 +512,26 @@ void Dlop::init_from_pyrope(std::string_view orig_txt) {
     }
     if (scale_pow2 != 0) {
       --dec_end;  // drop the suffix from the magnitude scan
+    }
+  }
+
+  // Fast path: a plain decimal/hex magnitude with no `_` separators, no power-of-
+  // two scale suffix, and a value that fits a signed 64-bit int parses orders of
+  // magnitude faster via std::from_chars than the per-digit bignum loop below
+  // (the Blop::shln per digit is the single hottest symbol in a LiveHD compile).
+  // Anything from_chars can't fully consume (underscores, `?` mask bits — those
+  // never reach here, they take the binary branch — or an out-of-range magnitude)
+  // falls through to the exact, unchanged bignum path.
+  if ((shift_mode == 10 || shift_mode == 4) && scale_pow2 == 0) {
+    const char* b = orig_txt.data() + skip_chars;
+    const char* e = orig_txt.data() + (shift_mode == 10 ? dec_end : orig_txt.size());
+    if (b < e) {
+      uint64_t   mag = 0;
+      const auto r   = std::from_chars(b, e, mag, shift_mode == 10 ? 10 : 16);
+      if (r.ec == std::errc{} && r.ptr == e && mag <= static_cast<uint64_t>(std::numeric_limits<int64_t>::max())) {
+        init_integer(negative ? -static_cast<int64_t>(mag) : static_cast<int64_t>(mag));
+        return;
+      }
     }
   }
 
