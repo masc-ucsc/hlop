@@ -195,7 +195,7 @@ public:
     }
     int words = std::min((nbits + 63) / 64, n_words);
     for (int i = 0; i < words; ++i) {
-      static thread_local std::mt19937_64 rng{0xC0FFEEULL};
+      static thread_local std::mt19937_64 rng{hlop_random_seed()};
       s.base_[i] = static_cast<int64_t>(rng());
     }
     int leftover = nbits % 64;
@@ -212,7 +212,7 @@ public:
   // be non-deterministic). Slop has no notion of unknowns at runtime, so we
   // randomize each '?'/'x'/'z' bit at parse time and store 0/1 in base_.
   static int random_bit_() {
-    static thread_local std::mt19937_64 rng{0xC0FFEEULL};
+    static thread_local std::mt19937_64 rng{hlop_random_seed()};
     return static_cast<int>(rng() & 1);
   }
 
@@ -1135,3 +1135,34 @@ public:
     std::print("\n");
   }
 };
+
+// ── Whole-array memory helpers (used by cgen_sim) ────────────────────────────
+// A whole-array memory is a std::array<Slop<B>, S> of S entries of B bits. These
+// bridge it to/from the size*bits buses on the Memory cell's `read_all` (async
+// whole read) and `update` (whole next-state) pins. Layout: entry 0 in the LOW
+// bits, row-major — identical to cgen_verilog/pass-lec so LEC and sim agree.
+//
+// Pack the array into one B*S-bit bus (the async `read_all` output). zext_to
+// keeps each B-bit field isolated (NOT concat_op, whose minimal-width packing
+// would destroy the fixed field grid; NOT the signed ctor, which would
+// sign-pollute the high bits).
+template <int B, std::size_t S>
+Slop<B * static_cast<int>(S)> slop_read_all(const std::array<Slop<B>, S>& a) {
+  constexpr int W = B * static_cast<int>(S);
+  Slop<W>       bus;  // default-constructs to integer 0
+  for (std::size_t i = 0; i < S; ++i) {
+    bus = bus.or_op(a[i].template zext_to<W>().shl_op(static_cast<int64_t>(i) * B));
+  }
+  return bus;
+}
+
+// Scatter a W-bit `update` bus into the per-entry array. The cross-width ctor
+// truncates+sign-fits each slice to the canonical signed B-bit entry, matching
+// how cgen_sim stores/reads entries elsewhere (so logical-vs-arith shift of the
+// high field bits is irrelevant).
+template <int B, std::size_t S, int W>
+void slop_apply_update(std::array<Slop<B>, S>& dst, const Slop<W>& bus) {
+  for (std::size_t i = 0; i < S; ++i) {
+    dst[i] = Slop<B>{bus.sra_op(static_cast<int64_t>(i) * B)};
+  }
+}

@@ -3182,7 +3182,7 @@ spool_ptr<Dlop> Dlop::to_known_rand() const {
     return d;
   }
 
-  static thread_local std::mt19937_64 rng{0xC0FFEEULL};
+  static thread_local std::mt19937_64 rng{hlop_random_seed()};
 
   auto     d  = spool_ptr<Dlop>::make(type, size);
   int64_t* rb = d->base();

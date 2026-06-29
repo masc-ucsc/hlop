@@ -18,6 +18,18 @@
 #include <type_traits>
 #include <vector>
 
+// Process-wide PRNG seed for the runtime randomness in Slop/Dlop: the random
+// fill of unknown bits ('?'/'x'/'z' in literals) and `.[rand]`. Defaults to a
+// fixed value so runs are deterministic and unchanged out of the box. A test
+// driver (or any host) may override it via hlop_set_random_seed() BEFORE the
+// first random draw — each per-thread `mt19937_64` latches this value when it is
+// first constructed, so set it once at startup, ahead of any Slop/Dlop work.
+inline std::uint64_t& hlop_random_seed() {
+  static std::uint64_t seed = 0xC0FFEEULL;
+  return seed;
+}
+inline void hlop_set_random_seed(std::uint64_t s) { hlop_random_seed() = s; }
+
 class Blop {
 public:
   // =========================================================================
