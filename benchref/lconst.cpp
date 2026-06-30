@@ -12,8 +12,107 @@
 #include "iassert.hpp"
 #include "likely.hpp"
 #include "lrand.hpp"
-#include "str_tools.hpp"
 #include "woothash.hpp"
+
+namespace {
+
+char lower_ascii(char c) { return (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c; }
+
+bool is_dec_digit(char c) { return c >= '0' && c <= '9'; }
+
+bool eq_ci(std::string_view a, std::string_view b) {
+  if (a.size() != b.size()) {
+    return false;
+  }
+  for (size_t i = 0; i < a.size(); ++i) {
+    if (lower_ascii(a[i]) != b[i]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+struct PyropeNumPrefix {
+  bool   is_number       = false;
+  bool   negative        = false;
+  size_t skip_chars      = 0;
+  int    shift_mode      = 0;
+  bool   unsigned_result = false;
+};
+
+PyropeNumPrefix parse_pyrope_number_prefix(std::string_view orig_txt) {
+  PyropeNumPrefix prefix;
+
+  if (orig_txt.front() == '-') {
+    prefix.negative   = true;
+    prefix.skip_chars = 1;
+  } else if (orig_txt.front() == '+') {
+    prefix.skip_chars = 1;
+  }
+
+  if (orig_txt.size() < (1 + prefix.skip_chars) || !is_dec_digit(orig_txt[prefix.skip_chars])) {
+    return prefix;
+  }
+
+  prefix.is_number  = true;
+  prefix.shift_mode = 10;  // decimal, unless a leading 0 selects another base
+  if (orig_txt.size() < (2 + prefix.skip_chars) || orig_txt[prefix.skip_chars] != '0') {
+    return prefix;
+  }
+
+  ++prefix.skip_chars;
+  auto sel_ch = lower_ascii(orig_txt[prefix.skip_chars]);
+  if (sel_ch == 's') {
+    // 0sb (signed). Too confusing otherwise. is 0sx80 negative and 0sx10 also negative (where is the MSB?)
+    ++prefix.skip_chars;
+    if (prefix.skip_chars >= orig_txt.size()) {
+      throw std::runtime_error(std::format("ERROR: {} unknown pyrope encoding only binary can be signed 0sb...\n", orig_txt));
+    }
+    sel_ch = lower_ascii(orig_txt[prefix.skip_chars]);
+    if (sel_ch != 'b') {
+      throw std::runtime_error(std::format("ERROR: {} unknown pyrope encoding only binary can be signed 0sb...\n", orig_txt));
+    }
+    I(!prefix.unsigned_result);
+  } else if (sel_ch == 'u') {
+    // Explicit `0u` prefix: unsigned, then a base selector (x/b/d/o).
+    ++prefix.skip_chars;
+    if (prefix.skip_chars >= orig_txt.size()) {
+      throw std::runtime_error(std::format("ERROR: {} unknown pyrope encoding, use 0ub... (binary) or 0ux/0ud/0uo\n", orig_txt));
+    }
+    sel_ch                 = lower_ascii(orig_txt[prefix.skip_chars]);
+    prefix.unsigned_result = true;
+  } else {
+    // No explicit sign. Binary literals MUST be explicit — `0b…` is rejected;
+    // use `0ub…` (unsigned) or `0sb…` (signed). Other bases stay unsigned by default.
+    if (sel_ch == 'b') {
+      throw std::runtime_error(
+          std::format("ERROR: {} binary literal needs an explicit sign: use 0ub… (unsigned) or 0sb… (signed)\n", orig_txt));
+    }
+    prefix.unsigned_result = true;
+  }
+
+  if (sel_ch == 'x') {  // 0x or 0sx
+    prefix.shift_mode = 4;
+    ++prefix.skip_chars;
+  } else if (sel_ch == 'b') {
+    prefix.shift_mode = 1;
+    ++prefix.skip_chars;
+  } else if (sel_ch == 'd') {
+    prefix.shift_mode = 10;
+    ++prefix.skip_chars;
+  } else if (is_dec_digit(sel_ch)) {  // plain leading 0 decimal
+    prefix.shift_mode = 10;
+  } else if (sel_ch == 'o') {
+    prefix.shift_mode = 3;
+    ++prefix.skip_chars;
+  } else {
+    throw std::runtime_error(std::format("ERROR: {} unknown pyrope encoding (leading {})\n", orig_txt, sel_ch));
+  }
+
+  return prefix;
+}
+
+}  // namespace
 
 std::string Lconst::serialize() const {
   std::vector<char> v;
@@ -272,81 +371,20 @@ Lconst Lconst::from_pyrope(std::string_view orig_txt) {
     return Lconst();
   }
 
-  std::string txt = str_tools::to_lower(orig_txt);
-
   // Special cases. `nil` is the bareword form (no quotes); `'nil'` and
   // `"nil"` keep the 3-byte string interpretation via the alphanumeric
   // branch below.
-  if (txt == "true") {
+  if (eq_ci(orig_txt, "true")) {
     return Lconst(false, 1, -1);
-  } else if (txt == "false") {
+  } else if (eq_ci(orig_txt, "false")) {
     return Lconst(false, 0, 0);
-  } else if (txt == "nil") {
+  } else if (eq_ci(orig_txt, "nil")) {
     return Lconst::nil();
   }
 
-  bool negative   = false;
-  auto skip_chars = 0u;
+  auto prefix = parse_pyrope_number_prefix(orig_txt);
 
-  if (txt.front() == '-') {
-    negative   = true;
-    skip_chars = 1;
-  } else if (txt.front() == '+') {
-    skip_chars = 1;
-  }
-
-  auto shift_mode      = 0;
-  bool unsigned_result = false;
-
-  if (txt.size() >= (1 + skip_chars) && std::isdigit(txt[skip_chars])) {
-    shift_mode = 10;  // decimal (maybe not if starts with 0
-    if (txt.size() >= (2 + skip_chars) && txt[skip_chars] == '0') {
-      ++skip_chars;
-      auto sel_ch = txt[skip_chars];
-      if (sel_ch == 's') {
-        // 0sb (signed). Too confusing otherwise. is 0sx80 negative and 0sx10 also negative (where is the MSB?)
-        ++skip_chars;
-        sel_ch = txt[skip_chars];
-        if (sel_ch != 'b') {
-          throw std::runtime_error(std::format("ERROR: {} unknown pyrope encoding only binary can be signed 0sb...\n", orig_txt));
-        }
-        I(!unsigned_result);
-      } else if (sel_ch == 'u') {
-        // Explicit `0u` prefix: unsigned, then a base selector (x/b/d/o).
-        ++skip_chars;
-        sel_ch          = txt[skip_chars];
-        unsigned_result = true;
-      } else {
-        // No explicit sign. Binary literals MUST be explicit — `0b…` is
-        // rejected; use `0ub…` (unsigned) or `0sb…` (signed). Other bases
-        // stay unsigned by default.
-        if (sel_ch == 'b') {
-          throw std::runtime_error(
-              std::format("ERROR: {} binary literal needs an explicit sign: use 0ub… (unsigned) or 0sb… (signed)\n", orig_txt));
-        }
-        unsigned_result = true;
-      }
-
-      if (sel_ch == 'x') {  // 0x or 0sx
-        shift_mode = 4;
-        ++skip_chars;
-      } else if (sel_ch == 'b') {
-        shift_mode = 1;
-        ++skip_chars;
-      } else if (sel_ch == 'd') {
-        shift_mode = 10;  // BASE 10 decimal
-        ++skip_chars;
-      } else if (std::isdigit(sel_ch)) {  // 0 or 0o or 0s or 0so
-        // shift_mode = 3;
-        shift_mode = 10;
-      } else if (sel_ch == 'o') {  // 0 or 0o or 0s or 0so
-        shift_mode = 3;
-        ++skip_chars;
-      } else {
-        throw std::runtime_error(std::format("ERROR: {} unknown pyrope encoding (leading {})\n", orig_txt, sel_ch));
-      }
-    }
-  } else {
+  if (!prefix.is_number) {
     int start_i = static_cast<int>(orig_txt.size());
     int end_i   = 0;
 
@@ -389,22 +427,27 @@ Lconst Lconst::from_pyrope(std::string_view orig_txt) {
 
   Number num;
 
+  auto skip_chars      = prefix.skip_chars;
+  auto shift_mode      = prefix.shift_mode;
+  auto unsigned_result = prefix.unsigned_result;
+
   if (shift_mode == 10) {  // decimal
-    for (auto i = skip_chars; i < txt.size(); ++i) {
-      auto v = char_to_val[(uint8_t)txt[i]];
+    for (auto i = skip_chars; i < orig_txt.size(); ++i) {
+      auto c = orig_txt[i];
+      auto v = char_to_val[(uint8_t)c];
       if (likely(v >= 0)) {
         num = (num * 10) + v;
       } else {
-        if (txt[i] == '_') {
+        if (c == '_') {
           continue;
         }
 
-        throw std::runtime_error(std::format("ERROR: {} encoding could not use {}\n", orig_txt, txt[i]));
+        throw std::runtime_error(std::format("ERROR: {} encoding could not use {}\n", orig_txt, c));
       }
     }
   } else if (shift_mode == 1) {  // binary (0ub/0sb)
-    auto v = from_binary(txt.substr(skip_chars), unsigned_result);
-    if (!negative) {
+    auto v = from_binary(orig_txt.substr(skip_chars), unsigned_result);
+    if (!prefix.negative) {
       return v;
     }
 
@@ -413,24 +456,20 @@ Lconst Lconst::from_pyrope(std::string_view orig_txt) {
   } else {
     I(shift_mode == 3 || shift_mode == 4);  // octal or hexa
 
-    auto first_digit = -1;
-    for (auto i = skip_chars; i < txt.size(); ++i) {
-      if (txt[i] == '_') {
+    for (auto i = skip_chars; i < orig_txt.size(); ++i) {
+      auto c = orig_txt[i];
+      if (c == '_') {
         continue;
       }
 
-      auto v = char_to_val[(uint8_t)txt[i]];
+      auto v = char_to_val[(uint8_t)c];
       if (unlikely(v < 0)) {
-        throw std::runtime_error(std::format("ERROR: {} encoding could not use {}\n", orig_txt, txt[i]));
-      }
-      if (first_digit < 0) {
-        first_digit = v;
+        throw std::runtime_error(std::format("ERROR: {} encoding could not use {}\n", orig_txt, c));
       }
 
-      auto char_sa = char_to_bits[(uint8_t)txt[i]];
+      auto char_sa = char_to_bits[(uint8_t)c];
       if (unlikely(char_sa > shift_mode)) {
-        throw std::runtime_error(
-            std::format("ERROR: {} invalid syntax for number {} bits needed for '{}'", orig_txt, char_sa, txt[i]));
+        throw std::runtime_error(std::format("ERROR: {} invalid syntax for number {} bits needed for '{}'", orig_txt, char_sa, c));
       }
       num = (num << shift_mode) | v;
     }
@@ -438,7 +477,7 @@ Lconst Lconst::from_pyrope(std::string_view orig_txt) {
     I(unsigned_result);
   }
 
-  if (negative) {
+  if (prefix.negative) {
     num = -num;
     /* if (unsigned_result && num<0) { */
     /*   throw std::runtime_error(std::format("ERROR: {} negative value but it must be unsigned\n", orig_txt)); */

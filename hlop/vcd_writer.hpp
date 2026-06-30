@@ -157,6 +157,11 @@ class VCDWriter {
   std::set<ScopePtr, ScopePtrHash>                    scopes;
   std::unordered_set<VarPtr, VarPtrHash, VarPtrEqual> vars;
 
+  ScopePtr prepare_register_scope(const std::string& scope, const std::string& name);
+  VarPtr   create_registered_var(const std::string& name, VariableType type, unsigned size, const ScopePtr& scope, unsigned var_id,
+                                 VarValue& init_value) const;
+  void     finish_register_var(const VarPtr& var, VariableType type, const VarValue& init_value, bool duplicate_names_check);
+
 public:
   VCDWriter(const std::string& filename, HeadPtr&& header = {}, unsigned init_timestamp = 0u);
 
