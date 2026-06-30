@@ -5,7 +5,7 @@ module(
 )
 
 # Compiler rules
-bazel_dep(name = "rules_cc", version = "0.2.19")
+bazel_dep(name = "rules_cc", version = "0.2.20")
 
 bazel_dep(name = "abseil-cpp", version = "20250814.2") # 20240722.0.bcr.2")
 
