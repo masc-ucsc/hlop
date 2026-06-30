@@ -196,6 +196,7 @@ public:
     int words = std::min((nbits + 63) / 64, n_words);
     for (int i = 0; i < words; ++i) {
       static thread_local std::mt19937_64 rng{hlop_random_seed()};
+      ++hlop_random_draws();
       s.base_[i] = static_cast<int64_t>(rng());
     }
     int leftover = nbits % 64;
@@ -213,6 +214,7 @@ public:
   // randomize each '?'/'x'/'z' bit at parse time and store 0/1 in base_.
   static int random_bit_() {
     static thread_local std::mt19937_64 rng{hlop_random_seed()};
+    ++hlop_random_draws();
     return static_cast<int>(rng() & 1);
   }
 
@@ -1000,6 +1002,11 @@ public:
     assert(is_just_i64());
     return base_[0];
   }
+
+  // The low 64 bits as a signed int64, WITHOUT the is_just_i64() assert — for
+  // best-effort numeric inspection (sim --probe / --break-when) of a value that
+  // may not fit in 62 bits. Wider signals are truncated to their low word.
+  constexpr int64_t to_i64_low() const { return base_[0]; }
 
   // --- Conversion ---
   std::string to_string() const {

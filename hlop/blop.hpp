@@ -30,6 +30,16 @@ inline std::uint64_t& hlop_random_seed() {
 }
 inline void hlop_set_random_seed(std::uint64_t s) { hlop_random_seed() = s; }
 
+// Count of runtime random draws so far (unknown-bit fill + '?'/'x'/'z'). A sim
+// checkpoint records this so a `--restart-at` of a run that used randomness can
+// WARN that the PRNG stream position is not restored (restart resumes the engine
+// at position 0 while the DUT is at the checkpoint cycle, so randomized stimulus
+// diverges). A deterministic run keeps this at 0 and gets no warning.
+inline std::uint64_t& hlop_random_draws() {
+  static thread_local std::uint64_t draws = 0;
+  return draws;
+}
+
 class Blop {
 public:
   // =========================================================================
