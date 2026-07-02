@@ -1213,3 +1213,94 @@ TEST_F(Dlop_test, from_pyrope_short_sign_prefix_rejected) {
   EXPECT_EQ(Dlop::from_pyrope("0sb1010")->to_just_i64(), -6);
   EXPECT_EQ(Dlop::from_pyrope("0ub1010")->to_just_i64(), 10);
 }
+
+// =========================================================================
+// Word-batched wide-literal parsing (the hex/binary heap paths in
+// init_from_pyrope / init_from_binary) must agree with the per-digit inline
+// path. Leading zeros widen the string past one word — forcing the batched
+// path — without changing the value, so short vs long spellings of the same
+// value are a direct differential check.
+// =========================================================================
+TEST_F(Dlop_test, wide_hex_word_batch_matches_short_parse) {
+  auto short_v = Dlop::from_pyrope("0xdeadbeef");
+  auto long_v  = Dlop::from_pyrope("0x00000000000000000000000000deadbeef");
+  EXPECT_EQ(short_v->to_decimal_string(), long_v->to_decimal_string());
+  EXPECT_EQ(long_v->popcount(), short_v->popcount());
+
+  // '_' separators + a value that lands exactly on a word boundary (2^64).
+  auto u1 = Dlop::from_pyrope("0x1_0000_0000_0000_0000");
+  EXPECT_EQ(u1->to_decimal_string(), "18446744073709551616");
+  EXPECT_TRUE(u1->bit_test(64));
+  EXPECT_FALSE(u1->bit_test(63));
+  EXPECT_EQ(u1->popcount(), 1);
+
+  // v2prp-style contiguous range mask: ((1 << 1304) - 1) built arithmetically
+  // must round-trip through its own to_pyrope render (parsed by the batch).
+  auto one  = Dlop::create_integer(1);
+  auto wid  = Dlop::create_integer(1304);
+  auto mask = one->shl_op(*wid)->sub_op(*one);
+  auto rt   = Dlop::from_pyrope(mask->to_pyrope());
+  EXPECT_EQ(rt->popcount(), 1304);
+  EXPECT_EQ(mask->to_decimal_string(), rt->to_decimal_string());
+
+  // Odd digit count exercises the partial-word tail.
+  auto odd = Dlop::from_pyrope("0x1ffffffffffffffff");  // 65 bits
+  EXPECT_EQ(odd->popcount(), 65);
+  EXPECT_TRUE(odd->bit_test(64));
+  EXPECT_FALSE(odd->bit_test(65));
+
+  // Negative wide hex keeps the shared negate tail.
+  auto neg = Dlop::from_pyrope("-0x10000000000000000");
+  EXPECT_EQ(neg->to_decimal_string(), "-18446744073709551616");
+}
+
+TEST_F(Dlop_test, wide_binary_word_batch_matches_short_parse) {
+  // Zero-padding past one word: same value, batched path.
+  std::string long_txt = "0ub";
+  long_txt.append(80, '0');
+  long_txt += "1010";
+  EXPECT_EQ(Dlop::from_pyrope(long_txt)->to_just_i64(), 10);
+
+  // Signed leading-1: 65 ones across the word boundary is exactly -1.
+  std::string ones65 = "0sb";
+  ones65.append(65, '1');
+  EXPECT_EQ(Dlop::from_pyrope(ones65)->to_decimal_string(), "-1");
+
+  // Signed sign-extension of a wide non-trivial pattern: 0sb1 then 64 zeros
+  // is -(2^64).
+  std::string s1z64 = "0sb1";
+  s1z64.append(64, '0');
+  EXPECT_EQ(Dlop::from_pyrope(s1z64)->to_decimal_string(), "-18446744073709551616");
+
+  // Unknown bits survive the batch and round-trip through to_pyrope.
+  std::string unk = "0ub1";
+  unk.append(70, '?');
+  auto uv = Dlop::from_pyrope(unk);
+  EXPECT_TRUE(uv->has_unknowns());
+  EXPECT_TRUE(uv->unknown_bit_test(0));
+  EXPECT_TRUE(uv->unknown_bit_test(69));
+  EXPECT_FALSE(uv->unknown_bit_test(70));
+  EXPECT_TRUE(uv->bit_test(70));
+  auto uv_rt = Dlop::from_pyrope(uv->to_pyrope());
+  EXPECT_EQ(uv_rt->to_pyrope(), uv->to_pyrope());
+
+  // Signed unknown sign bit: '?' extends BOTH planes past the literal width.
+  std::string sunk = "0sb?";
+  sunk.append(64, '0');
+  sunk += "1";
+  auto sv = Dlop::from_pyrope(sunk);
+  EXPECT_TRUE(sv->has_unknowns());
+  EXPECT_TRUE(sv->bit_test(0));
+  EXPECT_TRUE(sv->unknown_bit_test(65));
+  EXPECT_TRUE(sv->unknown_bit_test(200));
+  EXPECT_FALSE(sv->unknown_bit_test(3));
+
+  // '_' separators inside a wide pattern.
+  std::string sep = "0ub1_";
+  sep.append(63, '0');
+  sep += "_1";
+  auto sepv = Dlop::from_pyrope(sep);
+  EXPECT_EQ(sepv->popcount(), 2);
+  EXPECT_TRUE(sepv->bit_test(0));
+  EXPECT_TRUE(sepv->bit_test(64));
+}

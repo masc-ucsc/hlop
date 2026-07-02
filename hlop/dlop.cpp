@@ -321,6 +321,85 @@ void Dlop::init_from_binary(std::string_view txt, bool unsigned_result) {
   }
 
   reconstruct(Type::Integer, 1 + txt.size() / 64);
+  if (on_heap()) {
+    // Word-batched: fill base/extra words 64 bits at a time from the tail,
+    // O(words) total — the per-bit shl_base(1)/shl_extra(1) loop below is
+    // O(bits × words) and stalls on wide `0ub…` mask literals. The signed
+    // leading-1/? extension the pre-loop would apply (`(-1 << nbits) | bits`)
+    // is applied to the finished planes instead. reconstruct() zeroed both
+    // planes, so untouched high words are the known-0 headroom.
+    int64_t* b     = base();
+    int64_t* e     = bp + size;  // Heap layout: extra plane follows base
+    int      w     = 0;
+    int      sh    = 0;
+    uint64_t curb  = 0;
+    uint64_t cure  = 0;
+    size_t   nbits = 0;
+    for (size_t i = txt.size(); i-- > 0;) {
+      const auto ch2 = txt[i];
+      if (ch2 == '_') {
+        continue;
+      }
+      uint64_t bb;
+      uint64_t ee;
+      if (ch2 == '?' || ch2 == 'x' || ch2 == 'z') {
+        bb = 1;  // unknown bits have base=1 (invariant: base == base|extra)
+        ee = 1;
+      } else if (ch2 == '1') {
+        bb = 1;
+        ee = 0;
+      } else if (ch2 == '0') {
+        bb = 0;
+        ee = 0;
+      } else {
+        throw std::runtime_error(std::format("ERROR: {} binary encoding could not use {}\n", txt, ch2));
+      }
+      curb |= bb << sh;
+      cure |= ee << sh;
+      ++nbits;
+      ++sh;
+      if (sh == 64) {
+        b[w] = static_cast<int64_t>(curb);
+        e[w] = static_cast<int64_t>(cure);
+        ++w;
+        curb = 0;
+        cure = 0;
+        sh   = 0;
+      }
+    }
+    if (sh > 0) {
+      b[w] = static_cast<int64_t>(curb);
+      e[w] = static_cast<int64_t>(cure);
+    }
+    if (!unsigned_result) {
+      for (size_t i = 0; i < txt.size(); ++i) {
+        const auto ch2 = txt[i];
+        if (ch2 == '_') {
+          continue;
+        }
+        if (ch2 == '1' || ch2 == '?') {
+          // Set every bit at or above `nbits` (base plane; extra too for an
+          // unknown sign), matching the pre-extended-then-shifted result.
+          const int     top_w    = static_cast<int>(nbits / 64);
+          const int     top_bit  = static_cast<int>(nbits % 64);
+          const int64_t top_mask = static_cast<int64_t>(~((uint64_t(1) << top_bit) - 1));
+          b[top_w] |= top_mask;
+          if (ch2 == '?') {
+            e[top_w] |= top_mask;
+          }
+          for (int j = top_w + 1; j < size; ++j) {
+            b[j] = -1;
+            if (ch2 == '?') {
+              e[j] = -1;
+            }
+          }
+        }
+        break;
+      }
+    }
+    compact_inline();
+    return;
+  }
   if (!unsigned_result) {
     for (size_t i = 0; i < txt.size(); ++i) {
       const auto ch2 = txt[i];
@@ -563,23 +642,56 @@ void Dlop::init_from_pyrope(std::string_view orig_txt) {
   } else {
     assert(shift_mode == 3 || shift_mode == 4);
 
-    for (size_t i = skip_chars; i < orig_txt.size(); ++i) {
-      char c = orig_txt[i];
-      if (c == '_') {
-        continue;
+    if (shift_mode == 4 && on_heap()) {
+      // Word-batched hex: fill base words 16 digits at a time from the tail,
+      // O(words) total. The per-digit shl_base(4) below reshifts the whole
+      // magnitude for every digit — O(digits × words) — which stalls on the
+      // 10^4-bit mask constants v2prp emits (a 17k-bit mask is ~4.4k hex
+      // digits × 274 words). reconstruct() zeroed both planes, so untouched
+      // high words are already the known-0 headroom the shift loop leaves.
+      int64_t* b   = base();
+      int      w   = 0;
+      int      sh  = 0;
+      uint64_t cur = 0;
+      for (size_t i = orig_txt.size(); i-- > skip_chars;) {
+        char c = orig_txt[i];
+        if (c == '_') {
+          continue;
+        }
+        auto v = char_to_val[static_cast<uint8_t>(c)];
+        if (unlikely(v < 0)) {
+          throw std::runtime_error(std::format("ERROR: {} encoding could not use {}\n", orig_txt, c));
+        }
+        cur |= static_cast<uint64_t>(v) << sh;
+        sh += 4;
+        if (sh == 64) {
+          b[w++] = static_cast<int64_t>(cur);
+          cur    = 0;
+          sh     = 0;
+        }
       }
+      if (sh > 0) {
+        b[w] = static_cast<int64_t>(cur);
+      }
+    } else {
+      for (size_t i = skip_chars; i < orig_txt.size(); ++i) {
+        char c = orig_txt[i];
+        if (c == '_') {
+          continue;
+        }
 
-      auto v = char_to_val[static_cast<uint8_t>(c)];
-      if (unlikely(v < 0)) {
-        throw std::runtime_error(std::format("ERROR: {} encoding could not use {}\n", orig_txt, c));
-      }
+        auto v = char_to_val[static_cast<uint8_t>(c)];
+        if (unlikely(v < 0)) {
+          throw std::runtime_error(std::format("ERROR: {} encoding could not use {}\n", orig_txt, c));
+        }
 
-      auto char_sa = char_to_bits[static_cast<uint8_t>(c)];
-      if (unlikely(char_sa > shift_mode)) {
-        throw std::runtime_error(std::format("ERROR: {} invalid syntax for number {} bits needed for '{}'", orig_txt, char_sa, c));
+        auto char_sa = char_to_bits[static_cast<uint8_t>(c)];
+        if (unlikely(char_sa > shift_mode)) {
+          throw std::runtime_error(std::format("ERROR: {} invalid syntax for number {} bits needed for '{}'", orig_txt, char_sa, c));
+        }
+        shl_base(shift_mode);
+        or_base(v);
       }
-      shl_base(shift_mode);
-      or_base(v);
     }
 
     assert(unsigned_result);
