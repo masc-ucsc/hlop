@@ -324,7 +324,14 @@ VarPtr VCDWriter::register_passed_var(const std::string& scope, const std::strin
 }
 // -----------------------------
 bool VCDWriter::change(const VarPtr& var, const VarValue& value, bool reg) {
-  if (global_timestamp < timestamp) {
+  // A registration-time change (reg=true, from finish_register_var) only seeds
+  // vars_prevs with the init value: it must not consult or advance the timestamp.
+  // global_timestamp is process-wide, so a SECOND writer registering its vars
+  // while another writer has already dumped (multi-instance VCD split, or an
+  // on-fail re-run) would otherwise see global > timestamp on the very first
+  // var, finalize_registration() mid-registration, and every later register_var
+  // throws "registering finished".
+  if (!reg && global_timestamp < timestamp) {
     throw VCDPhaseException{utils::format("Out of order value change var '%s'", var->name.c_str())};
   } else if (closed) {
     throw VCDPhaseException{"Cannot change value after close()"};
@@ -337,7 +344,7 @@ bool VCDWriter::change(const VarPtr& var, const VarValue& value, bool reg) {
   std::string change_value = (value.size() ? value : ('b' + std::string(var->size, VCDValues::ZERO) + ' '));
   //    std::string change_value = var->change_record(value);
 
-  if (global_timestamp > timestamp) {
+  if (!reg && global_timestamp > timestamp) {
     if (registering) {
       finalize_registration();
     }
@@ -471,26 +478,42 @@ void VCDWriter::write_header() {
     const std::string& scope = s->name;
     // scope print close
     if (scope_prev.size()) {
-      n_prev = 0;
-      n      = scope_prev.find(scope_sep);
-      n      = (n == std::string::npos) ? scope_prev.size() : n;
-      // equal prefix
-      while (std::strncmp(scope.c_str(), scope_prev.c_str(), n) == 0) {
-        n_prev = n + scope_sep.size();
-        n      = scope_prev.find(scope_sep, n_prev);
-        if (n == std::string::npos) {
-          break;
+      // Entering the previous scope's OWN subtree (prev is a full dotted prefix
+      // of scope): close nothing, open only the new tail components. The generic
+      // component walk below mishandles this when prev is 2+ levels deep -- its
+      // prefix loop stops at prev's last separator, never credits the final
+      // component, and closes/reopens the parent scope around its own child.
+      if (scope.size() > scope_prev.size() + scope_sep.size()
+          && scope.compare(0, scope_prev.size(), scope_prev) == 0
+          && scope.compare(scope_prev.size(), scope_sep.size(), scope_sep) == 0) {
+        n_prev = scope_prev.size() + scope_sep.size();
+      } else {
+        n_prev = 0;
+        n      = scope_prev.find(scope_sep);
+        n      = (n == std::string::npos) ? scope_prev.size() : n;
+        // equal prefix -- component-aligned: the matched prefix must end at a
+        // separator (or the end) of `scope` too, else a sibling whose name
+        // merely EXTENDS another's ("u_x_1" with children, then "u_x_10")
+        // counts as inside it and the header nests an empty-named scope with
+        // an unbalanced $upscope count.
+        while (std::strncmp(scope.c_str(), scope_prev.c_str(), n) == 0
+               && (scope.size() == n || scope.compare(n, scope_sep.size(), scope_sep) == 0)) {
+          n_prev = n + scope_sep.size();
+          n      = scope_prev.find(scope_sep, n_prev);
+          if (n == std::string::npos) {
+            break;
+          }
         }
-      }
-      // last
-      if (n_prev != (scope_prev.size() + scope_sep.size())) {
-        fprintf(ofile, "$upscope $end\n");
-      }
-      // close
-      n = scope_prev.find(scope_sep, n_prev);
-      while (n != std::string::npos) {
-        fprintf(ofile, "$upscope $end\n");
-        n = scope_prev.find(scope_sep, n + scope_sep.size());
+        // last
+        if (n_prev != (scope_prev.size() + scope_sep.size())) {
+          fprintf(ofile, "$upscope $end\n");
+        }
+        // close
+        n = scope_prev.find(scope_sep, n_prev);
+        while (n != std::string::npos) {
+          fprintf(ofile, "$upscope $end\n");
+          n = scope_prev.find(scope_sep, n + scope_sep.size());
+        }
       }
     }
 
