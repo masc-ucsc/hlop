@@ -363,8 +363,17 @@ bool VCDWriter::change(const VarPtr& var, const VarValue& value, bool reg) {
     }
     vars_prevs[var] = change_value;  // entered for #0
 
-  } else if (!reg) {
+  } else if (!reg && !registering) {
     throw VCDTypeException{utils::format("VCDVariable '%s' do not registered", var->name.c_str())};
+  } else if (!reg) {
+    // Still in the registration phase (time has not advanced yet): a var's
+    // FIRST ordinary change() is its initial value. Seed it like a
+    // registration dump instead of throwing — a deep hierarchy (e.g. a CPU
+    // whose root writer lazily initializes inside the first cycle) toggles
+    // its clock vars at timestamp 0, BEFORE any timestamp advance runs
+    // finalize_registration(). The unregistered-var error stays armed for
+    // every post-finalize change.
+    vars_prevs.insert(std::make_pair(var, change_value));
   } else {
     vars_prevs.insert(std::make_pair(var, change_value));  // registering: inserted the pair for the first time
   }

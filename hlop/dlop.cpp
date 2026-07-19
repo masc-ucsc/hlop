@@ -3,6 +3,7 @@
 #include "dlop.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <charconv>
 #include <cstdlib>
 #include <cstring>
@@ -2996,6 +2997,65 @@ std::string Dlop::to_hex_string() const {
     }
   }
   return result;
+}
+
+std::string Dlop::pad_digits(std::string s, int digits) {
+  const size_t sign = (!s.empty() && s.front() == '-') ? 1u : 0u;
+  if (digits > 0 && static_cast<size_t>(digits) > s.size() - sign) {
+    s.insert(sign, static_cast<size_t>(digits) - (s.size() - sign), '0');
+  }
+  return s;
+}
+
+std::string Dlop::group_digits(std::string s, int group) {
+  const size_t sign = (!s.empty() && s.front() == '-') ? 1u : 0u;
+  std::string  g;
+  int          cnt = 0;
+  for (size_t k = s.size(); k > sign; --k) {
+    if (cnt != 0 && cnt % group == 0) {
+      g.push_back('_');
+    }
+    g.push_back(s[k - 1]);
+    ++cnt;
+  }
+  if (sign != 0) {
+    g.push_back('-');
+  }
+  std::reverse(g.begin(), g.end());
+  return g;
+}
+
+std::string Dlop::to_decimal(int digits, bool sep) const {
+  std::string out = pad_digits(to_decimal_string(), digits);
+  return sep ? group_digits(std::move(out), 3) : out;
+}
+
+std::string Dlop::to_hex(int digits, bool sep, bool upper) const {
+  std::string out = to_hex_string();
+  // strip the 0x/-0x prefix to the bare-digit form Slop::to_hex returns
+  if (auto x = out.find("0x"); x != std::string::npos) {
+    out.erase(x, 2);
+  }
+  if (upper) {
+    for (auto& c : out) {
+      c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    }
+  }
+  out = pad_digits(std::move(out), digits);
+  return sep ? group_digits(std::move(out), 4) : out;
+}
+
+std::string Dlop::to_binary(int digits, bool sep) const {
+  // Display convention: leading zeros drop, then pad/group (Slop-identical).
+  std::string out = to_binary();
+  size_t      nz  = out.find_first_not_of('0');
+  if (nz == std::string::npos) {
+    out = "0";
+  } else if (nz > 0) {
+    out.erase(0, nz);
+  }
+  out = pad_digits(std::move(out), digits);
+  return sep ? group_digits(std::move(out), 4) : out;
 }
 
 std::string Dlop::to_verilog() const {

@@ -720,6 +720,19 @@ public:
   std::string to_decimal_string() const;
   std::string to_hex_string() const;
 
+  // Slop-PARITY formatting API (identical signatures/semantics to
+  // Slop::to_decimal/to_hex/to_binary): `digits` zero-pads after any leading
+  // '-', `sep` groups the digits '_'-separated every 4 (3 for decimal) from
+  // the LSB. The shared entry points for ANY string interpolation — comptime
+  // (upass constprop's __fmt fold over Dlop) and runtime (the sim driver over
+  // Slop) — one algorithm, two value classes. Unknown bits render as '?' in
+  // to_binary (inherited from to_binary() above).
+  std::string        to_decimal(int digits = 0, bool sep = false) const;
+  std::string        to_hex(int digits = 0, bool sep = false, bool upper = false) const;
+  std::string        to_binary(int digits, bool sep) const;  // overload; to_binary() above stays
+  static std::string pad_digits(std::string s, int digits);
+  static std::string group_digits(std::string s, int group);
+
   void dump() const;
 };
 

@@ -13,8 +13,10 @@
 
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cassert>
+#include <cctype>
 #include <cstdint>
 #include <format>
 #include <initializer_list>
@@ -23,6 +25,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "blop.hpp"
 #include "iassert.hpp"
@@ -1036,17 +1039,143 @@ public:
     return str;
   }
 
-  std::string to_binary() const {
+  // '_'-group `digits` every `group` characters from the LSB end (after any
+  // leading '-'), the pretty-print spacing used by to_binary/to_hex/to_decimal.
+  static std::string group_digits(std::string s, int group) {
+    const size_t sign = (!s.empty() && s.front() == '-') ? 1u : 0u;
+    std::string  g;
+    int          cnt = 0;
+    for (size_t k = s.size(); k > sign; --k) {
+      if (cnt != 0 && cnt % group == 0) {
+        g.push_back('_');
+      }
+      g.push_back(s[k - 1]);
+      ++cnt;
+    }
+    if (sign != 0) {
+      g.push_back('-');
+    }
+    std::reverse(g.begin(), g.end());
+    return g;
+  }
+
+  // Zero-pad `s` to `digits` (after any leading '-').
+  static std::string pad_digits(std::string s, int digits) {
+    const size_t sign = (!s.empty() && s.front() == '-') ? 1u : 0u;
+    if (digits > 0 && static_cast<size_t>(digits) > s.size() - sign) {
+      s.insert(sign, static_cast<size_t>(digits) - (s.size() - sign), '0');
+    }
+    return s;
+  }
+
+  std::string to_binary() const {  // full declared width (VCD/raw callers)
     int nbits = get_bits();
     if (nbits <= 0) {
       return "0";
     }
-
     std::string result;
     for (int i = nbits - 1; i >= 0; --i) {
       result.push_back(bit_test(i) ? '1' : '0');
     }
     return result;
+  }
+
+  // Display overload (string-interpolation convention): leading zeros drop,
+  // then `digits` zero-pads and `sep` groups — identical to Dlop's.
+  std::string to_binary(int digits, bool sep) const {
+    std::string result = to_binary();
+    size_t      nz     = result.find_first_not_of('0');
+    if (nz == std::string::npos) {
+      result = "0";
+    } else if (nz > 0) {
+      result.erase(0, nz);
+    }
+    result = pad_digits(std::move(result), digits);
+    return sep ? group_digits(std::move(result), 4) : result;
+  }
+
+  // Decimal / hex renderings at ANY width (no 64-bit truncation) — the
+  // standard formatting entry points for pretty-printers (e.g. the lhd sim
+  // driver's `puts` interpolation). `digits` zero-pads (after any '-'); `sep`
+  // inserts a '_' every 4 digits (3 for decimal) from the LSB.
+  std::string to_hex(int digits = 0, bool sep = false, bool upper = false) const {
+    std::string result;
+    auto append_mag = [&](const Slop& mag) {
+      bool lead = true;
+      for (int i = n_words - 1; i >= 0; --i) {
+        auto w = static_cast<uint64_t>(mag.base_[i]);
+        if (lead) {
+          if (w == 0 && i != 0) {
+            continue;
+          }
+          result += std::format("{:x}", w);
+          lead    = false;
+        } else {
+          result += std::format("{:016x}", w);
+        }
+      }
+      if (result.empty()) {
+        result = "0";
+      }
+    };
+    if (is_negative()) {
+      append_mag(neg_op());
+      result.insert(0, 1, '-');
+    } else {
+      append_mag(*this);
+    }
+    if (upper) {
+      for (auto& c : result) {
+        c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+      }
+    }
+    result = pad_digits(std::move(result), digits);
+    return sep ? group_digits(std::move(result), 4) : result;
+  }
+
+  std::string to_decimal(int digits = 0, bool sep = false) const {
+    std::string result;
+    if (is_just_i64()) {
+      result = std::to_string(to_just_i64());
+    } else {
+      // Wide bignum -> decimal: repeated limb division by 10^19 (the largest
+      // power of ten in a uint64), emitting 19 digits per round.
+      const bool             neg = is_negative();
+      const Slop             mag = neg ? neg_op() : *this;
+      std::vector<uint64_t>  limbs(mag.base_.begin(), mag.base_.end());
+      constexpr uint64_t     kChunk = 10000000000000000000ULL;  // 10^19
+      std::vector<uint64_t>  chunks;
+      auto nonzero = [&]() {
+        for (auto w : limbs) {
+          if (w != 0) {
+            return true;
+          }
+        }
+        return false;
+      };
+      while (nonzero()) {
+        unsigned __int128 rem = 0;
+        for (int i = static_cast<int>(limbs.size()) - 1; i >= 0; --i) {
+          unsigned __int128 cur = (rem << 64) | limbs[static_cast<size_t>(i)];
+          limbs[static_cast<size_t>(i)] = static_cast<uint64_t>(cur / kChunk);
+          rem                            = cur % kChunk;
+        }
+        chunks.push_back(static_cast<uint64_t>(rem));
+      }
+      if (chunks.empty()) {
+        result = "0";
+      } else {
+        result = std::to_string(chunks.back());
+        for (int i = static_cast<int>(chunks.size()) - 2; i >= 0; --i) {
+          result += std::format("{:019}", chunks[static_cast<size_t>(i)]);
+        }
+      }
+      if (neg && result != "0") {
+        result.insert(0, 1, '-');
+      }
+    }
+    result = pad_digits(std::move(result), digits);
+    return sep ? group_digits(std::move(result), 3) : result;
   }
 
   std::string to_pyrope() const {

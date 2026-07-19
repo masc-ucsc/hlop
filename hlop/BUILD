@@ -120,6 +120,16 @@ cc_test(
     ],
 )
 
+cc_test(
+    name = "format_api_test",
+    srcs = ["tests/format_api_test.cpp"],
+    copts = CPP23_COPTS,
+    deps = [
+        ":hlop",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
 cc_binary(
     name = "dlop_robust_check",
     srcs = ["tests/dlop_robust_check.cpp"],
@@ -127,4 +137,14 @@ cc_binary(
     deps = [
         ":hlop",
     ],
+)
+
+# The Slop sim runtime as SOURCE files, for consumers that host-compile
+# generated code at run time (LiveHD's `lhd sim` driver): staging this in a
+# test's runfiles lets its runfiles probe resolve slop.hpp & friends;
+# vcd_writer.cpp is compiled into the driver when VCD tracing is on.
+filegroup(
+    name = "sim_runtime_hdrs",
+    srcs = glob(["*.hpp"]) + ["vcd_writer.cpp"],
+    visibility = ["//visibility:public"],
 )
