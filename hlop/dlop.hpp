@@ -625,6 +625,16 @@ public:
   spool_ptr<Dlop> get_mask_op(spool_ptr<Dlop> mask) const { return get_mask_op(*mask); }
   spool_ptr<Dlop> set_mask_op(const Dlop& mask, const Dlop& value) const;
   spool_ptr<Dlop> set_mask_op(spool_ptr<Dlop> mask, spool_ptr<Dlop> value) const { return set_mask_op(*mask, *value); }
+  // Make the bits selected by `mask` UNKNOWN, keeping every other bit. Unlike
+  // set_mask_op (a gather/scatter over the mask-selected positions) this is a
+  // positional overlay: bit i becomes unknown iff mask bit i is set.
+  //
+  // This is the `ordering="none"` collision value in hlop/memory.hpp: with a
+  // sub-word (`wensize`) write only the colliding LANES are undefined, so the
+  // untouched lanes must keep the stored value. Slop's counterpart is
+  // Slop<N>::unknown_lanes (random lanes, since Slop has no x).
+  spool_ptr<Dlop> make_unknown_bits(const Dlop& mask) const;
+  spool_ptr<Dlop> make_unknown_bits(spool_ptr<Dlop> mask) const { return make_unknown_bits(*mask); }
   spool_ptr<Dlop> concat_op(const Dlop& other) const;
   spool_ptr<Dlop> concat_op(spool_ptr<Dlop> other) const { return concat_op(*other); }
   spool_ptr<Dlop> adjust_bits(int amount) const;

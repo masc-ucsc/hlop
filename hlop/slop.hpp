@@ -187,10 +187,16 @@ public:
   }
 
   // unknown(nbits): factory exposed for eval.hpp template compatibility. Slop
-  // has no symbolic unknowns, so this returns an N-bit random concrete value
-  // drawn from the same PRNG used at parse time. In practice this is never
-  // called for Slop in the shared kernels — the `has_unknowns()` guards always
-  // take the known path — but the symbol must exist to compile.
+  // has no symbolic unknowns, so this returns an nbits-wide random concrete
+  // value drawn from the same PRNG used at parse time. Besides the eval.hpp
+  // kernels (where the `has_unknowns()` guards make it dead code) this is the
+  // `ordering="none"` collision value: hlop/memory.hpp Memory_none and the
+  // cgen.sim code it emits.
+  //
+  // The result is CANONICAL — sign-extended from bit nbits-1, not
+  // zero-extended. A Slop is a signed nbits value everywhere else, and a
+  // non-canonical one misbehaves under SRA, signed compare and word-wise
+  // equality.
   static Slop unknown(int nbits) {
     Slop s;
     if (nbits <= 0) {
@@ -202,12 +208,22 @@ public:
       ++hlop_random_draws();
       s.base_[i] = static_cast<int64_t>(rng());
     }
-    int leftover = nbits % 64;
-    if (leftover > 0 && words - 1 < n_words) {
-      int64_t mask        = (int64_t(1) << leftover) - 1;
-      s.base_[words - 1] &= mask;
-    }
+    // sext also clears every bit above the sign, so no separate mask is needed
+    // (the old masked form was UB at nbits%64 == 63: int64_t(1) << 63).
+    Blop::sext<n_words>(s.base_, s.base_, std::min(nbits, N) - 1);
     return s;
+  }
+
+  // Replace the bits selected by `mask` with fresh PRNG bits, keeping the rest.
+  // The Slop counterpart of Dlop::make_unknown_bits — Slop has no x, so an
+  // "undefined lane" is a random lane. Used by hlop/memory.hpp when a sub-word
+  // (`wensize`) write collides with only some lanes of an `ordering="none"`
+  // read; the untouched lanes must still read the stored value.
+  Slop unknown_lanes(const Slop& mask) const {
+    const Slop rnd  = unknown(N);
+    const Slop kept = and_op(mask.not_op());
+    const Slop got  = rnd.and_op(mask);
+    return kept.or_op(got).sext_op(N - 1);
   }
 
   // Draw a single random bit from a deterministic per-process PRNG. Runtime

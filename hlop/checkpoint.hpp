@@ -22,6 +22,7 @@
 #include <cerrno>
 #include <chrono>
 #include <climits>
+#include <concepts>
 #include <cstdint>
 #include <cstdlib>
 #include <dirent.h>
@@ -149,6 +150,25 @@ inline bool read_mem_hex(const std::string& path, std::array<Slop<B>, S>& a) {
     ++i;
   }
   return true;
+}
+
+// A Memory_* (hlop/memory.hpp) checkpoints as its committed contents. The
+// staged writes are transient by construction — a checkpoint is taken between
+// ticks, when no write is pending — so the image is exactly the entry array and
+// the hex format is unchanged from the bare-std::array form above.
+template <class M>
+concept Mem_like = requires(M& m) {
+  { m.entries() } -> std::same_as<typename M::array_type&>;
+};
+
+template <Mem_like M>
+inline void write_mem_hex(const std::string& path, const M& m) {
+  write_mem_hex(path, m.entries());
+}
+
+template <Mem_like M>
+inline bool read_mem_hex(const std::string& path, M& m) {
+  return read_mem_hex(path, m.entries());
 }
 
 // ── flat string-keyed JSON {"k":"v",...} (regs / tb / meta) ──────────────────

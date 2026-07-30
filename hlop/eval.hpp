@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "dlop.hpp"
+#include "memory.hpp"
 #include "slop.hpp"
 
 namespace hlop {
@@ -68,19 +69,25 @@ struct LatchArgs {
   const V* posclk = nullptr;
 };
 
+// Memory ports carry their ORDINAL: the same-cycle ordering modes are defined
+// per (read port, write port) pair, so a port-blind call cannot express them.
+// See memory.hpp for the four modes and the staging protocol.
 template <class V>
 struct MemoryReadArgs {
   const V& addr;
   const V& enable;
-  const V* fwd = nullptr;
+  int      rd_port = 0;
 };
 
 template <class V>
 struct MemoryWriteArgs {
   const V& addr;
   const V& data;
+  // The Memory cell's `enable` (pid 4) IS the write mask: one bit when
+  // wensize == 1, otherwise a wensize-bit lane vector. There is no separate
+  // wmask pin.
   const V& enable;
-  const V* wmask = nullptr;
+  int      wr_port = 0;
 };
 
 // =========================================================================
@@ -130,17 +137,37 @@ struct RegState {
   }
 };
 
-// Memory state for slop
+// Memory state. A thin, index-based facade over Mem_dyn (memory.hpp), which
+// owns the storage, the staged writes and the four same-cycle ordering modes.
 template <class V>
 struct MemState {
-  std::vector<V> curr;
-  std::vector<V> next;
-  bool           fwd = false;
+  Mem_dyn<V> mem;
 
   MemState() = default;
-  MemState(size_t depth, const V& init, bool fwd_enable = false) : curr(depth, init), next(depth, init), fwd(fwd_enable) {}
 
-  void advance_clock() { curr = next; }
+  // Convenience ctor for a single-read / single-write memory. `order` picks the
+  // same-cycle semantics; the historical `fwd_enable` bool is exactly
+  // Mem_order::fwd vs Mem_order::old.
+  MemState(size_t depth, const V& init, Mem_order order = Mem_order::old, int n_rd = 1, int n_wr = 1, int bits = 0,
+           int wensize = 1) {
+    Mem_cfg cfg;
+    cfg.size      = depth;
+    cfg.bits      = bits > 0 ? bits : (Mem_width<V>::value > 0 ? Mem_width<V>::value : 64);
+    cfg.n_rd      = n_rd;
+    cfg.n_wr      = n_wr;
+    cfg.n_user_wr = n_wr;
+    cfg.wensize   = wensize;
+    cfg.order     = order;
+    mem.configure(cfg, init);
+  }
+
+  void configure(const Mem_cfg& cfg, const V& init) { mem.configure(cfg, init); }
+
+  // Commit the staged writes; the new contents become visible to later reads.
+  void advance_clock() { mem.tick(); }
+
+  std::vector<V>&       entries() { return mem.entries(); }
+  const std::vector<V>& entries() const { return mem.entries(); }
 };
 
 // =========================================================================
@@ -477,55 +504,23 @@ V eval_fflop(State& st, uint32_t slot, const FlopArgs<V>& args) {
 // Memory kernels
 // =========================================================================
 
+// Resolve read port `rd_port` against this cycle's staged writes, per the
+// memory's ordering mode. A disabled read yields 0 (the historical hlop
+// behavior); every other case is Mem_dyn's.
 template <class V>
 V eval_memory_read(MemState<V>& mem, const MemoryReadArgs<V>& args) {
   if (!args.enable.is_known_true()) {
     return V::create_integer(0);
   }
-
-  if (args.addr.has_unknowns()) {
-    return V::unknown(64);  // conservative
-  }
-
-  assert(args.addr.is_just_i64());
-  int64_t addr = args.addr.to_just_i64();
-
-  if (addr < 0 || static_cast<size_t>(addr) >= mem.curr.size()) {
-    return V::create_integer(0);  // out of range
-  }
-
-  // Check fwd flag: if set, reads see pending writes
-  bool do_fwd = mem.fwd && args.fwd && args.fwd->is_known_true();
-  if (do_fwd) {
-    return mem.next[addr];
-  }
-
-  return mem.curr[addr];
+  return mem.mem.read(args.rd_port, args.addr);
 }
 
+// Stage a write on port `wr_port`. It becomes visible to the stored contents at
+// advance_clock(); whether a same-cycle read sees it is the ordering mode's
+// call, not the write's.
 template <class V>
 void eval_memory_write(MemState<V>& mem, const MemoryWriteArgs<V>& args) {
-  if (!args.enable.is_known_true()) {
-    return;
-  }
-
-  if (args.addr.has_unknowns()) {
-    return;  // cannot write to unknown address
-  }
-
-  assert(args.addr.is_just_i64());
-  int64_t addr = args.addr.to_just_i64();
-
-  if (addr < 0 || static_cast<size_t>(addr) >= mem.curr.size()) {
-    return;  // out of range
-  }
-
-  if (args.wmask) {
-    // Partial write: set_mask semantics
-    mem.next[addr] = eval_set_mask(mem.next[addr], *args.wmask, args.data);
-  } else {
-    mem.next[addr] = args.data;
-  }
+  mem.mem.stage_write(args.wr_port, args.enable, args.addr, args.data);
 }
 
 }  // namespace hlop

@@ -314,7 +314,7 @@ TEST_F(EvalSlopTest, eval_latch_opaque) {
 // --- Memory ---
 
 TEST_F(EvalSlopTest, eval_memory_write_read) {
-  hlop::MemState<V32> mem(256, V32::create_integer(0), false);
+  hlop::MemState<V32> mem(256, V32::create_integer(0), hlop::Mem_order::old);
 
   V32 addr = V32::create_integer(7);
   V32 data = V32::from_pyrope("0xdeadbeef");
@@ -323,7 +323,7 @@ TEST_F(EvalSlopTest, eval_memory_write_read) {
   hlop::MemoryWriteArgs<V32> wargs{.addr = addr, .data = data, .enable = en};
   hlop::eval_memory_write<V32>(mem, wargs);
 
-  // Before advance_clock, read should see old value (fwd=false)
+  // ordering="old": the staged write is invisible until advance_clock().
   hlop::MemoryReadArgs<V32> rargs{.addr = addr, .enable = en};
   auto                      rd = hlop::eval_memory_read<V32>(mem, rargs);
   EXPECT_TRUE(rd.is_known_eq(V32::create_integer(0)));
@@ -335,20 +335,56 @@ TEST_F(EvalSlopTest, eval_memory_write_read) {
 }
 
 TEST_F(EvalSlopTest, eval_memory_fwd) {
-  hlop::MemState<V32> mem(256, V32::create_integer(0), true);
+  hlop::MemState<V32> mem(256, V32::create_integer(0), hlop::Mem_order::fwd);
 
-  V32 addr     = V32::create_integer(7);
-  V32 data     = V32::from_pyrope("0xcafe");
-  V32 en       = V32::create_integer(1);
-  V32 fwd_flag = V32::create_integer(1);
+  V32 addr = V32::create_integer(7);
+  V32 data = V32::from_pyrope("0xcafe");
+  V32 en   = V32::create_integer(1);
 
   hlop::MemoryWriteArgs<V32> wargs{.addr = addr, .data = data, .enable = en};
   hlop::eval_memory_write<V32>(mem, wargs);
 
-  // With fwd=true, read should see pending write
-  hlop::MemoryReadArgs<V32> rargs{.addr = addr, .enable = en, .fwd = &fwd_flag};
+  // ordering="fwd": the same-cycle read sees the staged write.
+  hlop::MemoryReadArgs<V32> rargs{.addr = addr, .enable = en};
   auto                      rd = hlop::eval_memory_read<V32>(mem, rargs);
   EXPECT_TRUE(rd.is_known_eq(V32::from_pyrope("0xcafe")));
+}
+
+TEST_F(EvalSlopTest, eval_memory_program_and_none) {
+  // Two read ports, one write port; read port 0 precedes the write, read port 1
+  // follows it.
+  hlop::Mem_cfg cfg;
+  cfg.size      = 16;
+  cfg.bits      = 32;
+  cfg.n_rd      = 2;
+  cfg.n_wr      = 1;
+  cfg.n_user_wr = 1;
+  cfg.order     = hlop::Mem_order::program;
+  cfg.fwd_upto  = {0, 1};
+
+  hlop::MemState<V32> mem;
+  mem.configure(cfg, V32::create_integer(0));
+  mem.entries()[3] = V32::create_integer(7);
+
+  V32 addr = V32::create_integer(3);
+  V32 data = V32::create_integer(42);
+  V32 en   = V32::create_integer(1);
+  hlop::eval_memory_write<V32>(mem, {.addr = addr, .data = data, .enable = en});
+
+  EXPECT_TRUE(hlop::eval_memory_read<V32>(mem, {.addr = addr, .enable = en, .rd_port = 0}).is_known_eq(V32::create_integer(7)));
+  EXPECT_TRUE(hlop::eval_memory_read<V32>(mem, {.addr = addr, .enable = en, .rd_port = 1}).is_known_eq(V32::create_integer(42)));
+
+  // ordering="none": both defined answers are 0 here, so a nonzero read proves
+  // the collision is undefined (Slop fills it from the seeded PRNG).
+  hlop::MemState<V32> mem_none(16, V32::create_integer(0), hlop::Mem_order::none);
+  hlop::eval_memory_write<V32>(mem_none, {.addr = addr, .data = V32::create_integer(0), .enable = en});
+  bool saw_nonzero = false;
+  for (int i = 0; i < 64; ++i) {
+    if (!hlop::eval_memory_read<V32>(mem_none, {.addr = addr, .enable = en}).is_known_eq(V32::create_integer(0))) {
+      saw_nonzero = true;
+    }
+  }
+  EXPECT_TRUE(saw_nonzero);
 }
 
 // =========================================================================

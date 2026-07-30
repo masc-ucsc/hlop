@@ -88,7 +88,7 @@ void DContext::advance_clock() {
     st.curr = st.next;
   }
   for (auto& [id, ms] : memory_state_) {
-    ms.curr = ms.next;
+    ms.tick();  // commit the staged writes
   }
 }
 
@@ -390,89 +390,163 @@ DResult DContext::exec_fflop(const DCall& call) {
   return exec_flop(call);
 }
 
+// Memory sink pids are laid out in PORT BLOCKS of this stride (LiveHD
+// graph/cell.hpp Ntype::Memory_port_stride): port i's per-port pin at base
+// offset `off` lives at pid = i*kMemPortStride + off. The 0..stride-1 block
+// also holds the cell-global pins, which is why the per-port offsets (0/3/4/10)
+// and the global ones (1/2/5..9/11..15) never collide.
+static constexpr int kMemPortStride = 16;
+
+// Per-port offsets
+static constexpr int kMemOffAddr   = 0;
+static constexpr int kMemOffDin    = 3;
+static constexpr int kMemOffEnable = 4;  // wensize-bit lane vector when wensize > 1
+static constexpr int kMemOffRdport = 10;  // comptime: 1 = read port, 0 = write port
+
+// The number of leading set bits in row `r` of a per-(read,write) matrix,
+// bit (r*n_wr + w). Every `ordering` mode produces a PREFIX row (upass.tolg),
+// so a count is lossless. Returns -1 when the row is NOT a prefix, which means
+// the matrix did not come from an `ordering` attribute (a legacy numeric `fwd=`
+// escape hatch could in principle produce one).
+static int matrix_row_prefix(const DValue& m, int r, int n_wr) {
+  if (!m) {
+    return 0;
+  }
+  int prefix = 0;
+  while (prefix < n_wr && m->bit_test(r * n_wr + prefix)) {
+    ++prefix;
+  }
+  for (int w = prefix; w < n_wr; ++w) {
+    if (m->bit_test(r * n_wr + w)) {
+      return -1;  // a hole: not a prefix
+    }
+  }
+  return prefix;
+}
+
 DResult DContext::exec_memory(const DCall& call) {
   assert(!call.state_id.empty());
 
   auto& ms = memory_state_[call.state_id];
 
-  // Extract global config pins
-  auto bits_v = find_pin(call.inputs, "bits");
-  auto size_v = find_pin(call.inputs, "size");
-  auto fwd_v  = find_pin(call.inputs, "fwd");
-
-  // Initialize memory if needed
-  if (!ms.initialized && size_v && bits_v) {
-    ms.size   = size_v->to_just_i64();
-    ms.bits   = bits_v->to_just_i64();
-    ms.fwd    = fwd_v && fwd_v->is_known_true();
-    auto zero = Dlop::create_integer(0);
-    ms.curr.resize(ms.size, zero);
-    ms.next.resize(ms.size, zero);
-    ms.initialized = true;
-  }
-
-  if (!ms.initialized) {
-    return {.outputs = {Dlop::create_integer(0)}};
-  }
-
-  // Process ports by pid blocks (11 pids per port)
-  // Port layout: pid+0=addr, pid+2=clk_enable, pid+3=data, pid+4=wmask, pid+10=wen
-  // Read ports: pid+0=addr, pid+3=enable, pid+5=fwd_flag
-
-  // Collect all pid-based inputs, find the max pid to determine port count
+  // ---- port census (one pass over the pid blocks) ----
   int max_pid = -1;
   for (auto& in : call.inputs) {
-    if (in.pid >= 0 && in.pid > max_pid) {
+    if (in.pid > max_pid) {
       max_pid = in.pid;
     }
   }
+  const int n_ports = max_pid < 0 ? 0 : (max_pid / kMemPortStride) + 1;
 
-  // Process write ports first (ports with wen), then read ports
-  std::vector<DValue> read_outputs;
+  std::vector<int> rd_of_port(static_cast<size_t>(n_ports), -1);  // read ordinal, or -1
+  std::vector<int> wr_of_port(static_cast<size_t>(n_ports), -1);  // write ordinal, or -1
+  int              n_rd = 0;
+  int              n_wr = 0;
+  for (int p = 0; p < n_ports; ++p) {
+    const int base = p * kMemPortStride;
+    if (!find_pid(call.inputs, base + kMemOffAddr)) {
+      continue;  // this block is not a port
+    }
+    auto rdport = find_pid(call.inputs, base + kMemOffRdport);
+    if (rdport && rdport->is_known_true()) {
+      rd_of_port[static_cast<size_t>(p)] = n_rd++;
+    } else {
+      wr_of_port[static_cast<size_t>(p)] = n_wr++;
+    }
+  }
 
-  for (int port_base = 0; port_base <= max_pid; port_base += 11) {
-    auto addr = find_pid(call.inputs, port_base);
-    if (!addr) {
+  // ---- configure on first sight ----
+  if (!ms.configured()) {
+    auto bits_v = find_pin(call.inputs, "bits");
+    auto size_v = find_pin(call.inputs, "size");
+    if (!bits_v || !size_v) {
+      return {.outputs = {Dlop::create_integer(0)}};
+    }
+    auto wensize_v = find_pin(call.inputs, "wensize");
+    auto fwd_v     = find_pin(call.inputs, "fwd");
+    auto undef_v   = find_pin(call.inputs, "undef");
+
+    Mem_cfg cfg;
+    cfg.size    = static_cast<size_t>(size_v->to_just_i64());
+    cfg.bits    = static_cast<int>(bits_v->to_just_i64());
+    cfg.n_rd    = n_rd;
+    cfg.n_wr    = n_wr;
+    cfg.wensize = wensize_v && wensize_v->is_just_i64() ? static_cast<int>(wensize_v->to_just_i64()) : 1;
+
+    // Classify the two matrices into one of the four ordering modes. Both are
+    // per-(read,write) prefixes, so a row is just a count.
+    std::vector<uint16_t> fwd_upto(static_cast<size_t>(n_rd), 0);
+    std::vector<uint16_t> undef_upto(static_cast<size_t>(n_rd), 0);
+    int                   max_fwd = 0, max_undef = 0;
+    bool                  fwd_uniform = true;
+    for (int r = 0; r < n_rd; ++r) {
+      const int f = n_wr > 0 ? matrix_row_prefix(fwd_v, r, n_wr) : 0;
+      const int u = n_wr > 0 ? matrix_row_prefix(undef_v, r, n_wr) : 0;
+      // A non-prefix row cannot come from an `ordering` attribute. Fail closed
+      // rather than silently simulating a different memory.
+      assert(f >= 0 && "Memory `fwd` row is not a prefix -- not an `ordering` matrix");
+      assert(u >= 0 && "Memory `undef` row is not a prefix -- not an `ordering` matrix");
+      fwd_upto[static_cast<size_t>(r)]   = static_cast<uint16_t>(f < 0 ? 0 : f);
+      undef_upto[static_cast<size_t>(r)] = static_cast<uint16_t>(u < 0 ? 0 : u);
+      max_fwd                            = std::max(max_fwd, f < 0 ? 0 : f);
+      max_undef                          = std::max(max_undef, u < 0 ? 0 : u);
+      if (r > 0 && fwd_upto[static_cast<size_t>(r)] != fwd_upto[0]) {
+        fwd_uniform = false;
+      }
+    }
+    // The restore/reset write ports are the tail that no row ever names, so the
+    // widest prefix IS the user write-port count.
+    if (max_undef > 0) {
+      cfg.order     = Mem_order::none;
+      cfg.n_user_wr = max_undef;
+    } else if (max_fwd == 0) {
+      cfg.order     = Mem_order::old;
+      cfg.n_user_wr = n_wr;
+    } else if (fwd_uniform && max_fwd == fwd_upto[0]) {
+      cfg.order     = Mem_order::fwd;
+      cfg.n_user_wr = max_fwd;
+    } else {
+      cfg.order     = Mem_order::program;
+      cfg.n_user_wr = max_fwd;
+      cfg.fwd_upto  = fwd_upto;
+    }
+
+    ms.configure(cfg, Dlop::create_integer(0));
+  }
+
+  // ---- stage every write BEFORE resolving any read ----
+  // The read's ordering row decides which of them it observes; that decision is
+  // the mode's, not the call order's.
+  for (int p = 0; p < n_ports; ++p) {
+    const int w = wr_of_port[static_cast<size_t>(p)];
+    if (w < 0) {
       continue;
     }
-
-    auto wen = find_pid(call.inputs, port_base + 10);
-    if (wen && wen->is_known_true()) {
-      // Write port
-      auto clk_en = find_pid(call.inputs, port_base + 2);
-      auto data   = find_pid(call.inputs, port_base + 3);
-      auto wmask  = find_pid(call.inputs, port_base + 4);
-
-      if (clk_en && clk_en->is_known_true() && data && addr->is_just_i64()) {
-        int64_t a = addr->to_just_i64();
-        if (a >= 0 && a < ms.size) {
-          if (wmask) {
-            auto not_mask = wmask->not_op();
-            auto cleared  = ms.next[a]->and_op(not_mask);
-            auto masked_v = data->and_op(wmask);
-            ms.next[a]    = cleared->or_op(masked_v);
-          } else {
-            ms.next[a] = data;
-          }
-        }
-      }
-    } else {
-      // Read port
-      auto ren = find_pid(call.inputs, port_base + 3);
-
-      if (ren && ren->is_known_true() && addr->is_just_i64()) {
-        int64_t a = addr->to_just_i64();
-        if (a >= 0 && a < ms.size) {
-          auto fwd_flag = find_pid(call.inputs, port_base + 5);
-          bool do_fwd   = ms.fwd && fwd_flag && fwd_flag->is_known_true();
-          read_outputs.push_back(do_fwd ? ms.next[a] : ms.curr[a]);
-        } else {
-          read_outputs.push_back(Dlop::create_integer(0));
-        }
-      } else {
-        read_outputs.push_back(Dlop::create_integer(0));
-      }
+    const int base   = p * kMemPortStride;
+    auto      addr   = find_pid(call.inputs, base + kMemOffAddr);
+    auto      din    = find_pid(call.inputs, base + kMemOffDin);
+    auto      enable = find_pid(call.inputs, base + kMemOffEnable);
+    if (!addr || !din) {
+      continue;
     }
+    ms.stage_write(w, enable ? enable : Dlop::create_bool(true), addr, din);
+  }
+
+  // ---- resolve the reads ----
+  std::vector<DValue> read_outputs;
+  for (int p = 0; p < n_ports; ++p) {
+    const int r = rd_of_port[static_cast<size_t>(p)];
+    if (r < 0) {
+      continue;
+    }
+    const int base   = p * kMemPortStride;
+    auto      addr   = find_pid(call.inputs, base + kMemOffAddr);
+    auto      enable = find_pid(call.inputs, base + kMemOffEnable);
+    if (enable && !enable->is_known_true()) {
+      read_outputs.push_back(Dlop::create_integer(0));
+      continue;
+    }
+    read_outputs.push_back(ms.read(r, addr));
   }
 
   if (read_outputs.empty()) {

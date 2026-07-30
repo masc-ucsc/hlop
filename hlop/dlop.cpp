@@ -2448,6 +2448,32 @@ spool_ptr<Dlop> Dlop::popcount_op() const {
   return result;
 }
 
+spool_ptr<Dlop> Dlop::make_unknown_bits(const Dlop& mask) const {
+  // Illegal/degenerate operands → nil, matching set_mask_op: both operands must
+  // be usable numbers and the mask must be fully known (an unknown mask cannot
+  // select definite bit positions).
+  if (!is_numeric() || !mask.is_numeric() || mask.has_unknowns()) {
+    return nil();
+  }
+  if (mask.is_known_false()) {
+    auto dlop = make_result(Type::Integer, size);
+    dlop->copy_payload_from(*this);
+    return dlop;
+  }
+  // (this & ~mask) | (unknown(mask_bits) & mask).
+  //
+  // Ternary AND drives every non-selected bit of the unknown operand to a hard
+  // 0, and ternary OR with a known 0 keeps the other side's unknown — so the
+  // mask-selected positions come out unknown and every other position keeps
+  // this value. Composed from the public ops rather than poking base/extra so
+  // it stays correct for multi-word masks and for a negative (sign-extending)
+  // mask, where the unknown region runs off to infinity.
+  auto kept = and_op(*mask.not_op());
+  auto unk  = unknown(mask.get_bits());
+  auto got  = unk->and_op(mask);
+  return kept->or_op(*got);
+}
+
 spool_ptr<Dlop> Dlop::concat_op(const Dlop& other) const {
   // nil / invalid / ref has no bit pattern to concatenate → nil. (String and
   // numeric operands fall through to the text / bit-concat paths below.)

@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "dlop.hpp"
+#include "memory.hpp"
 #include "spool_ptr.hpp"
 
 namespace hlop {
@@ -86,16 +87,9 @@ private:
   std::unordered_map<std::string, FlopState> flop_state_;
   std::unordered_map<std::string, FlopState> latch_state_;
 
-  // Memory state: keyed by state_id
-  struct MemoryState {
-    std::vector<DValue> curr;
-    std::vector<DValue> next;
-    bool                fwd         = false;
-    int64_t             size        = 0;
-    int64_t             bits        = 0;
-    bool                initialized = false;
-  };
-  std::unordered_map<std::string, MemoryState> memory_state_;
+  // Memory state: keyed by state_id. Mem_dyn (memory.hpp) owns the contents,
+  // the staged writes and the same-cycle ordering mode.
+  std::unordered_map<std::string, Mem_dyn<DValue>> memory_state_;
 
   // Helpers for collecting inputs
   static std::vector<DValue> collect_values(const std::vector<DInput>& inputs);
