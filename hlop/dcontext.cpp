@@ -400,8 +400,16 @@ static constexpr int kMemPortStride = 16;
 // Per-port offsets
 static constexpr int kMemOffAddr   = 0;
 static constexpr int kMemOffDin    = 3;
-static constexpr int kMemOffEnable = 4;  // wensize-bit lane vector when wensize > 1
+static constexpr int kMemOffEnable = 4;   // wensize-bit lane vector when wensize > 1
 static constexpr int kMemOffRdport = 10;  // comptime: 1 = read port, 0 = write port
+
+// Whole-array pins (cell-global, looked up by name). A cell that drives
+// `update` replaces the N per-entry write ports with one bus; it reads back
+// through the separate `read_all` driver pin, which DResult carries.
+static constexpr const char* kMemPinInit         = "init";           // pid 11
+static constexpr const char* kMemPinUpdate       = "update";         // pid 12
+static constexpr const char* kMemPinUpdateEnable = "update_enable";  // pid 13
+static constexpr const char* kMemPinReset        = "reset";          // pid 14
 
 // The number of leading set bits in row `r` of a per-(read,write) matrix,
 // bit (r*n_wr + w). Every `ordering` mode produces a PREFIX row (upass.tolg),
@@ -411,6 +419,15 @@ static constexpr int kMemOffRdport = 10;  // comptime: 1 = read port, 0 = write 
 static int matrix_row_prefix(const DValue& m, int r, int n_wr) {
   if (!m) {
     return 0;
+  }
+  // `fwd`/`undef` are COMPTIME pins built from the `ordering` attribute, so they
+  // cannot carry unknowns -- only runtime IOs can, and only on the Dlop backend
+  // (Slop has no x at all). `bit_test` reports the BASE plane, so an x bit would
+  // read as SET and latch an ordering mode nothing asked for; fail closed like a
+  // non-prefix row instead.
+  assert(!m->has_unknowns() && "Memory `fwd`/`undef` is comptime and cannot have unknown bits");
+  if (m->has_unknowns()) {
+    return -1;
   }
   int prefix = 0;
   while (prefix < n_wr && m->bit_test(r * n_wr + prefix)) {
@@ -455,6 +472,16 @@ DResult DContext::exec_memory(const DCall& call) {
     }
   }
 
+  // A WHOLE-ARRAY cell drives `update` (12) / `update_enable` (13) / `reset`
+  // (14) and carries its reset contents in `init` (11), instead of (or as well
+  // as) per-entry write ports. It reads back through the separate `read_all`
+  // driver pin, which DResult carries.
+  auto       init_v   = find_pin(call.inputs, kMemPinInit);
+  auto       update_v = find_pin(call.inputs, kMemPinUpdate);
+  auto       upen_v   = find_pin(call.inputs, kMemPinUpdateEnable);
+  auto       reset_v  = find_pin(call.inputs, kMemPinReset);
+  const bool is_whole = update_v || reset_v || upen_v;
+
   // ---- configure on first sight ----
   if (!ms.configured()) {
     auto bits_v = find_pin(call.inputs, "bits");
@@ -466,9 +493,22 @@ DResult DContext::exec_memory(const DCall& call) {
     auto fwd_v     = find_pin(call.inputs, "fwd");
     auto undef_v   = find_pin(call.inputs, "undef");
 
-    Mem_cfg cfg;
-    cfg.size    = static_cast<size_t>(size_v->to_just_i64());
-    cfg.bits    = static_cast<int>(bits_v->to_just_i64());
+    // `bits`/`size` are comptime, so they must be plain integers -- an unknown
+    // or non-integer pin cannot be converted blind.
+    assert(bits_v->is_just_i64() && size_v->is_just_i64() && "Memory `bits`/`size` are comptime integers");
+    if (!bits_v->is_just_i64() || !size_v->is_just_i64()) {
+      return {.outputs = {Dlop::create_integer(0)}};
+    }
+    Mem_cfg       cfg;
+    const int     bits = static_cast<int>(bits_v->to_just_i64());
+    const int64_t size = size_v->to_just_i64();
+    // A non-positive width is a compiler bug: it makes every lane mask empty, so
+    // every write is silently dropped. cgen_sim accepts it with a clamp; assert
+    // here and clamp only so a release build stays deterministic.
+    assert(bits > 0 && "Memory `bits` must be positive");
+    assert(size > 0 && "Memory `size` must be positive");
+    cfg.size    = static_cast<size_t>(size > 0 ? size : 0);
+    cfg.bits    = bits > 0 ? bits : 1;
     cfg.n_rd    = n_rd;
     cfg.n_wr    = n_wr;
     cfg.wensize = wensize_v && wensize_v->is_just_i64() ? static_cast<int>(wensize_v->to_just_i64()) : 1;
@@ -479,6 +519,7 @@ DResult DContext::exec_memory(const DCall& call) {
     std::vector<uint16_t> undef_upto(static_cast<size_t>(n_rd), 0);
     int                   max_fwd = 0, max_undef = 0;
     bool                  fwd_uniform = true;
+    bool                  non_prefix  = false;
     for (int r = 0; r < n_rd; ++r) {
       const int f = n_wr > 0 ? matrix_row_prefix(fwd_v, r, n_wr) : 0;
       const int u = n_wr > 0 ? matrix_row_prefix(undef_v, r, n_wr) : 0;
@@ -486,13 +527,25 @@ DResult DContext::exec_memory(const DCall& call) {
       // rather than silently simulating a different memory.
       assert(f >= 0 && "Memory `fwd` row is not a prefix -- not an `ordering` matrix");
       assert(u >= 0 && "Memory `undef` row is not a prefix -- not an `ordering` matrix");
-      fwd_upto[static_cast<size_t>(r)]   = static_cast<uint16_t>(f < 0 ? 0 : f);
-      undef_upto[static_cast<size_t>(r)] = static_cast<uint16_t>(u < 0 ? 0 : u);
-      max_fwd                            = std::max(max_fwd, f < 0 ? 0 : f);
-      max_undef                          = std::max(max_undef, u < 0 ? 0 : u);
+      non_prefix                         |= (f < 0 || u < 0);
+      fwd_upto[static_cast<size_t>(r)]    = static_cast<uint16_t>(f < 0 ? 0 : f);
+      undef_upto[static_cast<size_t>(r)]  = static_cast<uint16_t>(u < 0 ? 0 : u);
+      max_fwd                             = std::max(max_fwd, f < 0 ? 0 : f);
+      max_undef                           = std::max(max_undef, u < 0 ? 0 : u);
       if (r > 0 && fwd_upto[static_cast<size_t>(r)] != fwd_upto[0]) {
         fwd_uniform = false;
       }
+    }
+    // Both matrices non-empty is a codegen error -- cgen_sim rejects it with a
+    // fatal `mem-fwd-and-undef-both-set` diag, because a pair cannot be both
+    // forwarded and undefined. Under NDEBUG the `none` branch below wins, which
+    // makes the colliding reads x: loud, not a silently different memory.
+    assert((max_fwd == 0 || max_undef == 0) && "Memory `fwd` and `undef` are mutually exclusive");
+    // A row the prefix encoding cannot express degrades to "every collision is
+    // undefined" -- the assert above is compiled out in a release build, and an
+    // x read port is far easier to spot than quietly dropped forwarding.
+    if (non_prefix) {
+      max_undef = n_wr;
     }
     // The restore/reset write ports are the tail that no row ever names, so the
     // widest prefix IS the user write-port count.
@@ -542,18 +595,56 @@ DResult DContext::exec_memory(const DCall& call) {
     const int base   = p * kMemPortStride;
     auto      addr   = find_pid(call.inputs, base + kMemOffAddr);
     auto      enable = find_pid(call.inputs, base + kMemOffEnable);
+    // A read port's `enable` is a POWER-SAVING gate, not a data gate. An absent
+    // pin means always-on. With it KNOWN LOW the port does not access the array
+    // and its dout HOLDS the last value any port drove: a fabricated 0 is wrong,
+    // and a fresh x/PRNG draw would invent switching activity a gated port
+    // cannot have. With the enable itself x we cannot say whether the port read,
+    // so the dout is x.
+    //
+    // cgen_sim emits `.read<r>(addr)` unconditionally; that is a legal
+    // REFINEMENT of a held/undefined dout rather than a disagreement, exactly
+    // like the `undef` matrix, which any bit-blasting consumer may resolve to a
+    // concrete value.
     if (enable && !enable->is_known_true()) {
-      read_outputs.push_back(Dlop::create_integer(0));
+      read_outputs.push_back(enable->is_known_false() ? ms.last_access() : Dlop::unknown(ms.cfg().bits));
       continue;
     }
     read_outputs.push_back(ms.read(r, addr));
+  }
+
+  // ---- stage the whole-array next-state ----
+  // Priority is reset > per-port write > update, and Mem_dyn::tick() applies the
+  // bulk value BEFORE the staged writes so those land on top of it. A reset also
+  // drops the staged writes rather than committing them over restored contents.
+  // This mirrors cgen_sim's emission for `m.is_whole()` exactly.
+  if (is_whole) {
+    const int bus_bits = ms.cfg().bits * static_cast<int>(ms.size());
+    if (reset_v && reset_v->is_known_true()) {
+      ms.stage_bulk(init_v ? init_v : Dlop::create_integer(0), /*is_reset=*/true);
+    } else if (update_v && (!upen_v || upen_v->is_known_true())) {
+      ms.stage_bulk(update_v, /*is_reset=*/false);
+    } else if (reset_v && !reset_v->is_known_false()) {
+      // An x reset: we cannot say whether the array was restored, so the whole
+      // array is undefined next cycle.
+      ms.stage_bulk(Dlop::unknown(bus_bits > 0 ? bus_bits : 1), /*is_reset=*/true);
+    } else if (update_v && upen_v && !upen_v->is_known_false()) {
+      ms.stage_bulk(Dlop::unknown(bus_bits > 0 ? bus_bits : 1), /*is_reset=*/false);
+    }
   }
 
   if (read_outputs.empty()) {
     read_outputs.push_back(Dlop::create_integer(0));
   }
 
-  return {.outputs = read_outputs};
+  // `read_all` is a distinct driver pin, not a read-port ordinal, so it rides
+  // its own DResult field rather than the positional outputs. Only packed for a
+  // whole-array cell -- it is O(size) work.
+  DResult res{.outputs = std::move(read_outputs), .read_all = std::nullopt};
+  if (is_whole) {
+    res.read_all = ms.read_all();
+  }
+  return res;
 }
 
 }  // namespace hlop

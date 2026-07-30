@@ -12,6 +12,7 @@
 
 #include <cassert>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -70,7 +71,17 @@ struct DCall {
 };
 
 struct DResult {
-  std::vector<DValue> outputs;
+  std::vector<DValue>   outputs;
+  // Memory `read_all` (LiveHD's Ntype::Memory_readall_pid, a separate driver
+  // pin rather than a port ordinal): the whole array packed into one
+  // `size * bits` bus, entry 0 in the LOW bits, row-major. Engaged only for a
+  // WHOLE-ARRAY cell (one that drives `update` / `update_enable` / `reset`),
+  // since packing it is O(size).
+  //
+  // std::optional, not a null DValue: spool_ptr's copy constructor asserts on
+  // null, so a disengaged-as-null field would fire the moment a DResult is
+  // copied rather than moved.
+  std::optional<DValue> read_all;
 };
 
 class DContext {

@@ -317,7 +317,10 @@ TEST_F(EvalSlopTest, eval_memory_write_read) {
   hlop::MemState<V32> mem(256, V32::create_integer(0), hlop::Mem_order::old);
 
   V32 addr = V32::create_integer(7);
-  V32 data = V32::from_pyrope("0xdeadbeef");
+  // upass.tolg emits a get_mask/wrap on the data path, so `din` always fits the
+  // entry: 0xdeadbeef has bit 31 set, so in a 32-bit memory it arrives already
+  // sign-extended. A wider din is a compiler bug and asserts in stage_write.
+  V32 data = V32::from_pyrope("0xdeadbeef").sext_op(31);
   V32 en   = V32::create_integer(1);
 
   hlop::MemoryWriteArgs<V32> wargs{.addr = addr, .data = data, .enable = en};
@@ -331,7 +334,7 @@ TEST_F(EvalSlopTest, eval_memory_write_read) {
   mem.advance_clock();
 
   auto rd2 = hlop::eval_memory_read<V32>(mem, rargs);
-  EXPECT_TRUE(rd2.is_known_eq(V32::from_pyrope("0xdeadbeef")));
+  EXPECT_TRUE(rd2.is_known_eq(data));
 }
 
 TEST_F(EvalSlopTest, eval_memory_fwd) {
@@ -648,6 +651,337 @@ TEST_F(EvalDlopTest, latch_opaque) {
   };
   auto res = ctx.execute(latch2);
   EXPECT_EQ(res.outputs[0]->to_just_i64(), 42);  // holds previous value
+}
+
+// --- Memory (DContext::exec_memory) ---
+//
+// The Memory cell's sink pids are laid out in blocks of 16 (LiveHD
+// Ntype::Memory_port_stride): port i's per-port pin at offset `off` is pid
+// i*16 + off, with addr=0, din=3, enable=4, rdport=10. The cell-global pins
+// (bits/size/fwd/undef/wensize) are looked up by NAME, so they carry no pid.
+// `fwd`/`undef` are per-(read,write) matrices, bit (r*n_wr + w).
+
+namespace {
+constexpr int kStride = 16;
+
+hlop::DInput mem_pid(int port, int off, hlop::DValue v) { return {.pid = port * kStride + off, .value = std::move(v)}; }
+hlop::DInput mem_pin(const char* name, hlop::DValue v) { return {.pin = name, .value = std::move(v)}; }
+
+// One write port (block 0) + one read port (block 1), both at `addr`.
+std::vector<hlop::DInput> mem_1w1r(hlop::DValue waddr, hlop::DValue din, hlop::DValue wen, hlop::DValue raddr, hlop::DValue fwd,
+                                   hlop::DValue undef) {
+  return {
+      mem_pin("bits", Dlop::create_integer(32)),
+      mem_pin("size", Dlop::create_integer(16)),
+      mem_pin("fwd", std::move(fwd)),
+      mem_pin("undef", std::move(undef)),
+      mem_pid(0, 0, std::move(waddr)),
+      mem_pid(0, 3, std::move(din)),
+      mem_pid(0, 4, std::move(wen)),
+      mem_pid(0, 10, Dlop::create_bool(false)),  // rdport=0 -> write
+      mem_pid(1, 0, std::move(raddr)),
+      mem_pid(1, 10, Dlop::create_bool(true)),  // rdport=1 -> read
+  };
+}
+}  // namespace
+
+TEST_F(EvalDlopTest, memory_old_hides_the_staged_write) {
+  hlop::DCall call{.op       = hlop::Ntype_op::Memory,
+                   .state_id = "test.mem_old",
+                   .inputs   = mem_1w1r(Vi(3), Vi(42), Vi(1), Vi(3), Vi(0), Vi(0))};
+
+  EXPECT_EQ(ctx.execute(call).outputs[0]->to_just_i64(), 0);  // ordering="old": committed value
+  ctx.advance_clock();
+  EXPECT_EQ(ctx.execute(call).outputs[0]->to_just_i64(), 42);
+}
+
+TEST_F(EvalDlopTest, memory_fwd_forwards_the_staged_write) {
+  // fwd matrix bit (r=0,w=0) set -> Mem_order::fwd.
+  hlop::DCall call{.op       = hlop::Ntype_op::Memory,
+                   .state_id = "test.mem_fwd",
+                   .inputs   = mem_1w1r(Vi(3), Vi(42), Vi(1), Vi(3), Vi(1), Vi(0))};
+
+  EXPECT_EQ(ctx.execute(call).outputs[0]->to_just_i64(), 42);  // same cycle
+}
+
+TEST_F(EvalDlopTest, memory_none_makes_the_collision_unknown) {
+  // undef matrix bit (r=0,w=0) set -> Mem_order::none.
+  hlop::DCall call{.op       = hlop::Ntype_op::Memory,
+                   .state_id = "test.mem_none",
+                   .inputs   = mem_1w1r(Vi(3), Vi(42), Vi(1), Vi(3), Vi(0), Vi(1))};
+
+  EXPECT_TRUE(ctx.execute(call).outputs[0]->has_unknowns());
+}
+
+TEST_F(EvalDlopTest, memory_no_collision_is_defined_under_none) {
+  // Same undef matrix, but the read address does not collide with the write.
+  hlop::DCall call{.op       = hlop::Ntype_op::Memory,
+                   .state_id = "test.mem_none2",
+                   .inputs   = mem_1w1r(Vi(3), Vi(42), Vi(1), Vi(9), Vi(0), Vi(1))};
+
+  auto out = ctx.execute(call).outputs[0];
+  EXPECT_FALSE(out->has_unknowns());
+  EXPECT_EQ(out->to_just_i64(), 0);
+}
+
+#ifndef NDEBUG
+// `fwd`/`undef` are comptime, so an unknown bit there is a compiler bug, not a
+// value the memory has to interpret. Read through bit_test it would look SET and
+// latch ordering="fwd" for the life of the memory, so it must fail loudly.
+TEST(EvalDlopMemoryDeathTest, unknown_comptime_matrix_asserts) {
+  hlop::DContext ctx;
+  hlop::DCall    call{.op       = hlop::Ntype_op::Memory,
+                      .state_id = "test.mem_xfwd",
+                      .inputs   = mem_1w1r(Dlop::create_integer(3),
+                                           Dlop::create_integer(42),
+                                           Dlop::create_integer(1),
+                                           Dlop::create_integer(3),
+                                           Dlop::unknown(1),
+                                           Dlop::create_integer(0))};
+  EXPECT_DEATH((void)ctx.execute(call), "cannot have unknown bits");
+}
+#endif
+
+TEST_F(EvalDlopTest, memory_disabled_write_never_commits) {
+  hlop::DCall call{.op       = hlop::Ntype_op::Memory,
+                   .state_id = "test.mem_wen0",
+                   .inputs   = mem_1w1r(Vi(3), Vi(42), Vi(0), Vi(3), Vi(1), Vi(0))};
+
+  EXPECT_EQ(ctx.execute(call).outputs[0]->to_just_i64(), 0);
+  ctx.advance_clock();
+  EXPECT_EQ(ctx.execute(call).outputs[0]->to_just_i64(), 0);
+}
+
+TEST_F(EvalDlopTest, memory_unknown_write_enable_makes_the_lane_x) {
+  // An x enable means the write MAY have landed, so the lane is neither the old
+  // value nor din -- it is x. Treating it as a known 0 would hand back stale
+  // DEFINED data; treating it as a known 1 would claim the write definitely
+  // happened. Both wensize paths must agree on this.
+  hlop::DCall call{.op       = hlop::Ntype_op::Memory,
+                   .state_id = "test.mem_xwen",
+                   .inputs   = mem_1w1r(Vi(3), Vi(42), Dlop::unknown(1), Vi(3), Vi(1), Vi(0))};
+  EXPECT_TRUE(ctx.execute(call).outputs[0]->has_unknowns());
+  ctx.advance_clock();
+  EXPECT_TRUE(ctx.execute(call).outputs[0]->has_unknowns());  // committed as x too
+
+  // Same design with a 2-lane enable: lane 0 is a known 1, lane 1 is x, so the
+  // low nibble takes din and the high nibble goes x.
+  hlop::DCall lanes{
+      .op       = hlop::Ntype_op::Memory,
+      .state_id = "test.mem_xwen2",
+      .inputs   = {
+          mem_pin("bits", Vi(8)), mem_pin("size", Vi(16)), mem_pin("wensize", Vi(2)), mem_pin("fwd", Vi(1)),
+          mem_pin("undef", Vi(0)),
+          mem_pid(0, 0, Vi(3)), mem_pid(0, 3, Vi(0x2A)),
+          mem_pid(0, 4, Dlop::from_pyrope("0ub?1")),
+          mem_pid(0, 10, Dlop::create_bool(false)),
+          mem_pid(1, 0, Vi(3)), mem_pid(1, 10, Dlop::create_bool(true)),
+      },
+  };
+  const auto out = ctx.execute(lanes).outputs[0];
+  for (int b = 0; b < 4; ++b) {
+    EXPECT_FALSE(out->unknown_bit_test(b)) << "lane 0 bit " << b << " should be known";
+  }
+  for (int b = 4; b < 8; ++b) {
+    EXPECT_TRUE(out->unknown_bit_test(b)) << "lane 1 bit " << b << " should be x";
+  }
+  EXPECT_TRUE(out->and_op(*Vi(0xF))->is_known_eq(*Vi(0xA)));  // low nibble took din
+}
+
+TEST_F(EvalDlopTest, memory_gated_read_port_holds_its_dout) {
+  // Cycle 1: an enabled read of the forwarded write drives 42 onto the bus.
+  auto c1 = mem_1w1r(Vi(5), Vi(42), Vi(1), Vi(5), Vi(1), Vi(0));
+  c1.push_back(mem_pid(1, 4, Vi(1)));  // read enable = 1
+  hlop::DCall on{.op = hlop::Ntype_op::Memory, .state_id = "test.mem_ren", .inputs = std::move(c1)};
+  EXPECT_EQ(ctx.execute(on).outputs[0]->to_just_i64(), 42);
+
+  ctx.advance_clock();
+
+  // Cycle 2: nothing writes and the read port is gated off, so the dout HOLDS
+  // 42 -- not a fabricated 0, and not entry 3 (which is still 0). A fresh x or
+  // PRNG draw here would report switching activity a gated port cannot have.
+  auto c2 = mem_1w1r(Vi(5), Vi(99), Vi(0), Vi(3), Vi(1), Vi(0));  // write disabled
+  c2.push_back(mem_pid(1, 4, Vi(0)));                             // read enable = 0
+  hlop::DCall off{.op = hlop::Ntype_op::Memory, .state_id = "test.mem_ren", .inputs = std::move(c2)};
+
+  const auto held = ctx.execute(off).outputs[0];
+  EXPECT_FALSE(held->has_unknowns()) << "a gated dout must not toggle";
+  EXPECT_EQ(held->to_just_i64(), 42);
+}
+
+TEST_F(EvalDlopTest, memory_read_enable_x_is_undefined) {
+  // An enable that is itself x: we cannot say whether the port accessed the
+  // array, so the dout is x rather than a held or a fabricated value.
+  auto xin = mem_1w1r(Vi(3), Vi(42), Vi(1), Vi(3), Vi(1), Vi(0));
+  xin.push_back(mem_pid(1, 4, Dlop::unknown(1)));
+  hlop::DCall unk{.op = hlop::Ntype_op::Memory, .state_id = "test.mem_ren_x", .inputs = std::move(xin)};
+  EXPECT_TRUE(ctx.execute(unk).outputs[0]->has_unknowns());
+
+  // An absent enable pin means always-on.
+  hlop::DCall absent{.op       = hlop::Ntype_op::Memory,
+                     .state_id = "test.mem_ren_absent",
+                     .inputs   = mem_1w1r(Vi(3), Vi(42), Vi(1), Vi(3), Vi(1), Vi(0))};
+  EXPECT_EQ(ctx.execute(absent).outputs[0]->to_just_i64(), 42);
+}
+
+TEST_F(EvalDlopTest, memory_program_forwards_only_preceding_writes) {
+  // One write port (block 0) and two read ports (blocks 1 and 2). Read port 0
+  // precedes the write, read port 1 follows it, so the fwd matrix rows are
+  // {0, 1} -> bit (r=1,w=0) set -> 0b10.
+  hlop::DCall call{
+      .op       = hlop::Ntype_op::Memory,
+      .state_id = "test.mem_prog",
+      .inputs   = {
+          mem_pin("bits", Vi(32)), mem_pin("size", Vi(16)), mem_pin("fwd", Vi(0b10)), mem_pin("undef", Vi(0)),
+          mem_pid(0, 0, Vi(3)), mem_pid(0, 3, Vi(42)), mem_pid(0, 4, Vi(1)), mem_pid(0, 10, Dlop::create_bool(false)),
+          mem_pid(1, 0, Vi(3)), mem_pid(1, 10, Dlop::create_bool(true)),
+          mem_pid(2, 0, Vi(3)), mem_pid(2, 10, Dlop::create_bool(true)),
+      },
+  };
+
+  auto res = ctx.execute(call);
+  ASSERT_EQ(res.outputs.size(), 2u);
+  EXPECT_EQ(res.outputs[0]->to_just_i64(), 0);   // before the write
+  EXPECT_EQ(res.outputs[1]->to_just_i64(), 42);  // after the write
+}
+
+TEST_F(EvalDlopTest, memory_write_port_priority_is_the_port_index) {
+  // Two write ports (blocks 0 and 1) to the same address; the higher index
+  // wins at tick(). One read port at block 2.
+  hlop::DCall call{
+      .op       = hlop::Ntype_op::Memory,
+      .state_id = "test.mem_prio",
+      .inputs   = {
+          mem_pin("bits", Vi(32)), mem_pin("size", Vi(16)), mem_pin("fwd", Vi(0)), mem_pin("undef", Vi(0)),
+          mem_pid(0, 0, Vi(5)), mem_pid(0, 3, Vi(11)), mem_pid(0, 4, Vi(1)), mem_pid(0, 10, Dlop::create_bool(false)),
+          mem_pid(1, 0, Vi(5)), mem_pid(1, 3, Vi(22)), mem_pid(1, 4, Vi(1)), mem_pid(1, 10, Dlop::create_bool(false)),
+          mem_pid(2, 0, Vi(5)), mem_pid(2, 10, Dlop::create_bool(true)),
+      },
+  };
+
+  ctx.execute(call);
+  ctx.advance_clock();
+  EXPECT_EQ(ctx.execute(call).outputs[0]->to_just_i64(), 22);
+}
+
+TEST_F(EvalDlopTest, memory_wensize_writes_only_the_enabled_lane) {
+  // bits=8, wensize=2 -> two 4-bit lanes; enable 0b01 writes the low nibble.
+  hlop::DCall call{
+      .op       = hlop::Ntype_op::Memory,
+      .state_id = "test.mem_wen",
+      .inputs   = {
+          mem_pin("bits", Vi(8)), mem_pin("size", Vi(16)), mem_pin("wensize", Vi(2)), mem_pin("fwd", Vi(0)),
+          mem_pin("undef", Vi(0)),
+          mem_pid(0, 0, Vi(2)), mem_pid(0, 3, Vi(0xFF)), mem_pid(0, 4, Vi(0b01)),
+          mem_pid(0, 10, Dlop::create_bool(false)),
+          mem_pid(1, 0, Vi(2)), mem_pid(1, 10, Dlop::create_bool(true)),
+      },
+  };
+
+  ctx.execute(call);
+  ctx.advance_clock();
+  EXPECT_EQ(ctx.execute(call).outputs[0]->to_just_i64(), 0x0F);  // high lane untouched
+}
+
+// --- Whole-array Memory cells (the `update`/`reset` buses + `read_all`) ---
+// bits=4, size=4 -> a 16-bit bus, entry 0 in the LOW nibble, row-major: the
+// same layout Mem_base, cgen_verilog and pass.lec use.
+
+TEST_F(EvalDlopTest, memory_whole_array_update_and_read_all) {
+  hlop::DCall call{
+      .op       = hlop::Ntype_op::Memory,
+      .state_id = "test.mem_whole",
+      .inputs   = {
+          mem_pin("bits", Vi(4)), mem_pin("size", Vi(4)),
+          mem_pin("update", Vi(0x4321)),
+      },
+  };
+
+  // Combinational read_all reflects the CURRENT contents; the update is a
+  // next-state bus, so it is not visible until the edge.
+  auto before = ctx.execute(call);
+  ASSERT_TRUE(before.read_all.has_value());
+  EXPECT_EQ((*before.read_all)->to_just_i64(), 0);
+
+  ctx.advance_clock();
+
+  auto after = ctx.execute(call);
+  ASSERT_TRUE(after.read_all.has_value());
+  EXPECT_EQ((*after.read_all)->to_just_i64(), 0x4321);
+}
+
+TEST_F(EvalDlopTest, memory_whole_array_update_enable_gates_the_bus) {
+  hlop::DCall off{
+      .op       = hlop::Ntype_op::Memory,
+      .state_id = "test.mem_whole_ue",
+      .inputs   = {
+          mem_pin("bits", Vi(4)), mem_pin("size", Vi(4)),
+          mem_pin("update", Vi(0x4321)), mem_pin("update_enable", Vi(0)),
+      },
+  };
+  ctx.execute(off);
+  ctx.advance_clock();
+  EXPECT_EQ((*ctx.execute(off).read_all)->to_just_i64(), 0);  // gated: no update
+}
+
+TEST_F(EvalDlopTest, memory_whole_array_reset_outranks_writes_and_update) {
+  // A reset restores `init` AND drops the per-port writes staged this cycle,
+  // rather than letting them commit on top of the restored contents. Priority
+  // is reset > per-port write > update, matching cgen_sim.
+  auto inputs = std::vector<hlop::DInput>{
+      mem_pin("bits", Vi(4)),
+      mem_pin("size", Vi(4)),
+      mem_pin("update", Vi(0x4321)),
+      mem_pin("init", Vi(0x1111)),
+      mem_pin("reset", Vi(1)),
+      mem_pin("fwd", Vi(0)),
+      mem_pin("undef", Vi(0)),
+      mem_pid(0, 0, Vi(2)),
+      mem_pid(0, 3, Vi(7)),
+      mem_pid(0, 4, Vi(1)),
+      mem_pid(0, 10, Dlop::create_bool(false)),
+  };
+  hlop::DCall call{.op = hlop::Ntype_op::Memory, .state_id = "test.mem_whole_rst", .inputs = std::move(inputs)};
+
+  ctx.execute(call);
+  ctx.advance_clock();
+  EXPECT_EQ((*ctx.execute(call).read_all)->to_just_i64(), 0x1111);  // init, not 0x4321, not entry2=7
+}
+
+TEST_F(EvalDlopTest, memory_whole_array_write_lands_on_top_of_the_update) {
+  // No reset: the bulk update applies first, then the per-port write overrides
+  // the entry it touches.
+  auto inputs = std::vector<hlop::DInput>{
+      mem_pin("bits", Vi(4)),
+      mem_pin("size", Vi(4)),
+      mem_pin("update", Vi(0x4321)),
+      mem_pin("fwd", Vi(0)),
+      mem_pin("undef", Vi(0)),
+      mem_pid(0, 0, Vi(2)),
+      mem_pid(0, 3, Vi(7)),
+      mem_pid(0, 4, Vi(1)),
+      mem_pid(0, 10, Dlop::create_bool(false)),
+  };
+  hlop::DCall call{.op = hlop::Ntype_op::Memory, .state_id = "test.mem_whole_w", .inputs = std::move(inputs)};
+
+  ctx.execute(call);
+  ctx.advance_clock();
+  EXPECT_EQ((*ctx.execute(call).read_all)->to_just_i64(), 0x4721);  // entry 2: 3 -> 7
+}
+
+TEST_F(EvalDlopTest, memory_per_port_cell_has_no_read_all) {
+  hlop::DCall call{.op       = hlop::Ntype_op::Memory,
+                   .state_id = "test.mem_no_readall",
+                   .inputs   = mem_1w1r(Vi(3), Vi(42), Vi(1), Vi(3), Vi(0), Vi(0))};
+  EXPECT_FALSE(ctx.execute(call).read_all.has_value());  // O(size) packing is skipped
+}
+
+TEST_F(EvalDlopTest, memory_unknown_read_address_is_unknown) {
+  hlop::DCall call{.op       = hlop::Ntype_op::Memory,
+                   .state_id = "test.mem_xaddr",
+                   .inputs   = mem_1w1r(Vi(3), Vi(42), Vi(1), Dlop::unknown(4), Vi(0), Vi(0))};
+
+  EXPECT_TRUE(ctx.execute(call).outputs[0]->has_unknowns());
 }
 
 // --- Equivalence: verify dlop and slop produce same results ---

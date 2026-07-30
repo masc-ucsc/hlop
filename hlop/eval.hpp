@@ -97,8 +97,8 @@ struct MemoryWriteArgs {
 // Static state container for slop (index-based)
 template <class V>
 struct RegState {
-  std::vector<V> curr;
-  std::vector<V> next;
+  std::vector<V>              curr;
+  std::vector<V>              next;
   std::vector<std::vector<V>> pipe_curr;
   std::vector<std::vector<V>> pipe_next;
   std::vector<uint32_t>       pipe_depth;
@@ -129,10 +129,10 @@ struct RegState {
     }
     if (pipe_depth[slot] != Depth || pipe_curr[slot].size() != Depth) {
       pipe_curr[slot].assign(Depth, init);
-      pipe_next[slot] = pipe_curr[slot];
+      pipe_next[slot]  = pipe_curr[slot];
       pipe_depth[slot] = Depth;
-      curr[slot] = init;
-      next[slot] = init;
+      curr[slot]       = init;
+      next[slot]       = init;
     }
   }
 };
@@ -148,8 +148,14 @@ struct MemState {
   // Convenience ctor for a single-read / single-write memory. `order` picks the
   // same-cycle semantics; the historical `fwd_enable` bool is exactly
   // Mem_order::fwd vs Mem_order::old.
-  MemState(size_t depth, const V& init, Mem_order order = Mem_order::old, int n_rd = 1, int n_wr = 1, int bits = 0,
-           int wensize = 1) {
+  //
+  // Mem_order::program needs one forwarding prefix per read port (upass.tolg's
+  // rd_wr_before[r]) -- there is no sensible default, and an omitted vector
+  // would silently degrade the memory to Mem_order::old. Pass `fwd_upto` for
+  // it; the other three modes derive their prefixes from n_user_wr and ignore
+  // the argument.
+  MemState(size_t depth, const V& init, Mem_order order = Mem_order::old, int n_rd = 1, int n_wr = 1, int bits = 0, int wensize = 1,
+           std::vector<uint16_t> fwd_upto = {}) {
     Mem_cfg cfg;
     cfg.size      = depth;
     cfg.bits      = bits > 0 ? bits : (Mem_width<V>::value > 0 ? Mem_width<V>::value : 64);
@@ -158,6 +164,9 @@ struct MemState {
     cfg.n_user_wr = n_wr;
     cfg.wensize   = wensize;
     cfg.order     = order;
+    if (order == Mem_order::program) {
+      cfg.fwd_upto = std::move(fwd_upto);  // configure() asserts one entry per read port
+    }
     mem.configure(cfg, init);
   }
 

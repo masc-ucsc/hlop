@@ -60,6 +60,13 @@
 // resolution is per lane: a lane whose enable bit is 0 falls through to the
 // stored contents even when the port forwards, exactly like the Verilog
 // wrapper's per-MASKSIZE always_comb blocks.
+//
+// An enable bit is THREE-valued on the Dlop backend. A known 1 writes its lane,
+// a known 0 leaves the stored contents, and an x makes the lane UNDEFINED: the
+// write may or may not have landed, so the lane is neither the old value nor
+// `din` -- the same thing pass.lec's symbolic enable models. That x is committed
+// at tick() as well, not just seen by a forwarding read. Slop's enable is always
+// definite, so this case cannot arise there.
 
 #pragma once
 
@@ -95,18 +102,25 @@ template <int N>
 struct Mem_val<Slop<N>> {
   using V = Slop<N>;
 
-  static V zero() { return V::create_integer(0); }
-  static V ones(int nbits) { return V::create_integer(-1).adjust_bits(nbits); }
+  static V       zero() { return V::create_integer(0); }
+  static V       ones(int nbits) { return V::create_integer(-1).adjust_bits(nbits); }
   // No x in Slop: an undefined value is a fresh draw from the seeded PRNG.
-  static V    undef(int nbits) { return V::unknown(nbits); }
-  static V    or_(const V& a, const V& b) { return a.or_op(b); }
-  static V    and_(const V& a, const V& b) { return a.and_op(b); }
-  static V    not_(const V& a) { return a.not_op(); }
-  static V    shl_(const V& a, int64_t n) { return a.shl_op(n); }
-  static V    sext_(const V& a, int from_bit) { return a.sext_op(from_bit); }
-  static V    undef_lanes(const V& a, const V& mask, int) { return a.unknown_lanes(mask); }
-  static bool bit_test(const V& a, int pos) { return a.bit_test(pos); }
-  static bool truthy(const V& a) { return a.is_known_true(); }
+  static V       undef(int nbits) { return V::unknown(nbits); }
+  static V       or_(const V& a, const V& b) { return a.or_op(b); }
+  static V       and_(const V& a, const V& b) { return a.and_op(b); }
+  static V       not_(const V& a) { return a.not_op(); }
+  static V       shl_(const V& a, int64_t n) { return a.shl_op(n); }
+  static V       sra_(const V& a, int64_t n) { return a.sra_op(n); }
+  static V       sext_(const V& a, int from_bit) { return a.sext_op(from_bit); }
+  // unknown_lanes already re-canonicalizes to N bits.
+  static V       undef_lanes(const V& a, const V& mask, int) { return a.unknown_lanes(mask); }
+  static bool    bit_test(const V& a, int pos) { return a.bit_test(pos); }
+  static bool    truthy(const V& a) { return a.is_known_true(); }
+  // Slop carries no unknowns, so an enable is always definitely on or definitely
+  // off -- never uncertain, and no individual enable bit is ever x.
+  static bool    uncertain(const V&) { return false; }
+  static bool    bit_unknown(const V&, int) { return false; }
+  static int     nbits(const V& a) { return a.get_bits(); }
   // Slop never carries unknowns, so an address is always a usable integer.
   static bool    addr_known(const V& a) { return a.is_just_i64(); }
   static int64_t to_i64(const V& a) { return a.to_just_i64(); }
@@ -117,19 +131,35 @@ struct Mem_val<spool_ptr<Dlop>> {
   using V = spool_ptr<Dlop>;
 
   static V zero() { return Dlop::create_integer(0); }
-  static V ones(int nbits) { return Dlop::create_integer(-1)->adjust_bits(nbits); }
+  // ~(-1 << nbits), NOT `create_integer(-1)->adjust_bits(nbits)`: adjust_bits
+  // cannot widen a single-word value, so masking -1 to nbits >= 64 hands back
+  // -1 (all ones to infinity) and every lane mask built from it covers the
+  // whole entry. The shift/not form stays a finite nbits-wide mask at any width.
+  static V ones(int nbits) { return Dlop::create_integer(-1)->shl_op(*Dlop::create_integer(nbits))->not_op(); }
   // Dlop has a real unknown (base/extra) plane -- the `x` cgen_verilog emits.
-  static V    undef(int nbits) { return Dlop::unknown(nbits); }
+  static V undef(int nbits) { return Dlop::unknown(nbits); }
   static V or_(const V& a, const V& b) { return a->or_op(*b); }
   static V and_(const V& a, const V& b) { return a->and_op(*b); }
   static V not_(const V& a) { return a->not_op(); }
   // The int64 shift/sext kernels are protected; the public API takes a Dlop.
-  static V    shl_(const V& a, int64_t n) { return a->shl_op(*Dlop::create_integer(n)); }
-  static V    sext_(const V& a, int from_bit) { return a->sext_op(*Dlop::create_integer(from_bit)); }
-  static V    undef_lanes(const V& a, const V& mask, int) { return a->make_unknown_bits(*mask); }
-  static bool bit_test(const V& a, int pos) { return a->bit_test(pos); }
-  static bool truthy(const V& a) { return a->is_known_true(); }
-  static bool addr_known(const V& a) { return !a->has_unknowns() && a->is_just_i64(); }
+  static V shl_(const V& a, int64_t n) { return a->shl_op(*Dlop::create_integer(n)); }
+  static V sra_(const V& a, int64_t n) { return a->sra_op(*Dlop::create_integer(n)); }
+  static V sext_(const V& a, int from_bit) { return a->sext_op(*Dlop::create_integer(from_bit)); }
+  // Re-canonicalize to `bits` like Slop's unknown_lanes does: without it the
+  // untouched sign extension above the entry width stays KNOWN, so a fully
+  // undefined read of a negative entry still has a definite sign.
+  static V undef_lanes(const V& a, const V& mask, int bits) {
+    auto v = a->make_unknown_bits(*mask);
+    return bits > 0 ? sext_(v, bits - 1) : v;
+  }
+  static bool    bit_test(const V& a, int pos) { return a->bit_test(pos); }
+  static bool    truthy(const V& a) { return a->is_known_true(); }
+  // Neither definitely on nor definitely off: the write MAY have happened, so
+  // its lanes are neither the old nor the new value -- they are x.
+  static bool    uncertain(const V& a) { return !a->is_known_true() && !a->is_known_false(); }
+  static bool    bit_unknown(const V& a, int pos) { return a->unknown_bit_test(pos); }
+  static int     nbits(const V& a) { return a->get_bits(); }
+  static bool    addr_known(const V& a) { return !a->has_unknowns() && a->is_just_i64(); }
   static int64_t to_i64(const V& a) { return a->to_just_i64(); }
 };
 
@@ -152,10 +182,16 @@ struct Mem_width<Slop<N>> {
 // `lanes` is the write enable already expanded to an entry-width BIT MASK, so
 // resolution never has to know the enable's own width (the address and the
 // enable are separate, narrower buses in the generated code).
+//
+// `xlanes` holds the lanes whose ENABLE BIT IS UNKNOWN. Such a lane is neither
+// the stored value nor `din` -- the write may or may not have happened -- so it
+// resolves and commits as x. Slop has no unknown enable, so `xlanes` is always
+// empty there and the mask costs nothing.
 template <class V>
 struct Mem_write {
   V       din{};
-  V       lanes{};    // entry-width mask of the bits this port writes
+  V       lanes{};    // entry-width mask of the bits this port definitely writes
+  V       xlanes{};   // entry-width mask of the bits whose write is uncertain
   int64_t addr  = 0;  // resolved, in-range; meaningful only when `fired`
   bool    fired = false;
 
@@ -166,26 +202,70 @@ struct Mem_write {
 // Resolution primitives, shared by the static and dynamic containers
 // ---------------------------------------------------------------------------
 
-// Expand a write enable into an entry-width lane mask. `wensize == 1` means the
-// enable is a plain bit covering the whole entry. `E` is the enable's own value
-// type, which in generated code is a narrower Slop than the entry.
+// The two entry-width lane masks a staged write carries.
+template <class V>
+struct Mem_lanes {
+  V on{};  // the enable bit is a known 1: the lane takes `din`
+  V x{};   // the enable bit is unknown: the lane becomes x
+};
+
+// Expand a write enable into those masks. `wensize == 1` means the enable is a
+// plain bit covering the whole entry. `E` is the enable's own value type, which
+// in generated code is a narrower Slop than the entry.
 //
-// For Dlop an unknown enable bit reads as set (bit_test returns the base plane),
-// so an unknown enable conservatively writes its lane.
+// An enable bit is three-valued for Dlop: a known 1 writes its lane, a known 0
+// leaves the stored contents, and an x makes the lane UNDEFINED -- the write may
+// or may not have landed, so the lane is neither the old value nor the new one.
+// Slop's enable is always definite, so `x` stays empty there.
 template <class V, class E>
-V mem_lane_mask(const E& wen, int bits, int wensize) {
-  using val = Mem_val<V>;
+Mem_lanes<V> mem_lane_masks(const E& wen, int bits, int wensize) {
+  using val  = Mem_val<V>;
+  using eval = Mem_val<E>;
   if (wensize <= 1) {
-    return Mem_val<E>::truthy(wen) ? val::ones(bits) : val::zero();
+    if (eval::truthy(wen)) {
+      return {val::ones(bits), val::zero()};  // definitely on
+    }
+    if (eval::uncertain(wen)) {
+      return {val::zero(), val::ones(bits)};  // may or may not have written
+    }
+    return {val::zero(), val::zero()};  // definitely off
   }
-  const int lane_bits = bits / wensize;
-  V         m         = val::zero();
+  const int    lane_bits = bits / wensize;
+  Mem_lanes<V> m{val::zero(), val::zero()};
   for (int l = 0; l < wensize; ++l) {
-    if (Mem_val<E>::bit_test(wen, l)) {
-      m = val::or_(m, val::shl_(val::ones(lane_bits), static_cast<int64_t>(l) * lane_bits));
+    const bool unknown = eval::bit_unknown(wen, l);
+    if (!unknown && !eval::bit_test(wen, l)) {
+      continue;  // known 0
+    }
+    const V lane = val::shl_(val::ones(lane_bits), static_cast<int64_t>(l) * lane_bits);
+    if (unknown) {
+      m.x = val::or_(m.x, lane);
+    } else {
+      m.on = val::or_(m.on, lane);
     }
   }
   return m;
+}
+
+// Bring a staged `din` to the entry's width, so the forwarding path and the
+// commit path see one and the same value.
+//
+// Slop carries its width in the type (Mem_base static_asserts Mem_width == Bits)
+// and upass.tolg emits a get_mask/wrap on the data path, so the two widths must
+// already match -- a wider `din` is a compiler bug, not a case with defined
+// semantics. Dlop has no width of its own, so the memory imposes one, signed,
+// exactly like mem_merge below. A NARROWER `din` is fine either way: it is just
+// a sign-extended entry.
+template <class V>
+V mem_canon_din(const V& din, int bits) {
+  using val = Mem_val<V>;
+  if constexpr (Mem_width<V>::value > 0) {
+    assert(val::nbits(din) <= bits && "Memory `din` is wider than the entry -- missing get_mask/wrap on the data path");
+    (void)bits;
+    return din;
+  } else {
+    return bits > 0 ? val::sext_(din, bits - 1) : din;
+  }
 }
 
 // Bits selected by `mask` come from `src`, the rest from `dst`; the result is
@@ -193,9 +273,9 @@ V mem_lane_mask(const E& wen, int bits, int wensize) {
 // every downstream op assumes).
 template <class V>
 V mem_merge(const V& dst, const V& src, const V& mask, int bits) {
-  using val         = Mem_val<V>;
-  const V kept      = val::and_(dst, val::not_(mask));
-  const V taken     = val::and_(src, mask);
+  using val     = Mem_val<V>;
+  const V kept  = val::and_(dst, val::not_(mask));
+  const V taken = val::and_(src, mask);
   return val::sext_(val::or_(kept, taken), bits - 1);
 }
 
@@ -203,7 +283,7 @@ V mem_merge(const V& dst, const V& src, const V& mask, int bits) {
 // `undef_upto` are the read port's prefix lengths over the user write ports.
 template <class V>
 V mem_resolve(const V& stored, std::span<const Mem_write<V>> pend, int64_t raddr, int fwd_upto, int undef_upto, int bits) {
-  using val = Mem_val<V>;
+  using val      = Mem_val<V>;
   V         v    = stored;
   const int upto = fwd_upto > undef_upto ? fwd_upto : undef_upto;
   for (int w = 0; w < upto; ++w) {
@@ -214,9 +294,13 @@ V mem_resolve(const V& stored, std::span<const Mem_write<V>> pend, int64_t raddr
     // UNDEF is checked before FWD within a port (the matrices are mutually
     // exclusive per pair, so in practice only one prefix is ever non-zero).
     if (w < undef_upto) {
-      v = val::undef_lanes(v, p.lanes, bits);  // Slop: random lanes; Dlop: x lanes
+      // Both the definitely-written and the uncertain lanes are undefined here.
+      v = val::undef_lanes(v, val::or_(p.lanes, p.xlanes), bits);  // Slop: random; Dlop: x
     } else {
       v = mem_merge<V>(v, p.din, p.lanes, bits);
+      if (val::truthy(p.xlanes)) {
+        v = val::undef_lanes(v, p.xlanes, bits);  // the write MAY have landed
+      }
     }
   }
   return v;
@@ -271,8 +355,9 @@ public:
   void fill(const V& v) {
     data_.fill(v);
     for (auto& p : pend_) {
-      p.din   = v;
-      p.lanes = v;
+      p.din    = v;
+      p.lanes  = v;
+      p.xlanes = v;
       p.clear();
     }
   }
@@ -287,7 +372,8 @@ public:
 
   // --- Whole-array bridging (the Memory cell's `read_all` / `update` buses) ---
   // Entry 0 in the LOW bits, row-major -- identical to cgen_verilog and
-  // pass.lec, so LEC and sim agree. Slop-only (Dlop has no fixed bus width).
+  // pass.lec, so LEC and sim agree. Slop-only here (the bus width has to be a
+  // template parameter); Mem_dyn carries the same layout for either backend.
   auto read_all() const { return slop_read_all(data_); }
   template <int W>
   void apply_update(const Slop<W>& bus) {
@@ -322,7 +408,12 @@ public:
         continue;
       }
       auto& slot = data_[static_cast<std::size_t>(p.addr)];
-      if constexpr (WenSize == 1) {
+      if (val::truthy(p.xlanes)) {
+        // An uncertain enable commits x, not the old value and not `din`.
+        slot = val::undef_lanes(mem_merge<V>(slot, p.din, p.lanes, Bits), p.xlanes, Bits);
+      } else if constexpr (WenSize == 1) {
+        // No canonicalization: `din` is asserted to fit in `Bits` at staging,
+        // which makes this identical to what mem_merge would produce.
         slot = p.din;
       } else {
         slot = mem_merge<V>(slot, p.din, p.lanes, Bits);
@@ -366,14 +457,15 @@ protected:
     if (a < 0 || static_cast<std::size_t>(a) >= Size) {
       return;  // out of range: the write is dropped, as in the pre-existing hlop
     }
-    V lanes = mem_lane_mask<V, E>(wen, Bits, WenSize);
-    if (!val::truthy(lanes)) {
-      return;  // no enabled lane
+    auto lanes = mem_lane_masks<V, E>(wen, Bits, WenSize);
+    if (!val::truthy(lanes.on) && !val::truthy(lanes.x)) {
+      return;  // no enabled and no uncertain lane
     }
-    p.din   = din;
-    p.lanes = lanes;
-    p.addr  = a;
-    p.fired = true;
+    p.din    = mem_canon_din<V>(din, Bits);
+    p.lanes  = lanes.on;
+    p.xlanes = lanes.x;
+    p.addr   = a;
+    p.fired  = true;
   }
 
   array_type                    data_{};
@@ -495,7 +587,10 @@ struct Mem_cfg {
   int                   bits      = 0;
   int                   n_rd      = 0;
   int                   n_wr      = 0;
-  int                   n_user_wr = 0;
+  // Leading write ports that may forward / be undefined; the rest are
+  // reset/restore ports, which never do. -1 means "unset": configure() fills it
+  // with n_wr. A caller that means "no user write ports" passes an explicit 0.
+  int                   n_user_wr = -1;
   int                   wensize   = 1;
   Mem_order             order     = Mem_order::program;
   std::vector<uint16_t> fwd_upto;  // per read port; only read when order == program
@@ -509,15 +604,40 @@ public:
 
   Mem_dyn() = default;
 
+  // Enforces at run time what Mem_base states with a static_assert; a shape the
+  // static twin refuses to compile must not be silently mis-simulated here.
   void configure(const Mem_cfg& cfg, const V& init) {
     cfg_ = cfg;
-    if (cfg_.n_user_wr == 0 || cfg_.n_user_wr > cfg_.n_wr) {
+    if (cfg_.n_user_wr < 0 || cfg_.n_user_wr > cfg_.n_wr) {
       cfg_.n_user_wr = cfg_.n_wr;
+    }
+    assert(cfg_.bits > 0 && "memory entry width must be positive");
+    if (cfg_.bits < 1) {
+      cfg_.bits = 1;  // matches cgen_sim's `if (m.bits <= 0) m.bits = 1;`
     }
     if (cfg_.wensize < 1) {
       cfg_.wensize = 1;
     }
+    // A wensize that does not divide the width leaves the top bits of every
+    // entry permanently unwritable (mem_lane_mask truncates lane_bits).
+    // cgen_sim makes this a fatal diag; fall back to a whole-entry enable.
+    assert(cfg_.bits % cfg_.wensize == 0 && "wensize must divide the entry width into equal lanes");
+    if (cfg_.bits % cfg_.wensize != 0) {
+      cfg_.wensize = 1;
+    }
+    // `program` needs one prefix per read port; a caller that omits them gets
+    // ordering="old" behavior, which is a silent sim/LEC divergence.
+    assert((cfg_.order != Mem_order::program || cfg_.fwd_upto.size() == static_cast<std::size_t>(cfg_.n_rd))
+           && "Mem_order::program needs a fwd_upto entry per read port");
     cfg_.fwd_upto.resize(static_cast<std::size_t>(cfg_.n_rd), 0);
+    // mem_resolve indexes pend_ with these counts; Memory_program bounds the
+    // same value with a static_assert.
+    for (auto& f : cfg_.fwd_upto) {
+      assert(f <= static_cast<uint16_t>(cfg_.n_user_wr) && "forwarding prefix exceeds the user write ports");
+      if (f > static_cast<uint16_t>(cfg_.n_user_wr)) {
+        f = static_cast<uint16_t>(cfg_.n_user_wr);
+      }
+    }
     data_.assign(cfg_.size, init);
     // Seed the staged slots with a real value rather than a default-constructed
     // one: for the Dlop backend V is a spool_ptr, whose default is null and
@@ -525,14 +645,27 @@ public:
     pend_.clear();
     pend_.resize(static_cast<std::size_t>(cfg_.n_wr));
     for (auto& p : pend_) {
-      p.din   = init;
-      p.lanes = init;
+      p.din    = init;
+      p.lanes  = init;
+      p.xlanes = init;
     }
-    configured_ = true;
+    last_access_  = init;  // nothing has driven a port yet
+    bulk_         = init;  // seeded so the Dlop spool_ptr is never null
+    bulk_pending_ = false;
+    configured_   = true;
   }
 
   bool           configured() const { return configured_; }
   const Mem_cfg& cfg() const { return cfg_; }
+
+  // The last value driven on any of this memory's ports: the most recent
+  // resolved read dout, or the most recent staged write din.
+  //
+  // A read port whose enable is low never accesses the array, so its dout HOLDS
+  // -- the bus simply does not switch. Reporting a fresh x (or a PRNG draw)
+  // instead would be logically defensible but would invent switching activity a
+  // gated port cannot have, which matters to anything estimating power.
+  const V& last_access() const { return last_access_; }
 
   std::vector<V>&       entries() { return data_; }
   const std::vector<V>& entries() const { return data_; }
@@ -543,6 +676,38 @@ public:
     for (auto& p : pend_) {
       p.clear();
     }
+  }
+
+  // --- Whole-array bridging (the Memory cell's `read_all` / `update` buses) ---
+  // Entry 0 in the LOW `bits`, row-major -- identical to Mem_base's Slop-only
+  // slop_read_all/slop_apply_update, and to cgen_verilog and pass.lec, so LEC
+  // and sim agree. Unlike those, this works for Dlop too: the bus is just a
+  // `size * bits` wide value, which an arbitrary-precision type can hold.
+  V read_all() const {
+    V bus = val::zero();
+    for (std::size_t i = 0; i < data_.size(); ++i) {
+      const V field = val::and_(data_[i], val::ones(cfg_.bits));  // the entry's bit pattern
+      bus           = val::or_(bus, val::shl_(field, static_cast<int64_t>(i) * cfg_.bits));
+    }
+    return bus;
+  }
+
+  void apply_update(const V& bus) {
+    for (std::size_t i = 0; i < data_.size(); ++i) {
+      // Each slice is truncated and sign-fit to the canonical signed entry,
+      // matching Mem_base's `Slop<B>{bus.sra_op(i * B)}`.
+      data_[i] = val::sext_(val::sra_(bus, static_cast<int64_t>(i) * cfg_.bits), cfg_.bits - 1);
+    }
+  }
+
+  // Stage a whole-array next-state for this cycle. Applied at tick() BEFORE the
+  // per-port writes, so the priority is reset > per-port write > update, exactly
+  // as cgen_sim emits it. A reset also drops the staged per-port writes rather
+  // than letting them land on top of the restored contents.
+  void stage_bulk(const V& bus, bool is_reset) {
+    bulk_          = bus;
+    bulk_pending_  = true;
+    bulk_is_reset_ = is_reset;
   }
 
   template <class E, class A>
@@ -559,18 +724,56 @@ public:
     if (a < 0 || static_cast<std::size_t>(a) >= data_.size()) {
       return;
     }
-    V lanes = mem_lane_mask<V, E>(wen, cfg_.bits, cfg_.wensize);
-    if (!val::truthy(lanes)) {
-      return;  // no enabled lane
+    auto lanes = mem_lane_masks<V, E>(wen, cfg_.bits, cfg_.wensize);
+    if (!val::truthy(lanes.on) && !val::truthy(lanes.x)) {
+      return;  // no enabled and no uncertain lane
     }
-    p.din   = din;
-    p.lanes = lanes;
-    p.addr  = a;
-    p.fired = true;
+    p.din        = mem_canon_din<V>(din, cfg_.bits);
+    p.lanes      = lanes.on;
+    p.xlanes     = lanes.x;
+    p.addr       = a;
+    p.fired      = true;
+    last_access_ = p.din;
   }
 
   template <class A>
   V read(int r, const A& addr) const {
+    last_access_ = read_(r, addr);
+    return last_access_;
+  }
+
+  void tick() {
+    // The bulk update lands FIRST, so the per-port writes below override the
+    // entries they touch; a reset outranks them and drops them entirely.
+    if (bulk_pending_) {
+      apply_update(bulk_);
+      if (bulk_is_reset_) {
+        clear_pending();
+      }
+      bulk_pending_ = false;
+    }
+    for (auto& p : pend_) {
+      if (!p.fired) {
+        continue;
+      }
+      auto& slot = data_[static_cast<std::size_t>(p.addr)];
+      if (val::truthy(p.xlanes)) {
+        // An uncertain enable commits x, not the old value and not `din`.
+        slot = val::undef_lanes(mem_merge<V>(slot, p.din, p.lanes, cfg_.bits), p.xlanes, cfg_.bits);
+      } else if (cfg_.wensize <= 1) {
+        // No canonicalization: `din` is canonicalized to `bits` at staging,
+        // which makes this identical to what mem_merge would produce.
+        slot = p.din;
+      } else {
+        slot = mem_merge<V>(slot, p.din, p.lanes, cfg_.bits);
+      }
+      p.clear();
+    }
+  }
+
+private:
+  template <class A>
+  V read_(int r, const A& addr) const {
     if (!Mem_val<A>::addr_known(addr)) {
       return val::undef(cfg_.bits > 0 ? cfg_.bits : 64);
     }
@@ -582,30 +785,18 @@ public:
     if (fwd_upto == 0 && undef_upto == 0) {
       return data_[static_cast<std::size_t>(a)];
     }
-    return mem_resolve<V>(data_[static_cast<std::size_t>(a)], std::span<const Mem_write<V>>{pend_}, a, fwd_upto,
-                          undef_upto, cfg_.bits);
+    return mem_resolve<V>(data_[static_cast<std::size_t>(a)],
+                          std::span<const Mem_write<V>>{pend_},
+                          a,
+                          fwd_upto,
+                          undef_upto,
+                          cfg_.bits);
   }
 
-  void tick() {
-    for (auto& p : pend_) {
-      if (!p.fired) {
-        continue;
-      }
-      auto& slot = data_[static_cast<std::size_t>(p.addr)];
-      if (cfg_.wensize <= 1) {
-        slot = p.din;
-      } else {
-        slot = mem_merge<V>(slot, p.din, p.lanes, cfg_.bits);
-      }
-      p.clear();
-    }
-  }
-
-private:
   std::pair<int, int> prefixes_(int r) const {
     switch (cfg_.order) {
-      case Mem_order::old: return {0, 0};
-      case Mem_order::fwd: return {cfg_.n_user_wr, 0};
+      case Mem_order::old : return {0, 0};
+      case Mem_order::fwd : return {cfg_.n_user_wr, 0};
       case Mem_order::none: return {0, cfg_.n_user_wr};
       case Mem_order::program:
         if (r >= 0 && static_cast<std::size_t>(r) < cfg_.fwd_upto.size()) {
@@ -616,10 +807,15 @@ private:
     return {0, 0};
   }
 
-  Mem_cfg                    cfg_{};
-  std::vector<V>             data_;
-  std::vector<Mem_write<V>>  pend_;
-  bool                       configured_ = false;
+  Mem_cfg                   cfg_{};
+  std::vector<V>            data_;
+  std::vector<Mem_write<V>> pend_;
+  // Observational only (what the port bus last drove), so `read()` stays const.
+  mutable V                 last_access_{};
+  V                         bulk_{};  // staged whole-array next-state; see stage_bulk
+  bool                      bulk_pending_  = false;
+  bool                      bulk_is_reset_ = false;
+  bool                      configured_    = false;
 };
 
 }  // namespace hlop

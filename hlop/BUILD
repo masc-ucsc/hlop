@@ -158,10 +158,3 @@ filegroup(
     srcs = glob(["*.hpp"]) + ["vcd_writer.cpp"],
     visibility = ["//visibility:public"],
 )
-
-cc_binary(
-    name = "zz_refute_unk",
-    srcs = ["tests/zz_refute_unk.cpp"],
-    copts = CPP23_COPTS,
-    deps = [":hlop"],
-)
