@@ -70,6 +70,22 @@ TEST_F(EvalSlopTest, eval_div) {
   EXPECT_TRUE(out.is_known_eq(V32::create_integer(7)));
 }
 
+TEST_F(EvalSlopTest, eval_rem) {
+  auto out = hlop::eval_rem(V32::create_integer(42), V32::create_integer(5));
+  EXPECT_TRUE(out.is_known_eq(V32::create_integer(2)));
+}
+
+// Truncated, NOT floored: -42 % 5 is -2 (sign of the dividend), and 42 % -5 is
+// +2. A floored modulo would answer +3 and -3 -- the one behaviour difference
+// that matters, so it is pinned in both directions.
+TEST_F(EvalSlopTest, eval_rem_negative_follows_dividend) {
+  auto neg_dividend = hlop::eval_rem(V32::create_integer(-42), V32::create_integer(5));
+  EXPECT_TRUE(neg_dividend.is_known_eq(V32::create_integer(-2)));
+
+  auto neg_divisor = hlop::eval_rem(V32::create_integer(42), V32::create_integer(-5));
+  EXPECT_TRUE(neg_divisor.is_known_eq(V32::create_integer(2)));
+}
+
 TEST_F(EvalSlopTest, eval_lt_true) {
   auto out = hlop::eval_lt(V32::create_integer(3), V32::create_integer(5));
   EXPECT_TRUE(out.is_known_true());
@@ -474,6 +490,52 @@ TEST_F(EvalDlopTest, div_basic) {
   };
   auto res = ctx.execute(call);
   EXPECT_EQ(res.outputs[0]->to_just_i64(), 7);
+}
+
+TEST_F(EvalDlopTest, rem_basic) {
+  hlop::DCall call{
+      .op     = hlop::Ntype_op::Rem,
+      .inputs = {
+          {.value = Vi(42)},
+          {.value = Vi(5)},
+      },
+  };
+  auto res = ctx.execute(call);
+  EXPECT_EQ(res.outputs[0]->to_just_i64(), 2);
+}
+
+// Positional, not commutative: swapping the operands must change the answer
+// (5 % 42 == 5), which is what catches a fold-over-all-inputs implementation.
+TEST_F(EvalDlopTest, rem_negative_and_operand_order) {
+  hlop::DCall neg{
+      .op     = hlop::Ntype_op::Rem,
+      .inputs = {
+          {.value = Vi(-42)},
+          {.value = Vi(5)},
+      },
+  };
+  EXPECT_EQ(ctx.execute(neg).outputs[0]->to_just_i64(), -2);
+
+  hlop::DCall swapped{
+      .op     = hlop::Ntype_op::Rem,
+      .inputs = {
+          {.value = Vi(5)},
+          {.value = Vi(42)},
+      },
+  };
+  EXPECT_EQ(ctx.execute(swapped).outputs[0]->to_just_i64(), 5);
+}
+
+TEST_F(EvalDlopTest, rem_by_zero_is_nil) {
+  hlop::DCall call{
+      .op     = hlop::Ntype_op::Rem,
+      .inputs = {
+          {.value = Vi(42)},
+          {.value = Vi(0)},
+      },
+  };
+  auto res = ctx.execute(call);
+  EXPECT_TRUE(res.outputs[0]->is_nil());
 }
 
 TEST_F(EvalDlopTest, not_basic) {

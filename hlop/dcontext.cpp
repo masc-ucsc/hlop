@@ -58,6 +58,7 @@ DResult DContext::execute(const DCall& call) {
     case Ntype_op::Sum     : return exec_sum(call);
     case Ntype_op::Mult    : return exec_mult(call);
     case Ntype_op::Div     : return exec_div(call);
+    case Ntype_op::Rem     : return exec_rem(call);
     case Ntype_op::And     : return exec_and(call);
     case Ntype_op::Or      : return exec_or(call);
     case Ntype_op::Xor     : return exec_xor(call);
@@ -163,6 +164,16 @@ DResult DContext::exec_div(const DCall& call) {
   auto a = call.inputs[0].value;
   auto b = call.inputs[1].value;
   return {.outputs = {a->div_op(b)}};
+}
+
+// Rem: truncated remainder, sign following the DIVIDEND (Verilog `%`), never a
+// floored modulo. Like Div, it is binary and not commutative, so the operands
+// are read positionally rather than folded over the input list.
+DResult DContext::exec_rem(const DCall& call) {
+  assert(call.inputs.size() >= 2);
+  auto a = call.inputs[0].value;
+  auto b = call.inputs[1].value;
+  return {.outputs = {a->rem_op(b)}};
 }
 
 DResult DContext::exec_sum(const DCall& call) {

@@ -104,7 +104,7 @@ std::vector<BinOp> binops() {
       {"sub_op", [](const SP& a, const SP& b) { return a->sub_op(*b); }},
       {"mult_op", [](const SP& a, const SP& b) { return a->mult_op(*b); }},
       {"div_op", [](const SP& a, const SP& b) { return a->div_op(*b); }},
-      {"mod_op", [](const SP& a, const SP& b) { return a->mod_op(*b); }},
+      {"rem_op", [](const SP& a, const SP& b) { return a->rem_op(*b); }},
       {"or_op", [](const SP& a, const SP& b) { return a->or_op(*b); }},
       {"and_op", [](const SP& a, const SP& b) { return a->and_op(*b); }},
       {"xor_op", [](const SP& a, const SP& b) { return a->xor_op(*b); }},

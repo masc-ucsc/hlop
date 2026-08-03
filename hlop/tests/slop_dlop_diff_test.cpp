@@ -210,7 +210,7 @@ void RunOnce(std::mt19937_64& rng, const std::vector<PoolEntry>& pool, int op_id
       auto    sb_small = S::create_integer(denom);
       auto    da_small = Dlop::create_integer(num);
       auto    db_small = Dlop::create_integer(denom);
-      ExpectConsistent(*da_small->mod_op(*db_small), sa_small.mod_op(sb_small), "mod_op");
+      ExpectConsistent(*da_small->rem_op(*db_small), sa_small.rem_op(sb_small), "rem_op");
       break;
     }
     case 26: {

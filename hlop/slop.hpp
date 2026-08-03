@@ -500,11 +500,12 @@ public:
     return result;
   }
 
-  // mod_op: integer remainder, truncating toward zero (sign follows the
-  // dividend, matching C/C++ `%`). Asserts on mod-by-zero.
-  Slop mod_op(const Slop& other) const {
+  // rem_op: TRUNCATED remainder, the LGraph `rem` cell (sign follows the
+  // dividend, matching C/C++ `%` -- not a floored modulo). Asserts on
+  // rem-by-zero.
+  Slop rem_op(const Slop& other) const {
     nil_check_(other);
-    I(!other.is_known_false(), "Slop modulo by zero");
+    I(!other.is_known_false(), "Slop remainder by zero");
     Slop result;
     // Route through Blop::mod (even for n_words==1) so the INT64_MIN % -1
     // signed-overflow UB is guarded in one place, matching div_op.

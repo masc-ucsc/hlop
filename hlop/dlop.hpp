@@ -540,11 +540,13 @@ public:
   spool_ptr<Dlop> mult_op(spool_ptr<Dlop> other) const { return mult_op(*other); }
   spool_ptr<Dlop> div_op(const Dlop& other) const;
   spool_ptr<Dlop> div_op(spool_ptr<Dlop> other) const { return div_op(*other); }
-  // mod_op: integer modulo. Returns invalid for mod-by-zero (undefined),
-  // a 1-bit unknown when either operand has unknowns, and the integer
-  // remainder otherwise.
-  spool_ptr<Dlop> mod_op(const Dlop& other) const;
-  spool_ptr<Dlop> mod_op(spool_ptr<Dlop> other) const { return mod_op(*other); }
+  // rem_op: TRUNCATED remainder, the LGraph `rem` cell (sign follows the
+  // dividend, like C/C++ `%` and Verilog `%` -- NOT a floored modulo, which
+  // would flip the sign for a negative dividend). Returns invalid for
+  // rem-by-zero (undefined), a 1-bit unknown when either operand has unknowns,
+  // and the exact remainder otherwise.
+  spool_ptr<Dlop> rem_op(const Dlop& other) const;
+  spool_ptr<Dlop> rem_op(spool_ptr<Dlop> other) const { return rem_op(*other); }
   spool_ptr<Dlop> neg_op() const;
 
   // --- Bitwise operations ---

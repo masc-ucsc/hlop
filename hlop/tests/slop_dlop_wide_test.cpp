@@ -13,7 +13,7 @@
 //   2. Algebraic invariants that do NOT rely on Dlop and Slop agreeing — they
 //      could share a Blop bug. The strongest is the division "multiply-back"
 //      identity  a == (a/b)*b + (a%b)  with |a%b| < |b|, checked on both
-//      classes at 500 bits, plus a handful of hand-computed div/mod/popcount
+//      classes at 500 bits, plus a handful of hand-computed div/rem/popcount
 //      cases with known answers.
 //
 // Slop<1100> gives headroom for the widest result: two ~500-bit operands
@@ -120,7 +120,7 @@ void RunOnce(std::mt19937_64& rng, const std::vector<std::string>& pool, int op_
       if (sb.is_known_false()) {
         break;
       }
-      ExpectEqual(*da->mod_op(*db), sa.mod_op(sb), "mod_op");
+      ExpectEqual(*da->rem_op(*db), sa.rem_op(sb), "rem_op");
       break;
     }
     case 10: {
@@ -208,7 +208,7 @@ static spool_ptr<Dlop> DlopAbs(const Dlop& x) {
 static void CheckDivModInvariantSlop(const S& a, const S& b, const std::string& tag) {
   ASSERT_FALSE(b.is_known_false()) << tag;
   S q     = a.div_op(b);
-  S r     = a.mod_op(b);
+  S r     = a.rem_op(b);
   S recon = q.mult_op(b).add_op(r);
   EXPECT_TRUE(recon.is_known_eq(a)) << tag << ": Slop a != q*b+r";
   EXPECT_TRUE(SlopAbs(r).lt_op(SlopAbs(b)).is_known_true()) << tag << ": Slop |r| !< |b|";
@@ -222,7 +222,7 @@ static void CheckDivModInvariantSlop(const S& a, const S& b, const std::string& 
 static void CheckDivModInvariantDlop(const Dlop& a, const Dlop& b, const std::string& tag) {
   ASSERT_FALSE(b.is_known_false()) << tag;
   auto q     = a.div_op(b);
-  auto r     = a.mod_op(b);
+  auto r     = a.rem_op(b);
   auto recon = q->mult_op(b)->add_op(*r);
   EXPECT_TRUE(recon->is_known_eq(a)) << tag << ": Dlop a != q*b+r";
   EXPECT_TRUE(DlopAbs(*r)->lt_op(*DlopAbs(b))->is_known_true()) << tag << ": Dlop |r| !< |b|";
@@ -231,7 +231,7 @@ static void CheckDivModInvariantDlop(const Dlop& a, const Dlop& b, const std::st
   }
 }
 
-TEST(SlopDlopWide, divmod_multiply_back_invariant) {
+TEST(SlopDlopWide, divrem_multiply_back_invariant) {
   std::mt19937_64 rng{kSeed ^ 0x1234ULL};
   auto            pool = BuildPool();
   for (int i = 0; i < 2000; ++i) {
@@ -253,9 +253,9 @@ TEST(SlopDlopWide, divmod_multiply_back_invariant) {
   }
 }
 
-// Hand-computed division/modulo with answers known a-priori, spanning multiple
+// Hand-computed division/remainder with answers known a-priori, spanning multiple
 // 64-bit words and every sign combination.
-TEST(SlopDlopWide, divmod_known_answers) {
+TEST(SlopDlopWide, divrem_known_answers) {
   // 2^k helpers.
   auto slop_pow2 = [](int k) { return S::create_integer(1).shl_op(k); };
   auto dlop_pow2 = [](int k) { return Dlop::create_integer(1)->shl_op(Dlop::create_integer(k)); };
@@ -293,7 +293,7 @@ TEST(SlopDlopWide, divmod_known_answers) {
       exp_q_s = exp_q_s.neg_op();
     }
     EXPECT_TRUE(a_s.div_op(b_s).is_known_eq(exp_q_s)) << "Slop quotient " << tag;
-    EXPECT_TRUE(a_s.mod_op(b_s).is_known_eq(S::create_integer(c.exp_r))) << "Slop remainder " << tag;
+    EXPECT_TRUE(a_s.rem_op(b_s).is_known_eq(S::create_integer(c.exp_r))) << "Slop remainder " << tag;
 
     auto a_d = dlop_pow2(c.an)->add_op(Dlop::create_integer(c.ar));
     auto b_d = dlop_pow2(c.bn);
@@ -308,13 +308,13 @@ TEST(SlopDlopWide, divmod_known_answers) {
       exp_q_d = exp_q_d->neg_op();
     }
     EXPECT_TRUE(a_d->div_op(*b_d)->is_known_eq(*exp_q_d)) << "Dlop quotient " << tag;
-    EXPECT_TRUE(a_d->mod_op(*b_d)->is_known_eq(*Dlop::create_integer(c.exp_r))) << "Dlop remainder " << tag;
+    EXPECT_TRUE(a_d->rem_op(*b_d)->is_known_eq(*Dlop::create_integer(c.exp_r))) << "Dlop remainder " << tag;
   }
 }
 
-// Boundary div/mod cases: ±1 divisor, zero dividend, and a divisor strictly
+// Boundary div/rem cases: ±1 divisor, zero dividend, and a divisor strictly
 // wider than the dividend (quotient 0, remainder == dividend).
-TEST(SlopDlopWide, divmod_edge_cases) {
+TEST(SlopDlopWide, divrem_edge_cases) {
   auto slop_pow2 = [](int k) { return S::create_integer(1).shl_op(k); };
   auto dlop_pow2 = [](int k) { return Dlop::create_integer(1)->shl_op(Dlop::create_integer(k)); };
 
@@ -329,24 +329,24 @@ TEST(SlopDlopWide, divmod_edge_cases) {
     S    eq_s  = (sign < 0) ? big_s.neg_op() : big_s;
     auto eq_d  = (sign < 0) ? big_d->neg_op() : big_d->add_op(*Dlop::create_integer(0));
     EXPECT_TRUE(big_s.div_op(one_s).is_known_eq(eq_s)) << "Slop x/" << sign;
-    EXPECT_TRUE(big_s.mod_op(one_s).is_known_eq(S::create_integer(0))) << "Slop x%" << sign;
+    EXPECT_TRUE(big_s.rem_op(one_s).is_known_eq(S::create_integer(0))) << "Slop x%" << sign;
     EXPECT_TRUE(big_d->div_op(*one_d)->is_known_eq(*eq_d)) << "Dlop x/" << sign;
-    EXPECT_TRUE(big_d->mod_op(*one_d)->is_known_eq(*Dlop::create_integer(0))) << "Dlop x%" << sign;
+    EXPECT_TRUE(big_d->rem_op(*one_d)->is_known_eq(*Dlop::create_integer(0))) << "Dlop x%" << sign;
   }
 
   // 0 / big == 0, 0 % big == 0.
   EXPECT_TRUE(S::create_integer(0).div_op(big_s).is_known_eq(S::create_integer(0))) << "Slop 0/big";
-  EXPECT_TRUE(S::create_integer(0).mod_op(big_s).is_known_eq(S::create_integer(0))) << "Slop 0%big";
+  EXPECT_TRUE(S::create_integer(0).rem_op(big_s).is_known_eq(S::create_integer(0))) << "Slop 0%big";
   EXPECT_TRUE(Dlop::create_integer(0)->div_op(*big_d)->is_known_eq(*Dlop::create_integer(0))) << "Dlop 0/big";
-  EXPECT_TRUE(Dlop::create_integer(0)->mod_op(*big_d)->is_known_eq(*Dlop::create_integer(0))) << "Dlop 0%big";
+  EXPECT_TRUE(Dlop::create_integer(0)->rem_op(*big_d)->is_known_eq(*Dlop::create_integer(0))) << "Dlop 0%big";
 
   // small / big == 0, small % big == small  (divisor wider than dividend).
   S    small_s = S::create_integer(0x9abc);
   auto small_d = Dlop::create_integer(0x9abc);
   EXPECT_TRUE(small_s.div_op(big_s).is_known_eq(S::create_integer(0))) << "Slop small/big";
-  EXPECT_TRUE(small_s.mod_op(big_s).is_known_eq(small_s)) << "Slop small%big";
+  EXPECT_TRUE(small_s.rem_op(big_s).is_known_eq(small_s)) << "Slop small%big";
   EXPECT_TRUE(small_d->div_op(*big_d)->is_known_eq(*Dlop::create_integer(0))) << "Dlop small/big";
-  EXPECT_TRUE(small_d->mod_op(*big_d)->is_known_eq(*small_d)) << "Dlop small%big";
+  EXPECT_TRUE(small_d->rem_op(*big_d)->is_known_eq(*small_d)) << "Dlop small%big";
 }
 
 // Shifting right/left by more than the value width: a robustness check for the
@@ -449,7 +449,7 @@ TEST(SlopDlopWide, dlop_div_by_pm1_no_overflow) {
   auto pos63 = Dlop::create_integer(1)->shl_op(Dlop::create_integer(63));    // +2^63
   EXPECT_TRUE(min63->div_op(*mone)->is_known_eq(*pos63)) << "-2^63 / -1";
   EXPECT_FALSE(min63->div_op(*mone)->is_negative()) << "-2^63 / -1 must be positive";
-  EXPECT_TRUE(min63->mod_op(*mone)->is_known_eq(*Dlop::create_integer(0))) << "-2^63 % -1";
+  EXPECT_TRUE(min63->rem_op(*mone)->is_known_eq(*Dlop::create_integer(0))) << "-2^63 % -1";
 
   // -2^200 / -1 == +2^200 (multi-word dividend widens by a word).
   auto min200 = Dlop::create_integer(1)->shl_op(Dlop::create_integer(200))->neg_op();
@@ -461,8 +461,8 @@ TEST(SlopDlopWide, dlop_div_by_pm1_no_overflow) {
   auto v = Dlop::create_integer(1)->shl_op(Dlop::create_integer(130))->add_op(*Dlop::create_integer(7));
   EXPECT_TRUE(v->div_op(*one)->is_known_eq(*v)) << "x/1";
   EXPECT_TRUE(v->div_op(*mone)->is_known_eq(*v->neg_op())) << "x/-1";
-  EXPECT_TRUE(v->mod_op(*one)->is_known_eq(*Dlop::create_integer(0))) << "x%1";
-  EXPECT_TRUE(v->mod_op(*mone)->is_known_eq(*Dlop::create_integer(0))) << "x%-1";
+  EXPECT_TRUE(v->rem_op(*one)->is_known_eq(*Dlop::create_integer(0))) << "x%1";
+  EXPECT_TRUE(v->rem_op(*mone)->is_known_eq(*Dlop::create_integer(0))) << "x%-1";
 }
 
 // Single-word Slop (n_words==1) must not invoke int64 UB nor assert on
@@ -472,7 +472,7 @@ TEST(SlopDlopWide, slop_single_word_edges) {
   Slop<64> mn = Slop<64>::create_integer(INT64_MIN);
   Slop<64> m1 = Slop<64>::create_integer(-1);
   EXPECT_TRUE(mn.div_op(m1).is_known_eq(mn)) << "Slop<64> INT_MIN/-1 wraps to INT_MIN";
-  EXPECT_TRUE(mn.mod_op(m1).is_known_eq(Slop<64>::create_integer(0))) << "Slop<64> INT_MIN%-1 == 0";
+  EXPECT_TRUE(mn.rem_op(m1).is_known_eq(Slop<64>::create_integer(0))) << "Slop<64> INT_MIN%-1 == 0";
 
   // Over-shift on a single-word Slop: shl past width clears; arithmetic sra past
   // width fills with the sign bit.

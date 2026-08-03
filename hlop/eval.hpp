@@ -258,6 +258,13 @@ V eval_div(const V& a, const V& b) {
   return a.div_op(b);
 }
 
+// --- Rem: truncated remainder (binary, not commutative). The sign follows the
+//     DIVIDEND, matching Verilog `%` -- never a floored modulo. ---
+template <class V>
+V eval_rem(const V& a, const V& b) {
+  return a.rem_op(b);
+}
+
 // --- LT: signed less-than (binary) -> boolean ---
 template <class V>
 V eval_lt(const V& a, const V& b) {

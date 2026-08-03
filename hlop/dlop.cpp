@@ -1045,14 +1045,14 @@ spool_ptr<Dlop> Dlop::div_op(const Dlop& other) const {
   return dlop;
 }
 
-// mod_op: integer remainder, truncating toward zero (sign follows the
-// dividend, matching C/C++ `%`). Returns invalid on mod-by-zero (undefined)
-// and a 1-bit unknown when either operand has unknowns; otherwise the exact
-// remainder at any width.
-spool_ptr<Dlop> Dlop::mod_op(const Dlop& other) const {
+// rem_op: integer remainder, truncating toward zero (sign follows the
+// dividend, matching C/C++ `%` and the LGraph `rem` cell). Returns invalid on
+// rem-by-zero (undefined) and a 1-bit unknown when either operand has
+// unknowns; otherwise the exact remainder at any width.
+spool_ptr<Dlop> Dlop::rem_op(const Dlop& other) const {
   // Illegal operand (string / nil / invalid / ref) → nil. Must precede the
   // is_known_false() check: a size-0 nil/invalid reads as "false" and would
-  // otherwise be misclassified as "mod by zero".
+  // otherwise be misclassified as "rem by zero".
   if (!is_numeric() || !other.is_numeric()) {
     return nil();
   }
@@ -1060,7 +1060,7 @@ spool_ptr<Dlop> Dlop::mod_op(const Dlop& other) const {
     return unknown(1);
   }
   if (other.is_known_false()) {
-    return nil();  // mod by zero → nil
+    return nil();  // remainder by zero → nil
   }
   // x % ±1 == 0. Handled explicitly so the scalar fast path never evaluates
   // INT64_MIN % -1 (signed-overflow UB).

@@ -19,7 +19,7 @@
 //
 // Operations exercised:
 //   bitwise:  and, or, xor, not
-//   arith:    add, sub, neg, mult, div, mod   (wrapped/sign-extended to W)
+//   arith:    add, sub, neg, mult, div, rem   (wrapped/sign-extended to W)
 //   compare:  eq, lt, le, gt, ge
 //   reduce:   ror (orr)                       (rand_op / rxor_op skipped —
 //                                              Slop's fixed-width-vs-Pyrope
@@ -201,13 +201,13 @@ void CheckPair(int64_t a_in, int64_t b_in, int iter) {
   EXPECT_BITS_EQ(W, slop_low128(a_sl.neg_op()), i128_to_words(sext_to_i128<W>(-a128)), "neg");
   EXPECT_BITS_EQ(W, slop_low128(a_sl.mult_op(b_sl)), i128_to_words(sext_to_i128<W>(a128 * b128)), "mult");
 
-  // ----- Div / mod — SInt supports only ≤64-bit, but native int64_t is
+  // ----- Div / rem — SInt supports only ≤64-bit, but native int64_t is
   //       a safe oracle for any W ≤ 64.  For W > 64, Slop's div_op uses
   //       Blop::div which is single-word only (asserts), so we skip. -----
   if constexpr (W <= 64) {
     if (b != 0 && !(a == std::numeric_limits<int64_t>::min() && b == -1)) {
       EXPECT_BITS_EQ(W, slop_low128(a_sl.div_op(b_sl)), i128_to_words(sext_to_i128<W>(a128 / b128)), "div");
-      EXPECT_BITS_EQ(W, slop_low128(a_sl.mod_op(b_sl)), i128_to_words(sext_to_i128<W>(a128 % b128)), "mod");
+      EXPECT_BITS_EQ(W, slop_low128(a_sl.rem_op(b_sl)), i128_to_words(sext_to_i128<W>(a128 % b128)), "rem");
     }
   }
 

@@ -31,6 +31,7 @@ enum class Ntype_op {
   Sum,
   Mult,
   Div,
+  Rem,
   And,
   Or,
   Xor,
@@ -112,6 +113,7 @@ private:
   DResult exec_sum(const DCall& call);
   DResult exec_mult(const DCall& call);
   DResult exec_div(const DCall& call);
+  DResult exec_rem(const DCall& call);
   DResult exec_and(const DCall& call);
   DResult exec_or(const DCall& call);
   DResult exec_xor(const DCall& call);

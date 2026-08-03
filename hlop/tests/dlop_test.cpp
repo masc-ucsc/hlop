@@ -310,7 +310,7 @@ TEST_F(Dlop_test, illegal_operands_return_nil) {
     EXPECT_TRUE(i->sub_op(**bad)->is_nil());
     EXPECT_TRUE(i->mult_op(**bad)->is_nil());
     EXPECT_TRUE(i->div_op(**bad)->is_nil());
-    EXPECT_TRUE(i->mod_op(**bad)->is_nil());
+    EXPECT_TRUE(i->rem_op(**bad)->is_nil());
     EXPECT_TRUE((*bad)->neg_op()->is_nil());
   }
   // Bitwise with a string / invalid / ref operand → nil. (A `nil` operand keeps
@@ -322,9 +322,9 @@ TEST_F(Dlop_test, illegal_operands_return_nil) {
     EXPECT_TRUE((*bad)->not_op()->is_nil());
   }
 
-  // Division / modulo by zero → nil.
+  // Division / remainder by zero → nil.
   EXPECT_TRUE(i->div_op(*z)->is_nil());
-  EXPECT_TRUE(i->mod_op(*z)->is_nil());
+  EXPECT_TRUE(i->rem_op(*z)->is_nil());
   EXPECT_TRUE(big->div_op(*z)->is_nil());
 
   // Shifts: negative, non-integer, and astronomically large amounts → nil.
