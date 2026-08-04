@@ -453,6 +453,202 @@ public:
     return result;
   }
 
+  // =========================================================================
+  // Mixed-width ops: ONE LGraph cell -> ONE Slop op
+  // =========================================================================
+  // An LGraph cell is an UNBOUNDED-precision integer operation; a pin's `bits`
+  // is derived metadata that only says how wide a materialization has to be to
+  // hold the result (pass/bitfuzz strips `bits` and recomputes it precisely
+  // because it carries no semantics). The operand widths are therefore an
+  // artifact of how each input happened to be materialized, not part of the
+  // math.
+  //
+  // The member ops below are fixed-width: `Slop<A>::add_op` takes a `Slop<A>`,
+  // so a caller holding a Slop<B> operand had to convert first. That forced
+  // inou/cgen/cgen_sim to emit one `.zext_to<W>()` / `Slop<W>{x}` per operand
+  // read purely to satisfy C++ overload resolution -- 41% of every width
+  // construct it emits, and semantically a no-op whenever the target width can
+  // already hold the value.
+  //
+  // These statics take operands at ANY width and materialize the result at N
+  // directly, so cgen emits exactly one call per cell and no conversions.
+  //
+  // PRECONDITION: N can hold the exact result -- the bitwidth inference that
+  // runs before codegen guarantees it (upass_tolg's bind_result stamps
+  // bits = magnitude+1 on every computed output). There is deliberately no
+  // runtime check: the graph already proved it.
+  //
+  // COST: when every operand and the result fit one 64-bit word (N <= 64, the
+  // dominant case) each of these is a single scalar instruction on base_[0] --
+  // no masking, no temporaries, nothing to elide.
+
+  // Sign-extend a Slop<M>'s words into this width's word array. NO masking:
+  // under the precondition the source words already hold the exact value, so
+  // widening is pure sign propagation into the new upper words. This is also
+  // why one helper serves BOTH signed and unsigned reads -- a non-negative
+  // value sign-extends to zeros, which is exactly zero-extension.
+  template <int M>
+  static constexpr std::array<int64_t, n_words> widen_(const Slop<M>& s) {
+    std::array<int64_t, n_words> a{};
+    constexpr int                cw = (Slop<M>::n_words < n_words) ? Slop<M>::n_words : n_words;
+    for (int i = 0; i < cw; ++i) {
+      a[i] = s.base_[i];
+    }
+    if constexpr (Slop<M>::n_words < n_words) {
+      const int64_t fill = (s.base_[Slop<M>::n_words - 1] < 0) ? -1 : 0;
+      for (int i = cw; i < n_words; ++i) {
+        a[i] = fill;
+      }
+    }
+    return a;
+  }
+
+  // True when x, y and the result all fit a single word -- the scalar fast path.
+  template <int A, int B>
+  static constexpr bool one_word_ = (n_words == 1 && Slop<A>::n_words == 1 && Slop<B>::n_words == 1);
+
+  template <int A, int B>
+  static Slop add_op(const Slop<A>& x, const Slop<B>& y) {
+    Slop r;
+    if constexpr (one_word_<A, B>) {
+      r.base_[0] = x.base_[0] + y.base_[0];
+    } else {
+      Blop::add<n_words>(r.base_, widen_(x), widen_(y));
+    }
+    return r;
+  }
+
+  template <int A, int B>
+  static Slop sub_op(const Slop<A>& x, const Slop<B>& y) {
+    Slop r;
+    if constexpr (one_word_<A, B>) {
+      r.base_[0] = x.base_[0] - y.base_[0];
+    } else {
+      auto ay = widen_(y);
+      Blop::neg<n_words>(ay, ay);
+      Blop::add<n_words>(r.base_, widen_(x), ay);
+    }
+    return r;
+  }
+
+  template <int A, int B>
+  static Slop mult_op(const Slop<A>& x, const Slop<B>& y) {
+    Slop r;
+    if constexpr (one_word_<A, B>) {
+      r.base_[0] = x.base_[0] * y.base_[0];
+    } else {
+      Blop::mult<n_words>(r.base_, widen_(x), widen_(y));
+    }
+    return r;
+  }
+
+  template <int A, int B>
+  static Slop and_op(const Slop<A>& x, const Slop<B>& y) {
+    Slop r;
+    if constexpr (one_word_<A, B>) {
+      r.base_[0] = x.base_[0] & y.base_[0];
+    } else {
+      Blop::band<n_words>(r.base_, widen_(x), widen_(y));
+    }
+    return r;
+  }
+
+  template <int A, int B>
+  static Slop or_op(const Slop<A>& x, const Slop<B>& y) {
+    Slop r;
+    if constexpr (one_word_<A, B>) {
+      r.base_[0] = x.base_[0] | y.base_[0];
+    } else {
+      Blop::bor<n_words>(r.base_, widen_(x), widen_(y));
+    }
+    return r;
+  }
+
+  template <int A, int B>
+  static Slop xor_op(const Slop<A>& x, const Slop<B>& y) {
+    Slop r;
+    if constexpr (one_word_<A, B>) {
+      r.base_[0] = x.base_[0] ^ y.base_[0];
+    } else {
+      Blop::bxor<n_words>(r.base_, widen_(x), widen_(y));
+    }
+    return r;
+  }
+
+  template <int A>
+  static Slop not_op(const Slop<A>& x) {
+    Slop r;
+    if constexpr (n_words == 1 && Slop<A>::n_words == 1) {
+      r.base_[0] = ~x.base_[0];
+    } else {
+      Blop::bnot<n_words>(r.base_, widen_(x));
+    }
+    return r;
+  }
+
+  // Comparisons materialize a 0/1 MAGNITUDE at this width. The member forms
+  // return create_bool(), whose true value is all-ones (-1) -- correct for a
+  // Boolean-typed Slop, but it forced cgen to append `.zext_to<1>().zext_to<W>()`
+  // to every compare (740 sites in one design) to recover the 0/1 an LGraph
+  // LT/GT/EQ cell is defined to produce. These give cgen that value directly.
+  template <int A, int B>
+  static Slop eq_op(const Slop<A>& x, const Slop<B>& y) {
+    Slop r;
+    if constexpr (one_word_<A, B>) {
+      r.base_[0] = (x.base_[0] == y.base_[0]) ? 1 : 0;
+    } else {
+      r.base_[0] = Blop::eq<n_words>(widen_(x), widen_(y)) ? 1 : 0;
+    }
+    return r;
+  }
+
+  template <int A, int B>
+  static Slop lt_op(const Slop<A>& x, const Slop<B>& y) {
+    Slop r;
+    if constexpr (one_word_<A, B>) {
+      r.base_[0] = (x.base_[0] < y.base_[0]) ? 1 : 0;
+    } else {
+      r.base_[0] = Blop::lt<n_words>(widen_(x), widen_(y)) ? 1 : 0;
+    }
+    return r;
+  }
+
+  template <int A, int B>
+  static Slop gt_op(const Slop<A>& x, const Slop<B>& y) {
+    Slop r;
+    if constexpr (one_word_<A, B>) {
+      r.base_[0] = (x.base_[0] > y.base_[0]) ? 1 : 0;
+    } else {
+      r.base_[0] = Blop::lt<n_words>(widen_(y), widen_(x)) ? 1 : 0;
+    }
+    return r;
+  }
+
+  // Shifts: the amount is a plain count, never a materialized Slop constant.
+  // cgen previously built a full Slop<W>::create_integer(k) operand just to
+  // pass a shift count (788 sites in one design, 270 of them multi-word).
+  template <int A>
+  static Slop shl_op(const Slop<A>& x, int64_t amount) {
+    Slop r;
+    if (amount == 0) {
+      r.base_ = widen_(x);
+      return r;
+    }
+    Blop::shl<n_words>(r.base_, widen_(x), amount);
+    return r;
+  }
+
+  template <int A>
+  static Slop sra_op(const Slop<A>& x, int64_t amount) {
+    Slop r;
+    if (amount == 0) {
+      r.base_ = widen_(x);
+      return r;
+    }
+    Blop::shr<n_words>(r.base_, widen_(x), amount);
+    return r;
+  }
+
   // --- Arithmetic ---
   Slop add_op(const Slop& other) const {
     nil_check_(other);
