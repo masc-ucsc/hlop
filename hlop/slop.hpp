@@ -920,6 +920,78 @@ public:
     return result;
   }
 
+  // Mixed-width get_mask: ONE LGraph Get_mask cell -> ONE Slop call.
+  //
+  // Same bit-selection semantics as the member form above, but the value and the
+  // mask come in at ANY widths and the result is materialized at N, so cgen emits
+  // no per-operand conversion. On the dino CPU the member form cost TWO emitted
+  // conversions per cell (operand read + result trim) -- 1039 of the 1842 that
+  // survived the first 1-1 pass.
+  //
+  // ONE deliberate difference: a single selected bit yields the UNSIGNED 0/1,
+  // not the signed -1 the member form returns. The LGraph/Pyrope Get_mask with a
+  // positive mask is an unsigned LSB-first pack (`#[N]` zero-extends), and that
+  // -1 is a long-standing wart every consumer patches around -- livehd clamps it
+  // in five separate places (upass_constprop's get_mask_zext, cprop,
+  // pass/bitwidth, cgen_verilog, cgen_sim). Producing the value the cell is
+  // defined to produce lets those clamps go. The member form keeps its old
+  // contract, so nothing that relies on it changes.
+  template <int A, int M>
+  static Slop get_mask_op(const Slop<A>& x, const Slop<M>& mask) {
+    const bool mask_neg           = mask.is_negative();
+    const int  mask_bits          = mask.get_bits();
+    const int  positive_mask_bits = mask_neg ? (mask_bits - 1) : mask_bits;
+    const int  src_bits           = x.get_bits();
+
+    Slop result;
+    int  out_bit = 0;
+    auto put     = [&result](int ob) {
+      const int word = ob / 64;
+      if (word < n_words) {
+        result.base_[word] |= int64_t(1) << (ob % 64);
+      }
+    };
+    for (int i = 0; i < positive_mask_bits; ++i) {
+      const bool selected = mask_neg ? !mask.bit_test(i) : mask.bit_test(i);
+      if (!selected) {
+        continue;
+      }
+      if (x.bit_test(i)) {  // bit_test sign-extends past storage
+        put(out_bit);
+      }
+      ++out_bit;
+    }
+    if (mask_neg) {
+      for (int i = positive_mask_bits; i < src_bits; ++i) {
+        if (x.bit_test(i)) {
+          put(out_bit);
+        }
+        ++out_bit;
+      }
+    }
+    if (out_bit == 1) {
+      result.base_[0] &= 1;  // unsigned 0/1, NOT the member form's signed -1
+      for (int i = 1; i < n_words; ++i) {
+        result.base_[i] = 0;
+      }
+    }
+    return result;
+  }
+
+  // Mux with an already-decoded integer index. The Slop-selector form forces the
+  // caller to materialize the index as a full Slop at the RESULT width, which for
+  // a wide mux meant building a multi-word constant to carry a 0/1 select.
+  static Slop mux_op(int64_t idx, std::span<const Slop> values) {
+    assert(!values.empty());
+    if (idx < 0 || static_cast<size_t>(idx) >= values.size()) {
+      return invalid();
+    }
+    return values[idx];
+  }
+  static Slop mux_op(int64_t idx, std::initializer_list<Slop> values) {
+    return mux_op(idx, std::span<const Slop>(values.begin(), values.size()));
+  }
+
   // set_mask_op(mask, value): replace the bits selected by `mask` with bits
   // taken LSB-first from `value`; bits not selected stay unchanged. Mirrors
   // Lconst::set_mask_op for the non-string, non-unknown path.
