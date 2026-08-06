@@ -831,6 +831,70 @@ public:
     return result;
   }
 
+  // Positive contiguous mask [lo, hi) detector — the shape every packed field
+  // access lowers to. Word-wise; false for a zero or gapped mask. Internal
+  // (trailing underscore): the fast paths of get_mask_op / set_mask_op.
+  static bool contiguous_range_(const Slop& m, int& lo, int& hi) {
+    lo = -1;
+    hi = -1;
+    for (int w = 0; w < n_words; ++w) {
+      const auto mw = static_cast<uint64_t>(m.base_[w]);
+      if (mw == 0) {
+        continue;
+      }
+      if (lo < 0) {
+        lo = w * 64 + __builtin_ctzll(mw);
+      }
+      hi = w * 64 + 64 - __builtin_clzll(mw);
+    }
+    if (lo < 0) {
+      return false;
+    }
+    for (int w = lo / 64; w <= (hi - 1) / 64; ++w) {
+      uint64_t expect = ~uint64_t(0);
+      if (w == lo / 64) {
+        expect &= ~uint64_t(0) << (lo % 64);
+      }
+      if (w == (hi - 1) / 64 && (hi % 64) != 0) {
+        expect &= ~uint64_t(0) >> (64 - hi % 64);
+      }
+      if ((static_cast<uint64_t>(m.base_[w]) & expect) != expect) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  // Bits [lo, lo+len) of x (sign-extending past its storage, like bit_test),
+  // LSB-aligned into a zero-filled Slop<N>. Word-wise; the extract half of the
+  // contiguous fast paths. Bits beyond this width's storage are dropped,
+  // matching the per-bit loops' `word < n_words` guard.
+  template <int A>
+  static Slop extract_bits_(const Slop<A>& x, int lo, int len) {
+    Slop result = create_integer(0);
+    if (len <= 0 || lo < 0) {
+      return result;
+    }
+    if (len > 64 * n_words) {
+      len = 64 * n_words;
+    }
+    const uint64_t xsign = x.is_negative() ? ~uint64_t(0) : uint64_t(0);
+    const auto     xword = [&](int idx) -> uint64_t {
+      return (idx >= 0 && idx < Slop<A>::n_words) ? static_cast<uint64_t>(x.base_[idx]) : xsign;
+    };
+    const int nw = (len + 63) / 64;
+    for (int w = 0; w < nw && w < n_words; ++w) {
+      const int j  = lo + w * 64;
+      const int wi = j / 64, sh = j % 64;
+      uint64_t  v  = sh == 0 ? xword(wi) : (xword(wi) >> sh) | (xword(wi + 1) << (64 - sh));
+      if (w == nw - 1 && (len % 64) != 0) {
+        v &= ~uint64_t(0) >> (64 - len % 64);
+      }
+      result.base_[w] = static_cast<int64_t>(v);
+    }
+    return result;
+  }
+
   Slop get_mask_op() const {
     nil_check_();
     if (!is_negative()) {
@@ -878,6 +942,20 @@ public:
     int  mask_bits          = mask.get_bits();
     int  positive_mask_bits = mask_neg ? (mask_bits - 1) : mask_bits;
     int  src_bits           = get_bits();
+
+    // FAST PATH — positive contiguous mask [lo, hi): the extract is a
+    // word-wise shift (see set_mask_op's twin note; the per-bit walk below
+    // dominated wide-datapath simulation). Keeps the member form's signed
+    // single-bit quirk.
+    if (!mask_neg) {
+      int lo = 0, hi = 0;
+      if (contiguous_range_(mask, lo, hi)) {
+        if (hi - lo == 1) {
+          return create_integer(bit_test(lo) ? -1 : 0);
+        }
+        return extract_bits_(*this, lo, hi - lo);
+      }
+    }
 
     Slop result;
     int  out_bit = 0;
@@ -942,6 +1020,17 @@ public:
     const int  mask_bits          = mask.get_bits();
     const int  positive_mask_bits = mask_neg ? (mask_bits - 1) : mask_bits;
     const int  src_bits           = x.get_bits();
+
+    // FAST PATH — positive contiguous mask [lo, hi): a word-wise shift of x,
+    // zero-filled above (the unsigned LSB-first pack this form is defined to
+    // produce, single selected bit included). The per-bit walk below
+    // dominated wide-datapath simulation; see set_mask_op's twin note.
+    if (!mask_neg) {
+      int lo = 0, hi = 0;
+      if (Slop<M>::contiguous_range_(mask, lo, hi)) {
+        return extract_bits_(x, lo, hi - lo);
+      }
+    }
 
     Slop result;
     int  out_bit = 0;
@@ -1014,6 +1103,70 @@ public:
     }
     if (out_bits > N) {
       out_bits = N;
+    }
+
+    // FAST PATH — a positive CONTIGUOUS mask [lo, hi): the shape every packed
+    // field write lowers to. The generic loop below walks EVERY bit of the
+    // result; on wide datapath Slops (the 500-1000+ bit VPU vectors of
+    // lhdsuite's minion) that per-bit walk dominated whole-design simulation.
+    // A contiguous range is a word-wise splice: clear [lo, hi), OR in
+    // `value << lo`. Bit-for-bit identical to the loop (value bits map
+    // LSB-first onto the selected range; bits at/above out_bits never write
+    // and never consume value bits, hence the `hi` cap).
+    if (!mask_neg) {
+      int lo = -1, hi = -1;
+      for (int w = 0; w < n_words; ++w) {
+        const auto mw = static_cast<uint64_t>(mask.base_[w]);
+        if (mw == 0) {
+          continue;
+        }
+        if (lo < 0) {
+          lo = w * 64 + __builtin_ctzll(mw);
+        }
+        hi = w * 64 + 64 - __builtin_clzll(mw);
+      }
+      bool contig = lo >= 0;
+      for (int w = lo / 64; contig && w <= (hi - 1) / 64; ++w) {
+        uint64_t expect = ~uint64_t(0);
+        if (w == lo / 64) {
+          expect &= ~uint64_t(0) << (lo % 64);
+        }
+        if (w == (hi - 1) / 64 && (hi % 64) != 0) {
+          expect &= ~uint64_t(0) >> (64 - hi % 64);
+        }
+        contig = (static_cast<uint64_t>(mask.base_[w]) & expect) == expect;
+      }
+      if (contig) {
+        if (hi > out_bits) {
+          hi = out_bits;
+        }
+        Slop fast = *this;
+        if (hi > lo) {
+          const uint64_t vsign = value.is_negative() ? ~uint64_t(0) : uint64_t(0);
+          const auto     vword = [&](int idx) -> uint64_t {
+            return (idx >= 0 && idx < n_words) ? static_cast<uint64_t>(value.base_[idx]) : vsign;
+          };
+          const auto vshifted = [&](int w) -> uint64_t {  // 64 bits of (value << lo) at word w
+            const int j = w * 64 - lo;
+            if (j >= 0) {
+              const int wi = j / 64, sh = j % 64;
+              return sh == 0 ? vword(wi) : (vword(wi) >> sh) | (vword(wi + 1) << (64 - sh));
+            }
+            return vword(0) << (-j);
+          };
+          for (int w = lo / 64; w <= (hi - 1) / 64 && w < n_words; ++w) {
+            uint64_t m = ~uint64_t(0);
+            if (w == lo / 64) {
+              m &= ~uint64_t(0) << (lo % 64);
+            }
+            if (w == (hi - 1) / 64 && (hi % 64) != 0) {
+              m &= ~uint64_t(0) >> (64 - hi % 64);
+            }
+            fast.base_[w] = static_cast<int64_t>((static_cast<uint64_t>(fast.base_[w]) & ~m) | (vshifted(w) & m));
+          }
+        }
+        return fast;
+      }
     }
 
     // Start from `this` so bits not selected by the mask — including the
