@@ -1348,6 +1348,12 @@ public:
   bool is_string() const { return type_ == Type::String; }
   bool is_nil() const { return type_ == Type::Nil; }
 
+  // Exact representational equality: same type tag, same stored words. Used by
+  // the sim's change-gated evaluation (a compare that says "different" for
+  // equal values would only cost a wasted re-settle; one that says "equal" for
+  // different values would be a missed update, so this is exact, not semantic).
+  bool identical(const Slop& o) const { return type_ == o.type_ && base_ == o.base_; }
+
   bool is_mask() const {
     if (is_negative()) {
       return false;
@@ -1733,10 +1739,38 @@ Slop<B * static_cast<int>(S)> slop_read_all(const std::array<Slop<B>, S>& a) {
 // Scatter a W-bit `update` bus into the per-entry array. The cross-width ctor
 // truncates+sign-fits each slice to the canonical signed B-bit entry, matching
 // how cgen_sim stores/reads entries elsewhere (so logical-vs-arith shift of the
-// high field bits is irrelevant).
+// high field bits is irrelevant). Returns whether any entry actually changed
+// (the sim's change-gated evaluation folds this into its generation counter).
 template <int B, std::size_t S, int W>
-void slop_apply_update(std::array<Slop<B>, S>& dst, const Slop<W>& bus) {
+bool slop_apply_update(std::array<Slop<B>, S>& dst, const Slop<W>& bus) {
+  bool changed = false;
   for (std::size_t i = 0; i < S; ++i) {
-    dst[i] = Slop<B>{bus.sra_op(static_cast<int64_t>(i) * B)};
+    Slop<B> nv{bus.sra_op(static_cast<int64_t>(i) * B)};
+    if (!dst[i].identical(nv)) {
+      dst[i]  = nv;
+      changed = true;
+    }
   }
+  return changed;
+}
+
+// Compare-on-write: assign only when the stored value differs, reporting
+// whether it did. The sim's ports-as-members design funnels every input-field
+// write and state commit through this, accumulating the result into the
+// instance's `__gen` generation counter — the substrate for skipping settles
+// of quiesced (idle / clock-gated) cones.
+template <int N>
+inline bool slop_update(Slop<N>& dst, const Slop<N>& v) {
+  if (dst.identical(v)) {
+    return false;
+  }
+  dst = v;
+  return true;
+}
+inline bool slop_update(bool& dst, bool v) {
+  if (dst == v) {
+    return false;
+  }
+  dst = v;
+  return true;
 }

@@ -376,8 +376,8 @@ public:
   // template parameter); Mem_dyn carries the same layout for either backend.
   auto read_all() const { return slop_read_all(data_); }
   template <int W>
-  void apply_update(const Slop<W>& bus) {
-    slop_apply_update(data_, bus);
+  bool apply_update(const Slop<W>& bus) {  // true = some entry changed
+    return slop_apply_update(data_, bus);
   }
 
   // --- Stage a write for this cycle ---
@@ -401,28 +401,48 @@ public:
   // --- Commit the staged writes and start a new cycle ---
   // Ascending port order, so the highest-numbered enabled port wins a
   // same-address collision (per lane), matching cgen_memory_*.v.
-  void tick() {
+  // Returns whether any stored entry actually CHANGED (a write of the value
+  // already stored reports false) — the sim's change-gated evaluation folds
+  // this into its generation counter.
+  bool tick() {
+    bool changed = false;
     for (int w = 0; w < NWr; ++w) {
       auto& p = pend_[static_cast<std::size_t>(w)];
       if (!p.fired) {
         continue;
       }
       auto& slot = data_[static_cast<std::size_t>(p.addr)];
+      V     nv;
       if (val::truthy(p.xlanes)) {
         // An uncertain enable commits x, not the old value and not `din`.
-        slot = val::undef_lanes(mem_merge<V>(slot, p.din, p.lanes, Bits), p.xlanes, Bits);
+        nv = val::undef_lanes(mem_merge<V>(slot, p.din, p.lanes, Bits), p.xlanes, Bits);
       } else if constexpr (WenSize == 1) {
         // No canonicalization: `din` is asserted to fit in `Bits` at staging,
         // which makes this identical to what mem_merge would produce.
-        slot = p.din;
+        nv = p.din;
       } else {
-        slot = mem_merge<V>(slot, p.din, p.lanes, Bits);
+        nv = mem_merge<V>(slot, p.din, p.lanes, Bits);
+      }
+      if (!mem_val_same_(slot, nv)) {
+        slot    = nv;
+        changed = true;
       }
       p.clear();
     }
+    return changed;
   }
 
 protected:
+  // Exact stored-representation equality for the change report above: Slop
+  // entries compare via identical(), plain integer backends via ==.
+  static bool mem_val_same_(const V& a, const V& b) {
+    if constexpr (requires { a.identical(b); }) {
+      return a.identical(b);
+    } else {
+      return a == b;
+    }
+  }
+
   // Out-of-range reads return 0, matching the pre-existing hlop and cgen.sim
   // behavior (the Verilog wrapper cannot have an out-of-range address). An
   // unknown address makes the whole read undefined.
