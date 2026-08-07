@@ -168,6 +168,60 @@ TEST(Slop_mixed_width, compares_are_zero_or_one) {
   EXPECT_TRUE(Slop<8>::create_integer(5).eq_op(Slop<8>::create_integer(5)).is_known_true());
 }
 
+// and/or/xor cannot GROW a value -- every set bit of the result was already set
+// in an operand (AND is bounded by min(A,B), OR/XOR by max(A,B)). So in the
+// UNSIGNED domain, the one where cgen reads with zext_to, the `.zext_to<R>()`
+// cgen appends to the RESULT is a pure no-op and can be dropped: the op already
+// leaves nothing above R to clear. This is structural, not a consequence of the
+// bitwidth precondition -- it holds at the TIGHT R below, where R is exactly the
+// width the bitwidth pass stamps, with no slack.
+//
+// add/mult/shl do grow, so their trailing clamp has to stay; the negative
+// control at the end pins that the check is not vacuous.
+namespace {
+template <int A, int B>
+void no_result_clamp(int64_t xa, int64_t xb) {
+  const auto    a   = Slop<A>::create_integer(fit_unsigned<A>(xa));
+  const auto    b   = Slop<B>::create_integer(fit_unsigned<B>(xb));
+  constexpr int MIN = A < B ? A : B;
+  constexpr int MAX = A < B ? B : A;
+
+  const auto an = Slop<MIN>::and_op(a, b);
+  const auto on = Slop<MAX>::or_op(a, b);
+  const auto xn = Slop<MAX>::xor_op(a, b);
+  EXPECT_EQ(an.to_binary(), an.template zext_to<MIN>().to_binary()) << "u.and needs no result clamp";
+  EXPECT_EQ(on.to_binary(), on.template zext_to<MAX>().to_binary()) << "u.or needs no result clamp";
+  EXPECT_EQ(xn.to_binary(), xn.template zext_to<MAX>().to_binary()) << "u.xor needs no result clamp";
+}
+
+template <int A, int B>
+void sweep_no_clamp() {
+  std::mt19937_64 rng(0x5EED);
+  for (int i = 0; i < 500; ++i) {
+    no_result_clamp<A, B>(static_cast<int64_t>(rng()), static_cast<int64_t>(rng()));
+  }
+}
+}  // namespace
+
+TEST(Slop_mixed_width, bitwise_needs_no_result_clamp) {
+  sweep_no_clamp<2, 2>();
+  sweep_no_clamp<8, 8>();
+  sweep_no_clamp<16, 4>();
+  sweep_no_clamp<3, 11>();
+  sweep_no_clamp<32, 32>();
+  sweep_no_clamp<62, 8>();
+  sweep_no_clamp<64, 64>();
+  sweep_no_clamp<66, 80>();
+  sweep_no_clamp<128, 128>();
+  sweep_no_clamp<100, 200>();
+
+  // Negative control: below the guaranteed width the clamp DOES change the
+  // value, so the sweep above is testing something real.
+  const auto wide = Slop<32>::create_integer(0x0F0F0F);
+  const auto orr  = Slop<8>::or_op(wide, Slop<8>::create_integer(0));
+  EXPECT_NE(orr.to_binary(), orr.zext_to<8>().to_binary());
+}
+
 // Mixed-width get_mask must agree with the member form on every mask shape,
 // EXCEPT the single-selected-bit case, where it deliberately yields the unsigned
 // 0/1 instead of the member form's signed -1.

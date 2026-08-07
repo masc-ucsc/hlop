@@ -144,15 +144,37 @@ public:
   // outputs are tagged unsigned by tolg's bind_result, so this is the common
   // path. Like the constructor, it also enforces the SOURCE's declared width on
   // read (a value an unmasked op left wider than N is wrapped to N bits here).
+  //
+  // COST: everything below is decided at compile time. `keep = min(N,W)` bits
+  // are copied word-by-word (the default ctor already zeroed the rest), and at
+  // most ONE word ever needs masking -- the word `keep` falls inside. When
+  // `keep` instead lands exactly on the top of the copied words the mask is
+  // provably redundant and drops out entirely, so the whole call is a copy:
+  //   * W % 64 == 0 && N >= W  (e.g. zext_to<64> of any N >= 64)
+  //   * N % 64 == 0 && N <= W  (e.g. Slop<64> -> zext_to<100>)
+  // The N == W case still masks whenever N % 64 != 0: Slop stores values
+  // SIGN-extended and the ops do not re-mask, so bits above N-1 are routinely
+  // set -- Slop<8>{-1} has all 64 bits set, and add_op at width 8 leaves 300
+  // in base_[0]. Skipping that AND would turn `zext_to<8>()` into a no-op that
+  // silently drops the mod-2^8 wrap cgen.sim relies on.
   template <int W>
-  Slop<W> zext_to() const {
-    Slop<W>       r;  // default ctor: Integer, zeroed
-    constexpr int cw = (n_words < Slop<W>::n_words) ? n_words : Slop<W>::n_words;
+  constexpr Slop<W> zext_to() const {
+    constexpr int cw       = (n_words < Slop<W>::n_words) ? n_words : Slop<W>::n_words;
+    constexpr int keep     = (N < W ? N : W);
+    constexpr int top_word = keep / 64;
+    // Only the copied words can hold bits >= keep; anything above stays 0 from
+    // the default ctor. cw <= top_word+1 always, so this is the ONLY mask.
+    constexpr bool need_mask = top_word < cw;
+
+    Slop<W> r;  // default ctor: Integer, zeroed
     for (int i = 0; i < cw; ++i) {
       r.base_[i] = base_[i];
     }
-    constexpr int keep = (N < W ? N : W);
-    return r.adjust_bits(keep);  // clears bits >= keep -> zero-extended / masked
+    if constexpr (need_mask) {
+      // Built in unsigned space: at keep%64 == 63, int64_t(1) << 63 would be UB.
+      r.base_[top_word] &= static_cast<int64_t>((uint64_t(1) << (keep % 64)) - 1);
+    }
+    return r;
   }
 
   // --- Factory methods ---
@@ -503,6 +525,26 @@ public:
     return a;
   }
 
+  // Read a Slop<M>'s words AT THIS WIDTH. When M already carries this width's
+  // word count, widen_ degenerates to copying the array onto the stack word for
+  // word (the `Slop<M>::n_words < n_words` fill is compiled out), so hand back a
+  // reference to the source words instead and let the op read them in place.
+  // Only a genuine word-count change materializes a temporary.
+  //
+  // This is the common case for the ops that do NOT grow a value -- and/or/xor
+  // -- where the graph hands both operands and the result the same width, and
+  // it also covers same-word-count mismatches like Slop<96>::and_op(Slop<66>,
+  // Slop<80>). The returned reference is to the caller's operand, which outlives
+  // the full expression; the widen_ temporary lives to the end of it.
+  template <int M>
+  static constexpr decltype(auto) words_(const Slop<M>& s) {
+    if constexpr (Slop<M>::n_words == n_words) {
+      return (s.base_);  // const std::array<int64_t, n_words>& -- no copy
+    } else {
+      return widen_(s);  // by value
+    }
+  }
+
   // True when x, y and the result all fit a single word -- the scalar fast path.
   template <int A, int B>
   static constexpr bool one_word_ = (n_words == 1 && Slop<A>::n_words == 1 && Slop<B>::n_words == 1);
@@ -513,7 +555,7 @@ public:
     if constexpr (one_word_<A, B>) {
       r.base_[0] = x.base_[0] + y.base_[0];
     } else {
-      Blop::add<n_words>(r.base_, widen_(x), widen_(y));
+      Blop::add<n_words>(r.base_, words_(x), words_(y));
     }
     return r;
   }
@@ -524,9 +566,9 @@ public:
     if constexpr (one_word_<A, B>) {
       r.base_[0] = x.base_[0] - y.base_[0];
     } else {
-      auto ay = widen_(y);
+      auto ay = words_(y);
       Blop::neg<n_words>(ay, ay);
-      Blop::add<n_words>(r.base_, widen_(x), ay);
+      Blop::add<n_words>(r.base_, words_(x), ay);
     }
     return r;
   }
@@ -537,7 +579,7 @@ public:
     if constexpr (one_word_<A, B>) {
       r.base_[0] = x.base_[0] * y.base_[0];
     } else {
-      Blop::mult<n_words>(r.base_, widen_(x), widen_(y));
+      Blop::mult<n_words>(r.base_, words_(x), words_(y));
     }
     return r;
   }
@@ -548,7 +590,7 @@ public:
     if constexpr (one_word_<A, B>) {
       r.base_[0] = x.base_[0] & y.base_[0];
     } else {
-      Blop::band<n_words>(r.base_, widen_(x), widen_(y));
+      Blop::band<n_words>(r.base_, words_(x), words_(y));
     }
     return r;
   }
@@ -559,7 +601,7 @@ public:
     if constexpr (one_word_<A, B>) {
       r.base_[0] = x.base_[0] | y.base_[0];
     } else {
-      Blop::bor<n_words>(r.base_, widen_(x), widen_(y));
+      Blop::bor<n_words>(r.base_, words_(x), words_(y));
     }
     return r;
   }
@@ -570,7 +612,7 @@ public:
     if constexpr (one_word_<A, B>) {
       r.base_[0] = x.base_[0] ^ y.base_[0];
     } else {
-      Blop::bxor<n_words>(r.base_, widen_(x), widen_(y));
+      Blop::bxor<n_words>(r.base_, words_(x), words_(y));
     }
     return r;
   }
@@ -581,7 +623,7 @@ public:
     if constexpr (n_words == 1 && Slop<A>::n_words == 1) {
       r.base_[0] = ~x.base_[0];
     } else {
-      Blop::bnot<n_words>(r.base_, widen_(x));
+      Blop::bnot<n_words>(r.base_, words_(x));
     }
     return r;
   }
@@ -597,7 +639,7 @@ public:
     if constexpr (one_word_<A, B>) {
       r.base_[0] = (x.base_[0] == y.base_[0]) ? 1 : 0;
     } else {
-      r.base_[0] = Blop::eq<n_words>(widen_(x), widen_(y)) ? 1 : 0;
+      r.base_[0] = Blop::eq<n_words>(words_(x), words_(y)) ? 1 : 0;
     }
     return r;
   }
@@ -608,7 +650,7 @@ public:
     if constexpr (one_word_<A, B>) {
       r.base_[0] = (x.base_[0] < y.base_[0]) ? 1 : 0;
     } else {
-      r.base_[0] = Blop::lt<n_words>(widen_(x), widen_(y)) ? 1 : 0;
+      r.base_[0] = Blop::lt<n_words>(words_(x), words_(y)) ? 1 : 0;
     }
     return r;
   }
@@ -619,7 +661,7 @@ public:
     if constexpr (one_word_<A, B>) {
       r.base_[0] = (x.base_[0] > y.base_[0]) ? 1 : 0;
     } else {
-      r.base_[0] = Blop::lt<n_words>(widen_(y), widen_(x)) ? 1 : 0;
+      r.base_[0] = Blop::lt<n_words>(words_(y), words_(x)) ? 1 : 0;
     }
     return r;
   }
@@ -631,10 +673,10 @@ public:
   static Slop shl_op(const Slop<A>& x, int64_t amount) {
     Slop r;
     if (amount == 0) {
-      r.base_ = widen_(x);
+      r.base_ = words_(x);
       return r;
     }
-    Blop::shl<n_words>(r.base_, widen_(x), amount);
+    Blop::shl<n_words>(r.base_, words_(x), amount);
     return r;
   }
 
@@ -642,10 +684,10 @@ public:
   static Slop sra_op(const Slop<A>& x, int64_t amount) {
     Slop r;
     if (amount == 0) {
-      r.base_ = widen_(x);
+      r.base_ = words_(x);
       return r;
     }
-    Blop::shr<n_words>(r.base_, widen_(x), amount);
+    Blop::shr<n_words>(r.base_, words_(x), amount);
     return r;
   }
 

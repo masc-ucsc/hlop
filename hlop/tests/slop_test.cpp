@@ -419,3 +419,35 @@ TEST_F(Slop_test, xwidth_multiword) {
   EXPECT_EQ(Slop<8>::create_integer(200).zext_to<100>().to_just_i64(), 200);  // unsigned widen across words
   EXPECT_EQ((Slop<8>{Slop<100>::create_integer(-3)}).to_just_i64(), -3);  // narrow wide -> one word
 }
+
+// zext_to skips its mask only when `keep` lands on the top of the result's word
+// array. Everything below still needs it: Slop stores values SIGN-extended and
+// ops never re-mask, so the source routinely carries bits above N-1. These pin
+// the cases where turning zext_to into a plain copy would silently pass garbage.
+TEST_F(Slop_test, xwidth_unsigned_mask_is_load_bearing) {
+  // N == W: -1 at width 8 has all 64 bits set; reading it unsigned is 255.
+  EXPECT_EQ(Slop<8>::create_integer(-1).zext_to<8>().to_just_i64(), 255);
+  // N == W on an unmasked op result: 200+100 leaves 300 in base_[0], wraps to 44.
+  EXPECT_EQ((Slop<8>::add_op(Slop<8>::create_integer(200), Slop<8>::create_integer(100))).zext_to<8>().to_just_i64(), 44);
+  // N < W, both in one word: the source's high bits must NOT leak into the result.
+  EXPECT_EQ(Slop<8>::create_integer(-1).zext_to<16>().to_just_i64(), 255);
+  EXPECT_EQ(Slop<8>::create_integer(-1).zext_to<64>().to_just_i64(), 255);
+  // N < W crossing a word: bit 63 of the source is below `keep`, bits above are not.
+  EXPECT_EQ(Slop<32>::create_integer(-1).zext_to<100>().to_just_i64(), 0xFFFFFFFFLL);
+  // W % 64 == 0 with N >= W: no bits above `keep` exist, so the value passes through.
+  EXPECT_EQ(Slop<64>::create_integer(-1).zext_to<64>().to_just_i64(), -1);
+  EXPECT_EQ(Slop<100>::create_integer(-1).zext_to<64>().to_just_i64(), -1);
+  // N % 64 == 0 widening: also mask-free, and the new upper word must read 0.
+  EXPECT_EQ(Slop<64>::create_integer(-1).zext_to<100>().to_binary(), Slop<100>::create_integer(-1).zext_to<64>().zext_to<100>().to_binary());
+}
+
+// zext_to is constexpr: usable in constant expressions, so cgen-emitted width
+// conversions on literals fold at compile time.
+TEST_F(Slop_test, xwidth_unsigned_constexpr) {
+  constexpr auto widen  = Slop<8>::create_integer(200).zext_to<16>();
+  constexpr auto narrow = Slop<16>::create_integer(600).zext_to<9>();
+  constexpr auto same   = Slop<8>::create_integer(-1).zext_to<8>();
+  EXPECT_EQ(widen.to_just_i64(), 200);
+  EXPECT_EQ(narrow.to_just_i64(), 88);
+  EXPECT_EQ(same.to_just_i64(), 255);
+}
