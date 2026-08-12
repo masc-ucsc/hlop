@@ -929,18 +929,26 @@ public:
       return false;
     }
     for (int w = lo / 64; w <= (hi - 1) / 64; ++w) {
-      uint64_t expect = ~uint64_t(0);
-      if (w == lo / 64) {
-        expect &= ~uint64_t(0) << (lo % 64);
-      }
-      if (w == (hi - 1) / 64 && (hi % 64) != 0) {
-        expect &= ~uint64_t(0) >> (64 - hi % 64);
-      }
+      const uint64_t expect = range_word_mask_(w, lo, hi);
       if ((static_cast<uint64_t>(m.base_[w]) & expect) != expect) {
         return false;
       }
     }
     return true;
+  }
+
+  // The 64 bits of the contiguous mask [lo, hi) that live in word `w`. Only
+  // words in [lo/64, (hi-1)/64] are asked for; every other word of the mask is
+  // all-zero, so callers skip them instead of AND-ing with 0.
+  static constexpr uint64_t range_word_mask_(int w, int lo, int hi) {
+    uint64_t m = ~uint64_t(0);
+    if (w == lo / 64) {
+      m &= ~uint64_t(0) << (lo % 64);
+    }
+    if (w == (hi - 1) / 64 && (hi % 64) != 0) {
+      m &= ~uint64_t(0) >> (64 - hi % 64);
+    }
+    return m;
   }
 
   // Bits [lo, lo+len) of x (sign-extending past its storage, like bit_test),
@@ -1186,62 +1194,14 @@ public:
     // field write lowers to. The generic loop below walks EVERY bit of the
     // result; on wide datapath Slops (the 500-1000+ bit VPU vectors of
     // lhdsuite's minion) that per-bit walk dominated whole-design simulation.
-    // A contiguous range is a word-wise splice: clear [lo, hi), OR in
-    // `value << lo`. Bit-for-bit identical to the loop (value bits map
+    // A contiguous range is a word-wise splice, which is exactly what
+    // set_mask_op_opt does. Bit-for-bit identical to the loop (value bits map
     // LSB-first onto the selected range; bits at/above out_bits never write
     // and never consume value bits, hence the `hi` cap).
     if (!mask_neg) {
-      int lo = -1, hi = -1;
-      for (int w = 0; w < n_words; ++w) {
-        const auto mw = static_cast<uint64_t>(mask.base_[w]);
-        if (mw == 0) {
-          continue;
-        }
-        if (lo < 0) {
-          lo = w * 64 + __builtin_ctzll(mw);
-        }
-        hi = w * 64 + 64 - __builtin_clzll(mw);
-      }
-      bool contig = lo >= 0;
-      for (int w = lo / 64; contig && w <= (hi - 1) / 64; ++w) {
-        uint64_t expect = ~uint64_t(0);
-        if (w == lo / 64) {
-          expect &= ~uint64_t(0) << (lo % 64);
-        }
-        if (w == (hi - 1) / 64 && (hi % 64) != 0) {
-          expect &= ~uint64_t(0) >> (64 - hi % 64);
-        }
-        contig = (static_cast<uint64_t>(mask.base_[w]) & expect) == expect;
-      }
-      if (contig) {
-        if (hi > out_bits) {
-          hi = out_bits;
-        }
-        Slop fast = *this;
-        if (hi > lo) {
-          const uint64_t vsign = value.is_negative() ? ~uint64_t(0) : uint64_t(0);
-          const auto     vword
-              = [&](int idx) -> uint64_t { return (idx >= 0 && idx < n_words) ? static_cast<uint64_t>(value.base_[idx]) : vsign; };
-          const auto vshifted = [&](int w) -> uint64_t {  // 64 bits of (value << lo) at word w
-            const int j = w * 64 - lo;
-            if (j >= 0) {
-              const int wi = j / 64, sh = j % 64;
-              return sh == 0 ? vword(wi) : (vword(wi) >> sh) | (vword(wi + 1) << (64 - sh));
-            }
-            return vword(0) << (-j);
-          };
-          for (int w = lo / 64; w <= (hi - 1) / 64 && w < n_words; ++w) {
-            uint64_t m = ~uint64_t(0);
-            if (w == lo / 64) {
-              m &= ~uint64_t(0) << (lo % 64);
-            }
-            if (w == (hi - 1) / 64 && (hi % 64) != 0) {
-              m &= ~uint64_t(0) >> (64 - hi % 64);
-            }
-            fast.base_[w] = static_cast<int64_t>((static_cast<uint64_t>(fast.base_[w]) & ~m) | (vshifted(w) & m));
-          }
-        }
-        return fast;
+      int lo = 0, hi = 0;
+      if (contiguous_range_(mask, lo, hi)) {
+        return set_mask_op_opt(lo, hi > out_bits ? out_bits : hi, value);
       }
     }
 
@@ -1272,6 +1232,87 @@ public:
           result.base_[word] &= ~(int64_t(1) << bit);
         }
       }
+    }
+    return result;
+  }
+
+  // --- Contiguous-range mask writes (`_opt`) ---
+  //
+  // `_opt` marks an OPTIMIZED SPECIAL CASE, not an LGraph cell: unlike
+  // set_mask_op these have no Set_mask counterpart in livehd graph/cell.* to
+  // keep name-for-name in sync. They are set_mask_op narrowed to the mask shape
+  // a packed-field write always has — one contiguous run of ones.
+  //
+  // set_mask_op already fast-paths that shape, but the CALLER still has to
+  // materialize the mask, and the callee still has to rediscover its range on
+  // every execution. On a wide datapath that is expensive for what it says:
+  //
+  //   v.set_mask_op(Slop<544>::from_pyrope("0x0..0ffff..ffff0000000000000000"),
+  //                 Slop<544>::create_integer(0))
+  //
+  // pays for two nine-word constants, a get_bits(), a ctz/clz sweep over all
+  // nine mask words and a nine-word contiguity check — to express "clear bits
+  // 64..255", which the code generator knew literally. Spelled directly:
+  //
+  //   v.clear_mask_op_opt(64, 256)
+  //
+  // With literal bounds (what cgen emits) the whole word walk constant-folds:
+  // only the words the range actually touches survive.
+  //
+  // THE RANGE IS HALF-OPEN [lo, hi) — bit `lo` is included, bit `hi` is not.
+  // Same convention as contiguous_range_() above and Dlop::get_mask_range().
+  //
+  // Bit-exact with the general form for every 0 <= lo <= hi <= N:
+  //   x.set_mask_op_opt(lo, hi, value) == x.set_mask_op(m, value)
+  //   x.clear_mask_op_opt(lo, hi)      == x.set_mask_op(m, create_integer(0))
+  // where `m` is the positive Slop<N> holding exactly bits [lo, hi). An empty
+  // range (hi <= lo) returns *this, matching set_mask_op's zero-mask early-out.
+  // The type_ tag and every bit outside [lo, hi) — including the sign-extension
+  // region above get_bits() — carry through untouched, as in set_mask_op.
+
+  // Replace bits [lo, hi) with the low (hi - lo) bits of `value`, value's LSB
+  // landing at bit `lo`. `value` is read SIGNED: a range wider than the value's
+  // significant bits is filled with its sign, exactly as set_mask_op's LSB-first
+  // value.bit_test() walk does (bit_test sign-extends past storage).
+  Slop set_mask_op_opt(int lo, int hi, const Slop& value) const {
+    nil_check_();
+    I(!value.is_nil());
+    I(lo >= 0 && hi <= N, "set_mask_op_opt range is outside Slop<N>");
+
+    Slop result = *this;
+    if (hi <= lo) {
+      return result;
+    }
+    const uint64_t vsign = value.is_negative() ? ~uint64_t(0) : uint64_t(0);
+    const auto     vword
+        = [&](int idx) -> uint64_t { return (idx >= 0 && idx < n_words) ? static_cast<uint64_t>(value.base_[idx]) : vsign; };
+    const auto vshifted = [&](int w) -> uint64_t {  // 64 bits of (value << lo) at word w
+      const int j = w * 64 - lo;                    // w >= lo/64, so j > -64: both shifts are in range
+      if (j >= 0) {
+        const int wi = j / 64, sh = j % 64;
+        return sh == 0 ? vword(wi) : (vword(wi) >> sh) | (vword(wi + 1) << (64 - sh));
+      }
+      return vword(0) << (-j);
+    };
+    for (int w = lo / 64; w <= (hi - 1) / 64 && w < n_words; ++w) {
+      const uint64_t m = range_word_mask_(w, lo, hi);
+      result.base_[w]  = static_cast<int64_t>((static_cast<uint64_t>(result.base_[w]) & ~m) | (vshifted(w) & m));
+    }
+    return result;
+  }
+
+  // Clear bits [lo, hi) — set_mask_op_opt(lo, hi, create_integer(0)) without
+  // building (or reading) the zero operand.
+  Slop clear_mask_op_opt(int lo, int hi) const {
+    nil_check_();
+    I(lo >= 0 && hi <= N, "clear_mask_op_opt range is outside Slop<N>");
+
+    Slop result = *this;
+    if (hi <= lo) {
+      return result;
+    }
+    for (int w = lo / 64; w <= (hi - 1) / 64 && w < n_words; ++w) {
+      result.base_[w] = static_cast<int64_t>(static_cast<uint64_t>(result.base_[w]) & ~range_word_mask_(w, lo, hi));
     }
     return result;
   }

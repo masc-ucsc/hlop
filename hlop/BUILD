@@ -70,6 +70,16 @@ cc_test(
 )
 
 cc_test(
+    name = "slop_mask_opt_test",
+    srcs = ["tests/slop_mask_opt_test.cpp"],
+    copts = CPP23_COPTS,
+    deps = [
+        ":hlop",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
+cc_test(
     name = "slop_mixed_width_test",
     srcs = ["tests/slop_mixed_width_test.cpp"],
     copts = CPP23_COPTS,
