@@ -413,6 +413,17 @@ TEST_F(Slop_test, xwidth_unsigned_narrow) {
   EXPECT_EQ(Slop<16>::create_integer(600).zext_to<9>().to_just_i64(), 88);  // 600 wraps mod 512
 }
 
+TEST_F(Slop_test, xwidth_unsigned_fused_keep_and_land) {
+  // One operation must match the old truncate-then-zero-widen chain, including
+  // when the kept top bit is set (the destination's extra bit is the zero sign).
+  EXPECT_EQ((Slop<140>::create_integer(-1).zext_to<130, 131>()).to_binary(),
+            (Slop<140>::create_integer(-1).zext_to<130>().zext_to<131>()).to_binary());
+  EXPECT_EQ((Slop<8>::create_integer(-1).zext_to<1, 2>()).to_just_i64(), 1);
+  // A requested keep width beyond the source still zero-extends only the
+  // source's declared bits, exactly like the two-step form.
+  EXPECT_EQ((Slop<4>::create_integer(-1).zext_to<8, 9>()).to_just_i64(), 15);
+}
+
 TEST_F(Slop_test, xwidth_multiword) {
   EXPECT_EQ((Slop<100>{Slop<8>::create_integer(-1)}).to_just_i64(), -1);  // signed widen across words
   EXPECT_EQ((Slop<70>{Slop<8>::create_integer(5)}).to_just_i64(), 5);

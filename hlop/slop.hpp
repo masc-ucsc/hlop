@@ -157,16 +157,23 @@ public:
   // set -- Slop<8>{-1} has all 64 bits set, and add_op at width 8 leaves 300
   // in base_[0]. Skipping that AND would turn `zext_to<8>()` into a no-op that
   // silently drops the mod-2^8 wrap cgen.sim relies on.
-  template <int W>
-  constexpr Slop<W> zext_to() const {
-    constexpr int  cw        = (n_words < Slop<W>::n_words) ? n_words : Slop<W>::n_words;
+  // CarrierBits lets a caller keep the semantic zero-extension width while
+  // choosing a wider C++ carrier. For example, zext_to<130, 131>() retains bits
+  // [129:0], clears bit 130, and constructs Slop<131> in one pass; spelling
+  // zext_to<130>().zext_to<131>() performed the same copy/mask work twice.
+  // The default preserves the original zext_to<W>() API and semantics.
+  template <int W, int CarrierBits = W>
+  constexpr Slop<CarrierBits> zext_to() const {
+    static_assert(W >= 0, "zext_to width must be non-negative");
+    static_assert(CarrierBits >= W, "zext_to carrier is narrower than the zero-extended value");
+    constexpr int  cw        = (n_words < Slop<CarrierBits>::n_words) ? n_words : Slop<CarrierBits>::n_words;
     constexpr int  keep      = (N < W ? N : W);
     constexpr int  top_word  = keep / 64;
     // Only the copied words can hold bits >= keep; anything above stays 0 from
     // the default ctor. cw <= top_word+1 always, so this is the ONLY mask.
     constexpr bool need_mask = top_word < cw;
 
-    Slop<W> r;  // default ctor: Integer, zeroed
+    Slop<CarrierBits> r;  // default ctor: Integer, zeroed
     for (int i = 0; i < cw; ++i) {
       r.base_[i] = base_[i];
     }
