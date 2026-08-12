@@ -159,9 +159,9 @@ public:
   // silently drops the mod-2^8 wrap cgen.sim relies on.
   template <int W>
   constexpr Slop<W> zext_to() const {
-    constexpr int cw       = (n_words < Slop<W>::n_words) ? n_words : Slop<W>::n_words;
-    constexpr int keep     = (N < W ? N : W);
-    constexpr int top_word = keep / 64;
+    constexpr int  cw        = (n_words < Slop<W>::n_words) ? n_words : Slop<W>::n_words;
+    constexpr int  keep      = (N < W ? N : W);
+    constexpr int  top_word  = keep / 64;
     // Only the copied words can hold bits >= keep; anything above stays 0 from
     // the default ctor. cw <= top_word+1 always, so this is the ONLY mask.
     constexpr bool need_mask = top_word < cw;
@@ -497,8 +497,9 @@ public:
   //
   // PRECONDITION: N can hold the exact result -- the bitwidth inference that
   // runs before codegen guarantees it (upass_tolg's bind_result stamps
-  // bits = magnitude+1 on every computed output). There is deliberately no
-  // runtime check: the graph already proved it.
+  // bits = magnitude+1 on every computed output). Every non-width-reducing op
+  // below also enforces at compile time that N is at least every operand's
+  // carrier width. There is deliberately no runtime check.
   //
   // COST: when every operand and the result fit one 64-bit word (N <= 64, the
   // dominant case) each of these is a single scalar instruction on base_[0] --
@@ -549,8 +550,19 @@ public:
   template <int A, int B>
   static constexpr bool one_word_ = (n_words == 1 && Slop<A>::n_words == 1 && Slop<B>::n_words == 1);
 
+  // Fixed-width Slop is only a materialization of an unlimited-precision HLOP
+  // value. Codegen may choose a wider result carrier, but an ordinary operation
+  // must never choose one narrower than an input carrier. Explicitly reducing
+  // operations (comparison, remainder, AND masks/extracts, arithmetic right
+  // shift) do not use this check.
+  template <int... InputBits>
+  static consteval void input_width_check() {
+    static_assert(((N >= InputBits) && ...), "Slop result is narrower than an input; code generation would lose precision");
+  }
+
   template <int A, int B>
   static Slop add_op(const Slop<A>& x, const Slop<B>& y) {
+    input_width_check<A, B>();
     Slop r;
     if constexpr (one_word_<A, B>) {
       r.base_[0] = x.base_[0] + y.base_[0];
@@ -562,6 +574,7 @@ public:
 
   template <int A, int B>
   static Slop sub_op(const Slop<A>& x, const Slop<B>& y) {
+    input_width_check<A, B>();
     Slop r;
     if constexpr (one_word_<A, B>) {
       r.base_[0] = x.base_[0] - y.base_[0];
@@ -575,6 +588,7 @@ public:
 
   template <int A, int B>
   static Slop mult_op(const Slop<A>& x, const Slop<B>& y) {
+    input_width_check<A, B>();
     Slop r;
     if constexpr (one_word_<A, B>) {
       r.base_[0] = x.base_[0] * y.base_[0];
@@ -597,6 +611,7 @@ public:
 
   template <int A, int B>
   static Slop or_op(const Slop<A>& x, const Slop<B>& y) {
+    input_width_check<A, B>();
     Slop r;
     if constexpr (one_word_<A, B>) {
       r.base_[0] = x.base_[0] | y.base_[0];
@@ -608,6 +623,7 @@ public:
 
   template <int A, int B>
   static Slop xor_op(const Slop<A>& x, const Slop<B>& y) {
+    input_width_check<A, B>();
     Slop r;
     if constexpr (one_word_<A, B>) {
       r.base_[0] = x.base_[0] ^ y.base_[0];
@@ -619,6 +635,7 @@ public:
 
   template <int A>
   static Slop not_op(const Slop<A>& x) {
+    input_width_check<A>();
     Slop r;
     if constexpr (n_words == 1 && Slop<A>::n_words == 1) {
       r.base_[0] = ~x.base_[0];
@@ -671,6 +688,7 @@ public:
   // pass a shift count (788 sites in one design, 270 of them multi-word).
   template <int A>
   static Slop shl_op(const Slop<A>& x, int64_t amount) {
+    input_width_check<A>();
     Slop r;
     if (amount == 0) {
       r.base_ = words_(x);
@@ -678,6 +696,12 @@ public:
     }
     Blop::shl<n_words>(r.base_, words_(x), amount);
     return r;
+  }
+
+  template <int A, int AmountBits>
+  static Slop shl_op(const Slop<A>& x, const Slop<AmountBits>& amount) {
+    input_width_check<A>();
+    return shl_op(x, amount.base_[0]);
   }
 
   template <int A>
@@ -689,6 +713,11 @@ public:
     }
     Blop::shr<n_words>(r.base_, words_(x), amount);
     return r;
+  }
+
+  template <int A, int AmountBits>
+  static Slop sra_op(const Slop<A>& x, const Slop<AmountBits>& amount) {
+    return sra_op(x, amount.base_[0]);
   }
 
   // --- Arithmetic ---
@@ -921,14 +950,13 @@ public:
       len = 64 * n_words;
     }
     const uint64_t xsign = x.is_negative() ? ~uint64_t(0) : uint64_t(0);
-    const auto     xword = [&](int idx) -> uint64_t {
-      return (idx >= 0 && idx < Slop<A>::n_words) ? static_cast<uint64_t>(x.base_[idx]) : xsign;
-    };
+    const auto     xword
+        = [&](int idx) -> uint64_t { return (idx >= 0 && idx < Slop<A>::n_words) ? static_cast<uint64_t>(x.base_[idx]) : xsign; };
     const int nw = (len + 63) / 64;
     for (int w = 0; w < nw && w < n_words; ++w) {
       const int j  = lo + w * 64;
       const int wi = j / 64, sh = j % 64;
-      uint64_t  v  = sh == 0 ? xword(wi) : (xword(wi) >> sh) | (xword(wi + 1) << (64 - sh));
+      uint64_t  v = sh == 0 ? xword(wi) : (xword(wi) >> sh) | (xword(wi + 1) << (64 - sh));
       if (w == nw - 1 && (len % 64) != 0) {
         v &= ~uint64_t(0) >> (64 - len % 64);
       }
@@ -1185,9 +1213,8 @@ public:
         Slop fast = *this;
         if (hi > lo) {
           const uint64_t vsign = value.is_negative() ? ~uint64_t(0) : uint64_t(0);
-          const auto     vword = [&](int idx) -> uint64_t {
-            return (idx >= 0 && idx < n_words) ? static_cast<uint64_t>(value.base_[idx]) : vsign;
-          };
+          const auto     vword
+              = [&](int idx) -> uint64_t { return (idx >= 0 && idx < n_words) ? static_cast<uint64_t>(value.base_[idx]) : vsign; };
           const auto vshifted = [&](int w) -> uint64_t {  // 64 bits of (value << lo) at word w
             const int j = w * 64 - lo;
             if (j >= 0) {
@@ -1294,10 +1321,17 @@ public:
   // explicitly. Slop carries no unknowns, so these are the plain concrete
   // cases of the matching Dlop ops.
 
-  // mux_op: Y = values[sel] (0-based). A non-integer or out-of-range selector
-  // returns invalid().
-  static Slop mux_op(const Slop& sel, std::span<const Slop> values) {
+  // mux_op: for two data arms the selector is a condition (zero selects arm 0,
+  // any nonzero value selects arm 1), matching LNAST/LGraph Mux. With three or
+  // more arms it is a zero-based index. A non-integer or out-of-range indexed
+  // selector returns invalid(). Selector width is independent of data/result
+  // width.
+  template <int SelBits>
+  static Slop mux_op(const Slop<SelBits>& sel, std::span<const Slop> values) {
     assert(!values.empty());
+    if (values.size() == 2) {
+      return sel.is_known_false() ? values[0] : values[1];
+    }
     if (!sel.is_just_i64()) {
       return invalid();
     }
@@ -1307,13 +1341,27 @@ public:
     }
     return values[idx];
   }
-  static Slop mux_op(const Slop& sel, std::initializer_list<Slop> values) {
+  template <int SelBits>
+  static Slop mux_op(const Slop<SelBits>& sel, std::initializer_list<Slop> values) {
     return mux_op(sel, std::span<const Slop>(values.begin(), values.size()));
   }
 
-  // hotmux_op: one-hot selector — bit `i` selects values[i]. The selector is
-  // asserted to be one-hot; an out-of-range hot bit returns invalid().
-  static Slop hotmux_op(const Slop& sel, std::span<const Slop> values) {
+  // Heterogeneous data-arm form used by generated LGraph kernels. Each arm is
+  // losslessly promoted inside HLOP after the compile-time width contract.
+  template <int SelBits, int... ValueBits>
+  static Slop mux_op(const Slop<SelBits>& sel, const Slop<ValueBits>&... values) {
+    static_assert(sizeof...(ValueBits) > 0, "Mux requires at least one data input");
+    input_width_check<ValueBits...>();
+    const std::array<Slop, sizeof...(ValueBits)> widened{Slop{values}...};
+    return mux_op(sel, std::span<const Slop>(widened));
+  }
+
+  // hotmux_op: one-hot selector — bit `i` selects values[i]. Selector width is
+  // independent of the result/data width: a wide one-hot decode can select a
+  // narrow value. The selector is asserted to be one-hot; an out-of-range hot
+  // bit returns invalid().
+  template <int SelBits>
+  static Slop hotmux_op(const Slop<SelBits>& sel, std::span<const Slop> values) {
     assert(!values.empty());
     assert(sel.popcount() == 1 && "hotmux select must be one-hot");
     int b = sel.get_first_bit_set();
@@ -1322,8 +1370,19 @@ public:
     }
     return values[b];
   }
-  static Slop hotmux_op(const Slop& sel, std::initializer_list<Slop> values) {
+  template <int SelBits>
+  static Slop hotmux_op(const Slop<SelBits>& sel, std::initializer_list<Slop> values) {
     return hotmux_op(sel, std::span<const Slop>(values.begin(), values.size()));
+  }
+
+  // Heterogeneous data-arm form. As with mux_op, promotion is lossless and an
+  // undersized generated result is rejected while compiling the kernel.
+  template <int SelBits, int... ValueBits>
+  static Slop hotmux_op(const Slop<SelBits>& sel, const Slop<ValueBits>&... values) {
+    static_assert(sizeof...(ValueBits) > 0, "Hotmux requires at least one data input");
+    input_width_check<ValueBits...>();
+    const std::array<Slop, sizeof...(ValueBits)> widened{Slop{values}...};
+    return hotmux_op(sel, std::span<const Slop>(widened));
   }
 
   // lut_op: Yosys `$lut` semantics — 1-bit result `table[addr]` (bit `addr` of
@@ -1586,7 +1645,7 @@ public:
   // inserts a '_' every 4 digits (3 for decimal) from the LSB.
   std::string to_hex(int digits = 0, bool sep = false, bool upper = false) const {
     std::string result;
-    auto append_mag = [&](const Slop& mag) {
+    auto        append_mag = [&](const Slop& mag) {
       bool lead = true;
       for (int i = n_words - 1; i >= 0; --i) {
         auto w = static_cast<uint64_t>(mag.base_[i]);
@@ -1626,12 +1685,12 @@ public:
     } else {
       // Wide bignum -> decimal: repeated limb division by 10^19 (the largest
       // power of ten in a uint64), emitting 19 digits per round.
-      const bool             neg = is_negative();
-      const Slop             mag = neg ? neg_op() : *this;
-      std::vector<uint64_t>  limbs(mag.base_.begin(), mag.base_.end());
-      constexpr uint64_t     kChunk = 10000000000000000000ULL;  // 10^19
-      std::vector<uint64_t>  chunks;
-      auto nonzero = [&]() {
+      const bool            neg = is_negative();
+      const Slop            mag = neg ? neg_op() : *this;
+      std::vector<uint64_t> limbs(mag.base_.begin(), mag.base_.end());
+      constexpr uint64_t    kChunk = 10000000000000000000ULL;  // 10^19
+      std::vector<uint64_t> chunks;
+      auto                  nonzero = [&]() {
         for (auto w : limbs) {
           if (w != 0) {
             return true;
@@ -1642,9 +1701,9 @@ public:
       while (nonzero()) {
         unsigned __int128 rem = 0;
         for (int i = static_cast<int>(limbs.size()) - 1; i >= 0; --i) {
-          unsigned __int128 cur = (rem << 64) | limbs[static_cast<size_t>(i)];
+          unsigned __int128 cur         = (rem << 64) | limbs[static_cast<size_t>(i)];
           limbs[static_cast<size_t>(i)] = static_cast<uint64_t>(cur / kChunk);
-          rem                            = cur % kChunk;
+          rem                           = cur % kChunk;
         }
         chunks.push_back(static_cast<uint64_t>(rem));
       }
@@ -1724,7 +1783,7 @@ public:
     if (type_ == Type::String) {
       return std::format("\"{}\"", to_string());
     }
-    int nbits = get_bits();
+    int         nbits = get_bits();
     // For negatives, format the two's-complement magnitude (neg_op) as hex,
     // matching Dlop::to_verilog. Emitting the raw sign-extended words would
     // print the full-width 0xff..f instead of the magnitude.
@@ -1769,7 +1828,7 @@ public:
 // would destroy the fixed field grid; NOT the signed ctor, which would
 // sign-pollute the high bits).
 template <int B, std::size_t S>
-Slop<B * static_cast<int>(S)> slop_read_all(const std::array<Slop<B>, S>& a) {
+Slop<B* static_cast<int>(S)> slop_read_all(const std::array<Slop<B>, S>& a) {
   constexpr int W = B * static_cast<int>(S);
   Slop<W>       bus;  // default-constructs to integer 0
   for (std::size_t i = 0; i < S; ++i) {
@@ -1801,12 +1860,14 @@ bool slop_apply_update(std::array<Slop<B>, S>& dst, const Slop<W>& bus) {
 // write and state commit through this, accumulating the result into the
 // instance's `__gen` generation counter — the substrate for skipping settles
 // of quiesced (idle / clock-gated) cones.
-template <int N>
-inline bool slop_update(Slop<N>& dst, const Slop<N>& v) {
-  if (dst.identical(v)) {
+template <int DstBits, int SrcBits>
+inline bool slop_update(Slop<DstBits>& dst, const Slop<SrcBits>& v) {
+  static_assert(DstBits >= SrcBits, "Slop update destination is narrower than the source; code generation would lose precision");
+  const Slop<DstBits> widened{v};
+  if (dst.identical(widened)) {
     return false;
   }
-  dst = v;
+  dst = widened;
   return true;
 }
 inline bool slop_update(bool& dst, bool v) {

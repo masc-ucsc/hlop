@@ -1674,6 +1674,23 @@ spool_ptr<Dlop> Dlop::merge_unknown(const std::vector<const Dlop*>& cands) {
 spool_ptr<Dlop> Dlop::mux_op(const Dlop& sel, std::span<const spool_ptr<Dlop>> values) {
   assert(!values.empty());
 
+  // LNAST/LGraph's two-arm Mux selector is a condition, not an integer index:
+  // zero selects arm 0 and any nonzero value selects arm 1. If no bit is known
+  // set but some are unknown, both arms remain reachable. merge_unknown widens
+  // heterogeneous candidates to their widest value, so no precision is lost.
+  if (values.size() == 2) {
+    if (!sel.is_numeric()) {
+      return nil();
+    }
+    if (sel.is_known_false()) {
+      return clone(*values[0]);
+    }
+    if (sel.is_known_true()) {
+      return clone(*values[1]);
+    }
+    return merge_unknown({&*values[0], &*values[1]});
+  }
+
   // True iff index `i` is consistent with sel's known/unknown bit pattern:
   // every *known* selector bit must match the corresponding bit of `i`.
   auto consistent = [&](size_t i) -> bool {

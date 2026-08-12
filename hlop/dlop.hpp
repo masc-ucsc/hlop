@@ -654,12 +654,13 @@ public:
   // matching the LGraph node shape where pid 0 is the selector and pid 1..N
   // are the ordered values.
   //
-  // mux_op: Y = values[sel] (0-based; sel == 0 picks values[0]). A fully known
-  // selector picks one value exactly; a known out-of-range / non-integer
-  // selector returns invalid(). When `sel` has unknown bits, every value whose
-  // index is still reachable under the known/unknown bit pattern is ternary-
-  // merged: bit positions that are known and equal across all reachable values
-  // stay known, any differing or unknown bit becomes unknown.
+  // mux_op: with two values, zero selects values[0] and any nonzero condition
+  // selects values[1]. With three or more values, sel is a zero-based index. A
+  // fully known selector picks one value exactly; a known out-of-range /
+  // non-integer indexed selector returns invalid(). When `sel` has unknown
+  // bits, every reachable value is ternary-merged at the widest candidate
+  // width: known equal bits stay known, differing or unknown bits become
+  // unknown. Values may have heterogeneous widths; no arm is narrowed.
   static spool_ptr<Dlop> mux_op(const Dlop& sel, std::span<const spool_ptr<Dlop>> values);
   static spool_ptr<Dlop> mux_op(const Dlop& sel, std::initializer_list<spool_ptr<Dlop>> values) {
     return mux_op(sel, std::span<const spool_ptr<Dlop>>(values.begin(), values.size()));

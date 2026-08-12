@@ -52,8 +52,8 @@ int64_t fit_unsigned(int64_t v) {
 template <int A, int B, int R>
 void check(int64_t xa, int64_t xb) {
   {  // UNSIGNED domain: cgen reads operands with .zext_to<R>()
-    const auto a = Slop<A>::create_integer(fit_unsigned<A>(xa));
-    const auto b = Slop<B>::create_integer(fit_unsigned<B>(xb));
+    const auto a  = Slop<A>::create_integer(fit_unsigned<A>(xa));
+    const auto b  = Slop<B>::create_integer(fit_unsigned<B>(xb));
     const auto ea = a.template zext_to<R>();
     const auto eb = b.template zext_to<R>();
 
@@ -67,15 +67,9 @@ void check(int64_t xa, int64_t xb) {
 
     // Compares materialize 0/1 directly -- the fixed-width form needs the
     // .zext_to<1>() clamp because create_bool's true is all-ones.
-    EXPECT_EQ((Slop<R>::eq_op(a, b)).to_binary(),
-              ea.eq_op(eb).template zext_to<1>().template zext_to<R>().to_binary())
-        << "u.eq";
-    EXPECT_EQ((Slop<R>::lt_op(a, b)).to_binary(),
-              ea.lt_op(eb).template zext_to<1>().template zext_to<R>().to_binary())
-        << "u.lt";
-    EXPECT_EQ((Slop<R>::gt_op(a, b)).to_binary(),
-              ea.gt_op(eb).template zext_to<1>().template zext_to<R>().to_binary())
-        << "u.gt";
+    EXPECT_EQ((Slop<R>::eq_op(a, b)).to_binary(), ea.eq_op(eb).template zext_to<1>().template zext_to<R>().to_binary()) << "u.eq";
+    EXPECT_EQ((Slop<R>::lt_op(a, b)).to_binary(), ea.lt_op(eb).template zext_to<1>().template zext_to<R>().to_binary()) << "u.lt";
+    EXPECT_EQ((Slop<R>::gt_op(a, b)).to_binary(), ea.gt_op(eb).template zext_to<1>().template zext_to<R>().to_binary()) << "u.gt";
 
     for (int64_t amt : {int64_t{0}, int64_t{1}, int64_t{3}, int64_t{31}, int64_t{64}}) {
       EXPECT_EQ((Slop<R>::shl_op(a, amt)).to_binary(), ea.shl_op(amt).to_binary()) << "u.shl " << amt;
@@ -83,8 +77,8 @@ void check(int64_t xa, int64_t xb) {
     }
   }
   {  // SIGNED domain: cgen reads operands with the cross-width ctor Slop<R>{x}
-    const auto a = Slop<A>::create_integer(fit_signed<A>(xa));
-    const auto b = Slop<B>::create_integer(fit_signed<B>(xb));
+    const auto a  = Slop<A>::create_integer(fit_signed<A>(xa));
+    const auto b  = Slop<B>::create_integer(fit_signed<B>(xb));
     const auto ea = Slop<R>{a};
     const auto eb = Slop<R>{b};
 
@@ -95,15 +89,9 @@ void check(int64_t xa, int64_t xb) {
     EXPECT_EQ((Slop<R>::or_op(a, b)).to_binary(), ea.or_op(eb).to_binary()) << "s.or";
     EXPECT_EQ((Slop<R>::xor_op(a, b)).to_binary(), ea.xor_op(eb).to_binary()) << "s.xor";
     EXPECT_EQ((Slop<R>::not_op(a)).to_binary(), ea.not_op().to_binary()) << "s.not";
-    EXPECT_EQ((Slop<R>::eq_op(a, b)).to_binary(),
-              ea.eq_op(eb).template zext_to<1>().template zext_to<R>().to_binary())
-        << "s.eq";
-    EXPECT_EQ((Slop<R>::lt_op(a, b)).to_binary(),
-              ea.lt_op(eb).template zext_to<1>().template zext_to<R>().to_binary())
-        << "s.lt";
-    EXPECT_EQ((Slop<R>::gt_op(a, b)).to_binary(),
-              ea.gt_op(eb).template zext_to<1>().template zext_to<R>().to_binary())
-        << "s.gt";
+    EXPECT_EQ((Slop<R>::eq_op(a, b)).to_binary(), ea.eq_op(eb).template zext_to<1>().template zext_to<R>().to_binary()) << "s.eq";
+    EXPECT_EQ((Slop<R>::lt_op(a, b)).to_binary(), ea.lt_op(eb).template zext_to<1>().template zext_to<R>().to_binary()) << "s.lt";
+    EXPECT_EQ((Slop<R>::gt_op(a, b)).to_binary(), ea.gt_op(eb).template zext_to<1>().template zext_to<R>().to_binary()) << "s.gt";
     for (int64_t amt : {int64_t{0}, int64_t{1}, int64_t{3}, int64_t{31}, int64_t{64}}) {
       EXPECT_EQ((Slop<R>::shl_op(a, amt)).to_binary(), ea.shl_op(amt).to_binary()) << "s.shl " << amt;
       EXPECT_EQ((Slop<R>::sra_op(a, amt)).to_binary(), ea.sra_op(amt).to_binary()) << "s.sra " << amt;
@@ -113,9 +101,26 @@ void check(int64_t xa, int64_t xb) {
 
 template <int A, int B, int R>
 void sweep() {
-  static const int64_t seeds[] = {0,  1,   -1,   2,     -2,     3,       7,        8,        -8,
-                                  15, 16,  -16,  1000,  -1000,  65535,   -65536,   1 << 20,  -(1 << 20),
-                                  (int64_t{1} << 40), -(int64_t{1} << 40)};
+  static const int64_t seeds[] = {0,
+                                  1,
+                                  -1,
+                                  2,
+                                  -2,
+                                  3,
+                                  7,
+                                  8,
+                                  -8,
+                                  15,
+                                  16,
+                                  -16,
+                                  1000,
+                                  -1000,
+                                  65535,
+                                  -65536,
+                                  1 << 20,
+                                  -(1 << 20),
+                                  (int64_t{1} << 40),
+                                  -(int64_t{1} << 40)};
   for (int64_t x : seeds) {
     for (int64_t y : seeds) {
       check<A, B, R>(x, y);
@@ -134,6 +139,15 @@ TEST(Slop_mixed_width, user_example_add_3_11_into_32) {
   auto a = Slop<3>::create_integer(2);
   auto b = Slop<11>::create_integer(1000);
   EXPECT_EQ(Slop<32>::add_op(a, b).to_just_i64(), 1002);
+}
+
+TEST(Slop_mixed_width, shift_amount_width_is_independent) {
+  const auto value  = Slop<4>::create_integer(3);
+  const auto amount = Slop<12>::create_integer(2);
+  EXPECT_EQ(Slop<8>::shl_op(value, amount).to_just_i64(), 12);
+
+  const auto signed_value = Slop<8>::create_integer(-16);
+  EXPECT_EQ(Slop<8>::sra_op(signed_value, amount).to_just_i64(), -4);
 }
 
 TEST(Slop_mixed_width, narrow_operands_one_word) { sweep<3, 11, 32>(); }
@@ -168,13 +182,11 @@ TEST(Slop_mixed_width, compares_are_zero_or_one) {
   EXPECT_TRUE(Slop<8>::create_integer(5).eq_op(Slop<8>::create_integer(5)).is_known_true());
 }
 
-// and/or/xor cannot GROW a value -- every set bit of the result was already set
-// in an operand (AND is bounded by min(A,B), OR/XOR by max(A,B)). So in the
-// UNSIGNED domain, the one where cgen reads with zext_to, the `.zext_to<R>()`
-// cgen appends to the RESULT is a pure no-op and can be dropped: the op already
-// leaves nothing above R to clear. This is structural, not a consequence of the
-// bitwidth precondition -- it holds at the TIGHT R below, where R is exactly the
-// width the bitwidth pass stamps, with no slack.
+// and/or/xor cannot GROW beyond the widest operand -- every set bit of the
+// result was already set in an operand. They still cannot use a narrower result
+// carrier: HLOP values are signed unlimited-precision integers, so a narrow AND
+// input sign-extends across a wider input rather than bounding the result width.
+// At MAX below, the `.zext_to<R>()` cgen used to append to the RESULT is a no-op.
 //
 // add/mult/shl do grow, so their trailing clamp has to stay; the negative
 // control at the end pins that the check is not vacuous.
@@ -183,13 +195,12 @@ template <int A, int B>
 void no_result_clamp(int64_t xa, int64_t xb) {
   const auto    a   = Slop<A>::create_integer(fit_unsigned<A>(xa));
   const auto    b   = Slop<B>::create_integer(fit_unsigned<B>(xb));
-  constexpr int MIN = A < B ? A : B;
   constexpr int MAX = A < B ? B : A;
 
-  const auto an = Slop<MIN>::and_op(a, b);
+  const auto an = Slop<MAX>::and_op(a, b);
   const auto on = Slop<MAX>::or_op(a, b);
   const auto xn = Slop<MAX>::xor_op(a, b);
-  EXPECT_EQ(an.to_binary(), an.template zext_to<MIN>().to_binary()) << "u.and needs no result clamp";
+  EXPECT_EQ(an.to_binary(), an.template zext_to<MAX>().to_binary()) << "u.and needs no result clamp";
   EXPECT_EQ(on.to_binary(), on.template zext_to<MAX>().to_binary()) << "u.or needs no result clamp";
   EXPECT_EQ(xn.to_binary(), xn.template zext_to<MAX>().to_binary()) << "u.xor needs no result clamp";
 }
@@ -214,12 +225,6 @@ TEST(Slop_mixed_width, bitwise_needs_no_result_clamp) {
   sweep_no_clamp<66, 80>();
   sweep_no_clamp<128, 128>();
   sweep_no_clamp<100, 200>();
-
-  // Negative control: below the guaranteed width the clamp DOES change the
-  // value, so the sweep above is testing something real.
-  const auto wide = Slop<32>::create_integer(0x0F0F0F);
-  const auto orr  = Slop<8>::or_op(wide, Slop<8>::create_integer(0));
-  EXPECT_NE(orr.to_binary(), orr.zext_to<8>().to_binary());
 }
 
 // Mixed-width get_mask must agree with the member form on every mask shape,
@@ -235,8 +240,8 @@ TEST(Slop_mixed_width, get_mask_matches_member_form) {
       const auto    x = Slop<20>::create_integer(v);
       const auto    m = Slop<20>::create_integer(mk);
 
-      const auto member = x.get_mask_op(m);              // Slop<20>
-      const auto mixed  = Slop<20>::get_mask_op(x, m);   // same widths -> must match
+      const auto member = x.get_mask_op(m);             // Slop<20>
+      const auto mixed  = Slop<20>::get_mask_op(x, m);  // same widths -> must match
 
       // how many bits does this mask select? (drives the single-bit exception)
       int sel = 0;
@@ -265,7 +270,7 @@ TEST(Slop_mixed_width, get_mask_matches_member_form) {
 // The point of the mixed-width form: operands at differing widths, result
 // materialized at the cell's own width, with no caller-side conversion.
 TEST(Slop_mixed_width, get_mask_across_widths) {
-  auto x = Slop<40>::create_integer(0xABCDE);
+  auto x  = Slop<40>::create_integer(0xABCDE);
   auto m8 = Slop<8>::create_integer(0xff);
   EXPECT_EQ(Slop<9>::get_mask_op(x, m8).to_just_i64(), 0xDE);
 
@@ -280,8 +285,8 @@ TEST(Slop_mixed_width, get_mask_across_widths) {
 
 // mux_op with a decoded integer index must equal the Slop-selector form.
 TEST(Slop_mixed_width, mux_int_index_matches_slop_selector) {
-  const Slop<66> arms[] = {Slop<66>::create_integer(11), Slop<66>::create_integer(22),
-                           Slop<66>::create_integer(33), Slop<66>::create_integer(44)};
+  const Slop<66> arms[]
+      = {Slop<66>::create_integer(11), Slop<66>::create_integer(22), Slop<66>::create_integer(33), Slop<66>::create_integer(44)};
   for (int64_t i = 0; i < 4; ++i) {
     auto by_slop = Slop<66>::mux_op(Slop<66>::create_integer(i), std::span<const Slop<66>>(arms, 4));
     auto by_int  = Slop<66>::mux_op(i, std::span<const Slop<66>>(arms, 4));
@@ -290,6 +295,38 @@ TEST(Slop_mixed_width, mux_int_index_matches_slop_selector) {
   // out of range -> invalid, same as the Slop-selector form
   EXPECT_TRUE(Slop<66>::mux_op(int64_t{9}, std::span<const Slop<66>>(arms, 4)).is_invalid());
   EXPECT_TRUE(Slop<66>::mux_op(int64_t{-1}, std::span<const Slop<66>>(arms, 4)).is_invalid());
+}
+
+TEST(Slop_mixed_width, mux_condition_and_heterogeneous_arms) {
+  const auto narrow = Slop<4>::create_integer(3);
+  const auto wide   = Slop<70>::create_integer(int64_t{0x123456789});
+
+  // A two-arm Mux is conditional: every nonzero value, not only integer 1,
+  // selects the true arm. The result carrier losslessly promotes either arm.
+  EXPECT_EQ(Slop<80>::mux_op(Slop<9>::create_integer(0), narrow, wide).to_just_i64(), 3);
+  EXPECT_EQ(Slop<80>::mux_op(Slop<9>::create_integer(128), narrow, wide).to_just_i64(), int64_t{0x123456789});
+
+  const auto middle = Slop<17>::create_integer(17);
+  EXPECT_EQ(Slop<80>::mux_op(Slop<3>::create_integer(2), narrow, middle, wide).to_just_i64(), int64_t{0x123456789});
+}
+
+// A Hotmux's one-hot selector width follows its arm count, not its result
+// width. A wide decode must therefore be able to select a narrow value without
+// truncating the selector to the result width.
+TEST(Slop_mixed_width, hotmux_selector_width_is_independent) {
+  const auto narrow = Slop<2>::create_integer(0);
+  const auto middle = Slop<17>::create_integer(1);
+  const auto wide   = Slop<70>::create_integer(int64_t{0x123456789});
+
+  EXPECT_EQ(Slop<80>::hotmux_op(Slop<8>::create_integer(0b00000100), narrow, middle, wide).to_just_i64(), int64_t{0x123456789});
+  EXPECT_TRUE(Slop<80>::hotmux_op(Slop<8>::create_integer(0b00001000), narrow, middle, wide).is_invalid());
+}
+
+TEST(Slop_mixed_width, update_losslessly_widens_source) {
+  auto dst = Slop<17>::create_integer(0);
+  EXPECT_TRUE(slop_update(dst, Slop<8>::create_integer(63)));
+  EXPECT_EQ(dst.to_just_i64(), 63);
+  EXPECT_FALSE(slop_update(dst, Slop<8>::create_integer(63)));
 }
 
 // Signed comparison must stay signed across a width difference: a negative

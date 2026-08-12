@@ -1003,6 +1003,21 @@ TEST_F(Dlop_test, mux_known_select) {
   EXPECT_TRUE(Dlop::mux_op(*Dlop::create_integer(9), vals)->is_invalid());
 }
 
+TEST_F(Dlop_test, mux_condition_and_heterogeneous_arms) {
+  auto narrow = Dlop::create_integer(3);
+  auto wide   = Dlop::from_pyrope("0ux123456789abcdef0123");
+  std::vector<spool_ptr<Dlop>> vals{narrow, wide};
+
+  EXPECT_TRUE(Dlop::mux_op(*Dlop::create_integer(0), vals)->same_repr(*narrow));
+  EXPECT_TRUE(Dlop::mux_op(*Dlop::create_integer(128), vals)->same_repr(*wide));
+
+  // With no known-set selector bit, zero and nonzero are both reachable. The
+  // ternary merge must retain the widest candidate carrier.
+  auto unknown = Dlop::mux_op(*Dlop::from_pyrope("0ub?0000000"), vals);
+  EXPECT_TRUE(unknown->has_unknowns());
+  EXPECT_GE(unknown->get_bits(), wide->get_bits());
+}
+
 TEST_F(Dlop_test, mux_unknown_select_merges) {
   // sel selects index 0 or 1; the two values agree on every bit except bit 3,
   // so the merge keeps bits 0..2 known and marks bit 3 unknown.
@@ -1025,6 +1040,14 @@ TEST_F(Dlop_test, hotmux_known_onehot) {
   EXPECT_EQ(Dlop::hotmux_op(*Dlop::create_integer(0b001), vals)->to_just_i64(), 0x11);
   EXPECT_EQ(Dlop::hotmux_op(*Dlop::create_integer(0b010), vals)->to_just_i64(), 0x22);
   EXPECT_EQ(Dlop::hotmux_op(*Dlop::create_integer(0b100), vals)->to_just_i64(), 0x33);
+}
+
+TEST_F(Dlop_test, hotmux_heterogeneous_arms_preserve_selected_width) {
+  auto narrow = Dlop::create_integer(3);
+  auto wide   = Dlop::from_pyrope("0ux123456789abcdef0123");
+  std::vector<spool_ptr<Dlop>> vals{narrow, wide};
+
+  EXPECT_TRUE(Dlop::hotmux_op(*Dlop::create_integer(0b10), vals)->same_repr(*wide));
 }
 
 TEST_F(Dlop_test, hotmux_known_bit_with_unknown_elsewhere) {
