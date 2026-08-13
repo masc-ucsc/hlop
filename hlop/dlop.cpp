@@ -2551,6 +2551,110 @@ spool_ptr<Dlop> Dlop::concat_op(const Dlop& other) const {
   return shifted->or_op(masked_other);
 }
 
+namespace {
+// OR the low 64 bits of `v` into `dst` at bit position `pos`. A lane rarely
+// starts on a word boundary, so the chunk lands across two words.
+inline void or_bits_at(int64_t* dst, int words, uint64_t v, int pos) {
+  if (v == 0) {
+    return;
+  }
+  const int w = pos / 64;
+  const int b = pos % 64;
+  if (w < words) {
+    dst[w] |= static_cast<int64_t>(v << b);
+  }
+  if (b != 0 && w + 1 < words) {
+    dst[w + 1] |= static_cast<int64_t>(v >> (64 - b));
+  }
+}
+}  // namespace
+
+spool_ptr<Dlop> Dlop::concat_op(std::span<const Concat_lane> lanes) {
+  // The widest result Dlop can address (`size` is an int16_t word count), minus
+  // the headroom word added below. Checked BEFORE each accumulation: letting
+  // `total` wrap would be signed-overflow UB, not a rejected call.
+  constexpr int kMaxBits    = 64 * (INT16_MAX - 1);
+  int           total       = 0;
+  bool          any_unknown = false;
+  for (const auto& l : lanes) {
+    if (l.bits < 0 || l.bits > kMaxBits - total || l.value == nullptr || !l.value->is_numeric()) {
+      return nil();  // no bit window to assemble
+    }
+    total += l.bits;
+    any_unknown |= l.value->has_unknowns();
+  }
+  if (total <= 0) {
+    return create_integer(0);
+  }
+  // One clear word of headroom above the top bit keeps the result NON-NEGATIVE
+  // (the same rule get_mask_op uses), including when `total` is a multiple of 64.
+  const int words64 = total / 64 + 1;
+  if (words64 > INT16_MAX) {
+    return nil();
+  }
+  const int16_t words = static_cast<int16_t>(words64);
+  auto          dlop  = make_result(Type::Integer, words);
+  // extra_mut() can move base out of the inline word, so it must run before
+  // base() is cached (see dlop.hpp). Only touch the plane if a lane has x-bits.
+  int64_t*      re    = any_unknown ? dlop->extra_mut() : nullptr;
+  int64_t*      rb    = dlop->base();
+
+  int off = total;
+  for (const auto& l : lanes) {
+    const Dlop& v = *l.value;
+    const int   w = l.bits;
+    off -= w;
+    if (w == 0) {
+      continue;
+    }
+    // A lane must fit its window: a negative value spends the top bit on its
+    // sign (bits <= w), a non-negative one is magnitude+1 (<= w+1). An
+    // over-wide lane is a caller bug — the debug assert catches it, and the
+    // release build packs whatever bits it was handed.
+    //
+    // Measured on the BASE plane, deliberately NOT with get_bits(): that folds
+    // in a conservative unknown-width bound (size*64+1 as soon as the sign
+    // itself is unknown), which would abort a debug build on a perfectly legal
+    // `0sb?` lane and force a redundant mask. The `unknown bit ⇒ base bit is 1`
+    // invariant means the base count already covers every unknown position.
+    const bool negative = v.is_negative();
+    const int  vbits
+        = (v.size <= 0) ? 0 : (v.size == 1 ? Blop::get_bits64(v.base()[0]) : Blop::get_bitsn(v.base(), v.size));
+    I(negative ? vbits <= w : vbits <= w + 1, "concat_op lane does not fit its declared width");
+    // The mask is what turns a negative lane into its two's-complement window
+    // (-1 with w=3 becomes 0b111). A non-negative lane already inside its
+    // window needs none — the words above it are zero already.
+    const bool need_mask   = negative || vbits > w + 1;
+    const int  lane_words  = (w + 63) / 64;
+    const int  top_bit     = w % 64;
+    // Past the value's stored words BOTH planes sign-extend: base with the
+    // value's sign, extra with the UNKNOWN sign (a value whose top stored bit
+    // is unknown stays unknown all the way up). Filling extra with 0 would turn
+    // those unknown bits into known ones — an unsound "this bit is 1" claim.
+    // An unknown sign implies a set base sign, so the two fills stay consistent.
+    const uint64_t bfill = negative ? ~uint64_t(0) : uint64_t(0);
+    const uint64_t efill = (v.size > 0 && v.extra()[v.size - 1] < 0) ? ~uint64_t(0) : uint64_t(0);
+    for (int i = 0; i < lane_words; ++i) {
+      uint64_t bw = (i < v.size) ? static_cast<uint64_t>(v.base()[i]) : bfill;
+      uint64_t ew = (i < v.size) ? static_cast<uint64_t>(v.extra()[i]) : efill;
+      if (need_mask && i == lane_words - 1 && top_bit != 0) {
+        // Both planes take the same mask, keeping the "an unknown bit has
+        // base == 1" invariant intact.
+        const uint64_t m = (uint64_t(1) << top_bit) - 1;
+        bw &= m;
+        ew &= m;
+      }
+      or_bits_at(rb, words, bw, off + i * 64);
+      if (re != nullptr) {
+        or_bits_at(re, words, ew, off + i * 64);
+      }
+    }
+  }
+
+  dlop->normalize();
+  return dlop;
+}
+
 spool_ptr<Dlop> Dlop::adjust_bits(int amount) const {
   assert(amount > 0);
   // A non-numeric value (string / nil / invalid / ref) has no meaningful bit

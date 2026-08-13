@@ -223,6 +223,21 @@ void RunOnce(std::mt19937_64& rng, const std::vector<PoolEntry>& pool, int op_id
       }
       break;
     }
+    case 27: {
+      // n-ary concat_op. Lane widths are DECLARED here (Dlop takes them as
+      // arguments, Slop from the operand types), so unlike case 26 this runs
+      // on the WHOLE pool: an unknown bit cannot move a lane boundary, it can
+      // only make that one position unknown. The unsigned landing is the
+      // comparable one -- Dlop's result is always non-negative, and
+      // Slop_u<254> is its Slop counterpart (Slop<254>::concat_op would
+      // sign-extend from the top lane's MSB instead).
+      auto            dr = Dlop::concat_op(da, kInputWidth, db, kInputWidth);
+      Slop<kInputWidth> la{sa};  // 127-bit lanes, cross-width ctor
+      Slop<kInputWidth> lb{sb};
+      auto            sr = Slop_u<2 * kInputWidth>::concat_op(la, lb);
+      ExpectConsistent(*dr, S{sr}, "concat_op n-ary");
+      break;
+    }
   }
 }
 
@@ -231,7 +246,7 @@ void RunOnce(std::mt19937_64& rng, const std::vector<PoolEntry>& pool, int op_id
 TEST(SlopDlopDiff, fuzz_property) {
   auto            pool = BuildPool();
   std::mt19937_64 rng{kSeed ^ 0xA5A5A5A5ULL};
-  constexpr int   kOpCount = 27;
+  constexpr int   kOpCount = 28;
   for (int i = 0; i < kIterations; ++i) {
     int op = i % kOpCount;
     RunOnce(rng, pool, op);

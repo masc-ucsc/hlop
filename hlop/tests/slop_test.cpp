@@ -185,6 +185,28 @@ TEST_F(Slop_test, sra_op) {
   EXPECT_EQ(b.to_just_i64(), 0xf);
 }
 
+// A zero-count MEMBER shift returns the value untouched, tag included; every
+// other count produces an Integer result. identical() compares the tag, so a
+// change-gated sim compare would report a spurious change if a zero shift
+// re-tagged its operand. (The static Slop<N>::shl_op/sra_op forms always
+// materialize an Integer, at any count -- they have no tag to preserve.)
+TEST_F(Slop_test, zero_shift_keeps_the_type_tag) {
+  const auto s = S::create_string("hi");
+  EXPECT_TRUE(s.shl_op(0).is_string());
+  EXPECT_TRUE(s.sra_op(0).is_string());
+  EXPECT_TRUE(s.identical(s.shl_op(0)));
+  EXPECT_FALSE(s.shl_op(1).is_string());
+
+  const auto t = S::create_bool(true);
+  EXPECT_TRUE(t.identical(t.shl_op(0)));
+  EXPECT_TRUE(t.identical(t.sra_op(0)));
+
+  // Bits are the same either way; only the tag differs.
+  EXPECT_EQ(S::create_integer(0x1234).shl_op(0).to_just_i64(), 0x1234);
+  EXPECT_EQ(S::shl_op(S::create_integer(0x1234), 0).to_just_i64(), 0x1234);
+  EXPECT_EQ(S::sra_op(S::create_integer(0x1234), 0).to_just_i64(), 0x1234);
+}
+
 // =========================================================================
 // Comparison tests
 // =========================================================================

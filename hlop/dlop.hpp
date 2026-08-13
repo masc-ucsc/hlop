@@ -2,6 +2,7 @@
 
 #pragma once
 
+#include <array>
 #include <cassert>
 #include <cstdint>
 #include <cstring>
@@ -640,6 +641,60 @@ public:
   spool_ptr<Dlop> concat_op(const Dlop& other) const;
   spool_ptr<Dlop> concat_op(spool_ptr<Dlop> other) const { return concat_op(*other); }
   spool_ptr<Dlop> adjust_bits(int amount) const;
+
+  // --- n-ary concat_op (the LGraph Concat cell) ------------------------------
+  // One lane: a value and the DECLARED width of the window it occupies. The
+  // width is NOT the value's significant bits — that is exactly what the binary
+  // concat_op above uses (`other.get_bits()`), and why it cannot express a
+  // Verilog `{a, b}`: dropping a lane's leading zeros shifts every lane above
+  // it. Slop gets these widths from the operand types at compile time; Dlop has
+  // no declared width, so the caller passes them.
+  struct Concat_lane {
+    const Dlop* value;
+    int         bits;
+  };
+
+  // MSB-FIRST assembly, matching the binary form and Verilog `{a, b}`:
+  //
+  //   Dlop::concat_op(a, 3, b, 5) == (a << 5) | b
+  //
+  // Each lane occupies bits [offset+bits-1 : offset], offset counting up from
+  // the LAST lane. The result is the non-negative sum(bits)-wide integer, so a
+  // consumer never has to undo a sign. Unknowns are per-lane and positional: a
+  // lane's x-bits land in that lane's window and nowhere else (the whole-plane
+  // smearing a Set_mask chain produces is not reachable here).
+  //
+  // Over-wide lanes: a lane is debug-asserted to fit its window (signed for a
+  // negative value, unsigned otherwise), and masked only where the mask is not
+  // provably redundant — a negative lane always masks (that is how -1 becomes
+  // 0b111 in a 3-bit window), a non-negative lane already inside its window
+  // never does. A zero-width lane contributes nothing. A non-numeric lane
+  // (string / nil / invalid / ref) has no bit window at all and yields nil.
+  static spool_ptr<Dlop> concat_op(std::span<const Concat_lane> lanes);
+  static spool_ptr<Dlop> concat_op(std::initializer_list<Concat_lane> lanes) {
+    return concat_op(std::span<const Concat_lane>(lanes.begin(), lanes.size()));
+  }
+
+  // Variadic (value, bits) spelling: concat_op(a, 3, b, 5). Values may be Dlop
+  // or spool_ptr<Dlop>. Takes at least one full pair, so it never competes with
+  // the binary member form above.
+  template <typename V0, typename... Rest>
+    requires(sizeof...(Rest) % 2 == 0)
+  static spool_ptr<Dlop> concat_op(const V0& v0, int b0, const Rest&... rest) {
+    std::array<Concat_lane, 1 + sizeof...(Rest) / 2> lanes;
+    concat_fill_(lanes.data(), v0, b0, rest...);
+    return concat_op(std::span<const Concat_lane>(lanes.data(), lanes.size()));
+  }
+
+  static const Dlop* concat_addr_(const Dlop& v) { return &v; }
+  static const Dlop* concat_addr_(const spool_ptr<Dlop>& v) { return v.get(); }
+
+  static void concat_fill_(Concat_lane*) {}
+  template <typename V, typename... Rest>
+  static void concat_fill_(Concat_lane* out, const V& v, int b, const Rest&... rest) {
+    *out = Concat_lane{concat_addr_(v), b};
+    concat_fill_(out + 1, rest...);
+  }
 
   // --- Multi-input computing cells from livehd graph/cell.* ---
   // sum_op: all values on `a` are added and all values on `b` are

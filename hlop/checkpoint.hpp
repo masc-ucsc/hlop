@@ -115,17 +115,47 @@ inline Slop<N> slop_from_hex(std::string_view h) {
   return Slop<N>::from_binary(bin, /*unsigned_result=*/true);
 }
 
+// A Slop_u<N> entry checkpoints as the SAME N-bit pattern: the file format does
+// not record signedness, so an image written from one flavor reads back into
+// the other. zext_to<N, N> is the mask-free read of a canonical value.
+template <int N>
+inline std::string slop_to_hex(const Slop_u<N>& s) {
+  return slop_to_hex<N>(s.template zext_to<N, N>());
+}
+
+// The entry codec, keyed by the array's element type. BOTH directions live
+// here (function templates cannot partially specialize, so the read side needs
+// a struct anyway) — teaching the format a new entry flavor is one
+// specialization, not an overload here and a specialization there. The
+// slop_to_hex / slop_from_hex free functions above stay the spelling callers
+// use; this is what the container helpers dispatch through.
+template <typename T>
+struct Hex_codec;
+
+template <int N>
+struct Hex_codec<Slop<N>> {
+  static std::string format(const Slop<N>& s) { return slop_to_hex<N>(s); }
+  static Slop<N>     parse(std::string_view h) { return slop_from_hex<N>(h); }
+};
+
+template <int N>
+struct Hex_codec<Slop_u<N>> {
+  static std::string format(const Slop_u<N>& s) { return slop_to_hex<N>(s); }
+  // One masking pass, in the Slop_u ctor: restore stays robust to a dirty file.
+  static Slop_u<N>   parse(std::string_view h) { return Slop_u<N>(slop_from_hex<N>(h)); }
+};
+
 // ── memory hex file (one entry/line, address 0 first; honors `@addr` + `//`) ──
-template <int B, std::size_t S>
-inline void write_mem_hex(const std::string& path, const std::array<Slop<B>, S>& a) {
+template <typename T, std::size_t S>
+inline void write_mem_hex(const std::string& path, const std::array<T, S>& a) {
   std::ofstream f(path, std::ios::trunc);
   for (std::size_t i = 0; i < S; ++i) {
-    f << slop_to_hex<B>(a[i]) << "\n";
+    f << Hex_codec<T>::format(a[i]) << "\n";
   }
 }
 
-template <int B, std::size_t S>
-inline bool read_mem_hex(const std::string& path, std::array<Slop<B>, S>& a) {
+template <typename T, std::size_t S>
+inline bool read_mem_hex(const std::string& path, std::array<T, S>& a) {
   std::ifstream f(path);
   if (!f) {
     return false;
@@ -145,7 +175,7 @@ inline bool read_mem_hex(const std::string& path, std::array<Slop<B>, S>& a) {
       continue;
     }
     if (i < S) {
-      a[i] = slop_from_hex<B>(line);
+      a[i] = Hex_codec<T>::parse(line);
     }
     ++i;
   }

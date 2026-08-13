@@ -308,6 +308,17 @@ TEST(Slop_mixed_width, mux_condition_and_heterogeneous_arms) {
 
   const auto middle = Slop<17>::create_integer(17);
   EXPECT_EQ(Slop<80>::mux_op(Slop<3>::create_integer(2), narrow, middle, wide).to_just_i64(), int64_t{0x123456789});
+  EXPECT_EQ(Slop<80>::mux_op(Slop<3>::create_integer(0), narrow, middle, wide).to_just_i64(), 3);
+  EXPECT_EQ(Slop<80>::mux_op(Slop<3>::create_integer(1), narrow, middle, wide).to_just_i64(), 17);
+
+  // Three or more arms index rather than condition, so a selector outside the
+  // arm range -- or one too wide to be an index at all -- is Invalid, not a
+  // wrapped pick. (Only the selected arm is ever promoted, so this also pins
+  // that the arm-selection walk stops in the right place.)
+  EXPECT_TRUE(Slop<80>::mux_op(Slop<3>::create_integer(3), narrow, middle, wide).is_invalid());
+  EXPECT_TRUE(Slop<80>::mux_op(Slop<8>::create_integer(-1), narrow, middle, wide).is_invalid());
+  EXPECT_TRUE(
+      Slop<80>::mux_op(Slop<80>::from_pyrope("0x1_0000_0000_0000_0000"), narrow, middle, wide).is_invalid());
 }
 
 // A Hotmux's one-hot selector width follows its arm count, not its result

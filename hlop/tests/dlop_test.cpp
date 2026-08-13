@@ -148,6 +148,116 @@ TEST_F(Dlop_test, concat_op_integer_unchanged) {
   EXPECT_EQ(c->to_just_i64(), 83);
 }
 
+// ── n-ary concat_op: DECLARED lane widths ───────────────────────────────────
+// The binary form above takes each lane's width from its value (get_bits()),
+// which is why "0ub1010" occupies 5 bits there. The n-ary form takes the width
+// from the caller, so the same values pack into the window the RTL declared.
+
+TEST_F(Dlop_test, concat_op_nary_msb_first) {
+  auto a = Dlop::create_integer(-1);
+  auto b = Dlop::create_integer(5);
+
+  // concat_op(a, 3, b, 5) == (a << 5) | b, with a masked into its 3-bit window
+  auto r = Dlop::concat_op(a, 3, b, 5);
+  EXPECT_EQ(r->to_just_i64(), 0b111'00101);
+  EXPECT_FALSE(r->is_negative());  // the result is always non-negative
+  EXPECT_EQ(r->get_bits(), 9);     // 8 lane bits + sign slot
+
+  // Lane order is the operand order.
+  EXPECT_EQ(Dlop::concat_op(b, 5, a, 3)->to_just_i64(), 0b00101'111);
+
+  // The spelling does not matter: values, spool_ptrs, span, initializer_list.
+  EXPECT_TRUE(Dlop::concat_op(*a, 3, *b, 5)->is_known_eq(*r));
+  EXPECT_TRUE(Dlop::concat_op({{a.get(), 3}, {b.get(), 5}})->is_known_eq(*r));
+
+  // Same values, widths declared instead of inferred: the binary form packs b
+  // into 4 bits (get_bits()), the n-ary form into whatever was asked for.
+  EXPECT_EQ(Dlop::create_integer(2)->concat_op(*Dlop::create_integer(5))->to_just_i64(), (2 << 4) | 5);
+  EXPECT_EQ(Dlop::concat_op(Dlop::create_integer(2), 2, Dlop::create_integer(5), 3)->to_just_i64(), (2 << 3) | 5);
+}
+
+TEST_F(Dlop_test, concat_op_nary_lane_masking) {
+  // A negative lane becomes its two's-complement window, as in Verilog.
+  EXPECT_EQ(Dlop::concat_op(Dlop::create_integer(-2), 3, Dlop::create_integer(0), 2)->to_just_i64(), 0b110'00);
+  EXPECT_EQ(Dlop::concat_op(Dlop::create_integer(-1), 1, Dlop::create_integer(-1), 1)->to_just_i64(), 0b11);
+
+  // A zero-width lane contributes nothing.
+  EXPECT_EQ(Dlop::concat_op(Dlop::create_integer(3), 2, Dlop::create_integer(7), 0, Dlop::create_integer(1), 1)->to_just_i64(),
+            0b11'1);
+
+  // Any number of lanes; 1-bit lanes are the packed-bit-ring shape.
+  auto bits = Dlop::concat_op(Dlop::create_integer(1), 1, Dlop::create_integer(0), 1, Dlop::create_integer(1), 1,
+                              Dlop::create_integer(1), 1, Dlop::create_integer(0), 1);
+  EXPECT_EQ(bits->to_just_i64(), 0b10110);
+}
+
+TEST_F(Dlop_test, concat_op_nary_multiword) {
+  // A lane crossing the word boundary, and one landing exactly on it.
+  auto hi = Dlop::from_pyrope("0x1_0000_0000_0000_0000");  // bit 64
+  auto r  = Dlop::concat_op(Dlop::create_integer(3), 2, hi, 65);
+  EXPECT_TRUE(r->bit_test(64) && r->bit_test(65) && r->bit_test(66));
+  EXPECT_FALSE(r->bit_test(63));
+  EXPECT_EQ(r->get_last_bit_set(), 66);
+
+  auto w = Dlop::concat_op(Dlop::create_integer(-1), 64, Dlop::create_integer(0), 64);
+  EXPECT_TRUE(w->is_known_eq(*Dlop::from_pyrope("0xffffffffffffffff0000000000000000")));
+  EXPECT_FALSE(w->is_negative());  // the headroom word keeps it unsigned
+}
+
+TEST_F(Dlop_test, concat_op_nary_unknowns_stay_in_lane) {
+  // Unlike the Set_mask chain this replaces, an x-bit lands positionally: in
+  // its own lane's window and nowhere else.
+  auto unk = Dlop::from_pyrope("0sb0?1");  // 3 bits: 0, ?, 1
+  auto r   = Dlop::concat_op(unk, 3, Dlop::create_integer(0), 5);
+  EXPECT_TRUE(r->bit_test(5));    // the literal's '1' -> bit 5
+  EXPECT_FALSE(r->bit_test(7));   // the literal's '0' -> bit 7
+  EXPECT_FALSE(r->bit_test(4));   // the all-zero lane below
+
+  int unknown_count = 0;
+  for (int i = 0; i < 9; ++i) {
+    auto bit = r->get_mask_op(*Dlop::create_integer(int64_t(1) << i));
+    if (bit->has_unknowns()) {
+      ++unknown_count;
+      EXPECT_EQ(i, 6) << "unknown bit escaped its lane";
+    }
+  }
+  EXPECT_EQ(unknown_count, 1);
+}
+
+// A lane window wider than the value's stored words sign-extends BOTH planes:
+// a value whose top stored bit is unknown stays unknown all the way up. (The
+// extra plane used to fill with 0, turning those positions into known 1s — an
+// unsound claim — and get_bits()'s conservative unknown bound also tripped the
+// fit assert on a legal `0sb?` lane.)
+TEST_F(Dlop_test, concat_op_nary_unknown_sign_extends) {
+  auto unk = Dlop::from_pyrope("0sb?");  // one unknown bit; the sign is unknown
+
+  // Narrow lane: the whole window is unknown (must not assert).
+  auto n = Dlop::concat_op(unk, 3, Dlop::create_integer(0), 2);
+  for (int i = 2; i < 5; ++i) {
+    EXPECT_TRUE(n->get_mask_op(*Dlop::create_integer(int64_t(1) << i))->has_unknowns()) << "bit " << i;
+  }
+
+  // Lane wider than the stored word: the positions past it are unknown too.
+  auto w = Dlop::concat_op(unk, 70, Dlop::create_integer(0), 2);
+  for (int i : {2, 63, 64, 65, 66, 71}) {
+    EXPECT_TRUE(w->get_mask_op(*Dlop::create_integer(1)->shl_op(Dlop::create_integer(i)))->has_unknowns())
+        << "bit " << i << " escaped the unknown sign extension";
+  }
+  // ... and the lane below it stays known-zero.
+  EXPECT_FALSE(w->bit_test(0));
+  EXPECT_FALSE(w->bit_test(1));
+}
+
+TEST_F(Dlop_test, concat_op_nary_non_numeric_is_nil) {
+  auto s = Dlop::from_string("ab");
+  EXPECT_TRUE(Dlop::concat_op(s, 8, Dlop::create_integer(1), 1)->is_nil());
+  EXPECT_TRUE(Dlop::concat_op(Dlop::create_integer(1), 1, Dlop::nil(), 1)->is_nil());
+  EXPECT_TRUE(Dlop::concat_op(Dlop::invalid(), 4, Dlop::create_integer(1), 1)->is_nil());
+  // A negative width has no window either.
+  EXPECT_TRUE(Dlop::concat_op(Dlop::create_integer(1), -1, Dlop::create_integer(1), 1)->is_nil());
+}
+
 TEST_F(Dlop_test, from_pyrope_nil) {
   // Bare nil/null tokens are the Pyrope nil literal — case-insensitive.
   for (auto* txt : {"nil", "Nil", "NIL", "NiL", "null", "Null", "NULL", "nUlL"}) {
