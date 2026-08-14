@@ -312,3 +312,216 @@ TEST(Slop_u_test, vcd_bits) {
   EXPECT_EQ(Slop_u<8>{255}.to_binary(), "11111111");
   EXPECT_EQ(Slop_u<3>{2}.to_binary(), "010");
 }
+
+// ── Slop_operand: a Slop_u drops into the mixed-width statics bare ───────────
+//
+// The statics used to take `const Slop<A>&`, so a Slop_u operand had to spell
+// `.raw()` — and `.raw()` hands back a carrier whose canonicality the compiler
+// cannot see, so widening it re-ran the runtime sign fill. `Slop_arg` gives the
+// statics the width AND the canonicality, which is what lets `zero_widen_`
+// replace `widen_`. Both must produce the same VALUE at every width: that is
+// the whole correctness claim, because a canonical carrier's sign slot is zero,
+// so sign-filling and zero-filling agree.
+
+namespace {
+
+// The invariant, checked from outside the class: the stored carrier is its own
+// zext_to<N>. Every Slop_u a new entry point hands back must satisfy it.
+template <int N>
+bool canonical_ok(const Slop_u<N>& u) {
+  return u.raw().identical(u.raw().template zext_to<N, N + 1>());
+}
+
+}  // namespace
+
+TEST(Slop_u_test, slop_operand_matches_raw_one_word) {
+  const Slop_u<8> a{200};
+  const Slop_u<8> b{100};
+
+  EXPECT_TRUE(Slop<10>::add_op(a, b).identical(Slop<10>::add_op(a.raw(), b.raw())));
+  EXPECT_TRUE(Slop<10>::sub_op(a, b).identical(Slop<10>::sub_op(a.raw(), b.raw())));
+  EXPECT_TRUE(Slop<20>::mult_op(a, b).identical(Slop<20>::mult_op(a.raw(), b.raw())));
+  EXPECT_TRUE(Slop<9>::and_op(a, b).identical(Slop<9>::and_op(a.raw(), b.raw())));
+  EXPECT_TRUE(Slop<9>::or_op(a, b).identical(Slop<9>::or_op(a.raw(), b.raw())));
+  EXPECT_TRUE(Slop<9>::xor_op(a, b).identical(Slop<9>::xor_op(a.raw(), b.raw())));
+  EXPECT_TRUE(Slop<2>::eq_op(a, b).identical(Slop<2>::eq_op(a.raw(), b.raw())));
+  EXPECT_TRUE(Slop<2>::lt_op(a, b).identical(Slop<2>::lt_op(a.raw(), b.raw())));
+  EXPECT_TRUE(Slop<2>::gt_op(a, b).identical(Slop<2>::gt_op(a.raw(), b.raw())));
+  EXPECT_TRUE(Slop<12>::shl_op(a, 3).identical(Slop<12>::shl_op(a.raw(), 3)));
+  EXPECT_TRUE(Slop<9>::sra_op(a, 3).identical(Slop<9>::sra_op(a.raw(), 3)));
+
+  // Mixed: one canonical operand, one lazy — the common cgen shape.
+  const Slop<9> lazy = Slop<9>::add_op(Slop<9>::create_integer(200), Slop<9>::create_integer(100));
+  EXPECT_TRUE(Slop<11>::add_op(a, lazy).identical(Slop<11>::add_op(a.raw(), lazy)));
+  EXPECT_TRUE(Slop<11>::add_op(lazy, a).identical(Slop<11>::add_op(lazy, a.raw())));
+}
+
+// zero_widen_ vs widen_: this is where the two paths actually diverge in code.
+// A Slop_u<64>'s carrier is Slop<65> whose sign slot is zero, so the sign fill
+// widen_ computes is all-zero — the value must be identical either way.
+TEST(Slop_u_test, slop_operand_matches_raw_multiword) {
+  const Slop_u<64>  a{Slop<65>::from_pyrope("0xffff_ffff_ffff_ffff")};
+  const Slop_u<64>  b{Slop<65>::from_pyrope("0x8000_0000_0000_0001")};
+  const Slop_u<127> w{Slop<128>::from_pyrope("0x7fff_ffff_ffff_ffff_ffff_ffff_ffff_ffff")};
+
+  EXPECT_TRUE(a == Slop_u<64>{Slop<65>::from_pyrope("0xffff_ffff_ffff_ffff")});
+
+  EXPECT_TRUE(Slop<130>::add_op(a, b).identical(Slop<130>::add_op(a.raw(), b.raw())));
+  EXPECT_TRUE(Slop<130>::sub_op(a, b).identical(Slop<130>::sub_op(a.raw(), b.raw())));
+  EXPECT_TRUE(Slop<130>::and_op(a, w).identical(Slop<130>::and_op(a.raw(), w.raw())));
+  EXPECT_TRUE(Slop<130>::or_op(a, w).identical(Slop<130>::or_op(a.raw(), w.raw())));
+  EXPECT_TRUE(Slop<2>::eq_op(a, w).identical(Slop<2>::eq_op(a.raw(), w.raw())));
+  EXPECT_TRUE(Slop<2>::lt_op(a, w).identical(Slop<2>::lt_op(a.raw(), w.raw())));
+  EXPECT_TRUE(Slop<200>::shl_op(a, 65).identical(Slop<200>::shl_op(a.raw(), 65)));
+
+  // The value itself: a u64 all-ones widened into a 130-bit carrier must stay
+  // POSITIVE. This is the assertion that fails if a canonical carrier is ever
+  // sign-filled from the wrong bit.
+  const Slop<130> wide = Slop<130>::add_op(a, Slop<130>::create_integer(1));
+  EXPECT_TRUE(wide.identical(Slop<130>::from_pyrope("0x1_0000_0000_0000_0000")));
+}
+
+TEST(Slop_u_test, slop_operand_get_mask_and_mux) {
+  const Slop_u<8> v{0xa5};
+
+  EXPECT_TRUE(Slop<9>::get_mask_op(v, Slop<9>::create_integer(0x0f))
+                  .identical(Slop<9>::get_mask_op(v.raw(), Slop<9>::create_integer(0x0f))));
+  EXPECT_TRUE(Slop<9>::get_mask_op(v, Slop_u<8>{0x0f}).identical(Slop<9>::get_mask_op(v.raw(), Slop<9>::create_integer(0x0f))));
+
+  const Slop_u<8> arm0{11};
+  const Slop_u<8> arm1{22};
+  EXPECT_TRUE(Slop<9>::mux_op(Slop<2>::create_integer(0), arm0, arm1).identical(Slop<9>::create_integer(11)));
+  EXPECT_TRUE(Slop<9>::mux_op(Slop<2>::create_integer(1), arm0, arm1).identical(Slop<9>::create_integer(22)));
+  EXPECT_TRUE(Slop<9>::mux_op(Slop_u<1>{1}, arm0, arm1).identical(Slop<9>::create_integer(22)));
+}
+
+// ── zext_to_u: naming the value zext_to already produced ────────────────────
+
+TEST(Slop_u_test, zext_to_u_matches_the_masking_ctor) {
+  const Slop<65> dirty = Slop<65>::create_integer(-1);  // every stored bit set
+
+  EXPECT_TRUE(dirty.zext_to_u<64>() == Slop_u<64>{dirty});
+  EXPECT_TRUE(dirty.zext_to_u<8>() == Slop_u<8>{255});
+  EXPECT_TRUE(dirty.zext_to_u<1>() == Slop_u<1>{1});
+  EXPECT_TRUE(canonical_ok(dirty.zext_to_u<64>()));
+  EXPECT_TRUE(canonical_ok(dirty.zext_to_u<8>()));
+  EXPECT_TRUE(canonical_ok(dirty.zext_to_u<1>()));
+
+  // Slop_u -> Slop_u: widening is a word copy, narrowing masks once. Both must
+  // agree with the masking ctor, which is the only other way to build one.
+  const Slop_u<8> u{0xa5};
+  EXPECT_TRUE(u.zext_to_u<12>() == Slop_u<12>{u});
+  EXPECT_TRUE(u.zext_to_u<8>() == u);
+  EXPECT_TRUE(u.zext_to_u<4>() == Slop_u<4>{u});
+  EXPECT_TRUE(u.zext_to_u<4>() == 5);
+  EXPECT_TRUE(canonical_ok(u.zext_to_u<12>()));
+  EXPECT_TRUE(canonical_ok(u.zext_to_u<4>()));
+
+  // A NEGATIVE source is the case the ctor exists for: the mask turns it into
+  // its two's-complement window, and zext_to_u must do exactly the same.
+  EXPECT_TRUE(Slop<4>::create_integer(-1).zext_to_u<3>() == 7);
+  EXPECT_TRUE(Slop<9>::create_integer(-56).zext_to_u<8>() == Slop_u<8>{Slop<9>::create_integer(-56)});
+}
+
+TEST(Slop_u_test, land_is_the_checked_landing) {
+  // `land` requires the source to be at the DECLARED carrier width N+1; the
+  // implicit ctor accepts any width and masks. Same value where both apply.
+  const Slop<9> v = Slop<9>::create_integer(200);
+  EXPECT_TRUE(Slop_u<8>::land(v) == Slop_u<8>{v});
+  EXPECT_TRUE(Slop_u<8>::land(v) == 200);
+  EXPECT_TRUE(canonical_ok(Slop_u<8>::land(v)));
+
+  // A carrier holding more than its declared width still lands masked.
+  const Slop<9> over = Slop<9>::add_op(Slop<9>::create_integer(200), Slop<9>::create_integer(100));
+  EXPECT_TRUE(Slop_u<8>::land(over) == 44);
+  EXPECT_TRUE(canonical_ok(Slop_u<8>::land(over)));
+}
+
+// ── the canonical-preserving statics ────────────────────────────────────────
+//
+// Each returns a Slop_u with NO mask, so each one's precondition is load
+// bearing: the result must satisfy the invariant, and it must equal the lazy
+// computation read back at the same width.
+
+TEST(Slop_u_test, canonical_preserving_statics) {
+  const Slop_u<8> a{0xa5};
+  const Slop_u<8> b{0x3c};
+
+  const auto and_r = Slop_u<8>::and_op(a, b);
+  const auto or_r  = Slop_u<8>::or_op(a, b);
+  const auto xor_r = Slop_u<8>::xor_op(a, b);
+  EXPECT_TRUE(and_r == (0xa5 & 0x3c));
+  EXPECT_TRUE(or_r == (0xa5 | 0x3c));
+  EXPECT_TRUE(xor_r == (0xa5 ^ 0x3c));
+  EXPECT_TRUE(canonical_ok(and_r));
+  EXPECT_TRUE(canonical_ok(or_r));
+  EXPECT_TRUE(canonical_ok(xor_r));
+
+  // and_op needs only ONE canonical operand: a lazy (dirty, even negative)
+  // second operand cannot lift a bit above the canonical one's width.
+  const Slop<9> dirty = Slop<9>::create_integer(-1);
+  const auto    mixed = Slop_u<8>::and_op(a, dirty);
+  EXPECT_TRUE(mixed == 0xa5);
+  EXPECT_TRUE(canonical_ok(mixed));
+
+  // add_op keeps canonicality only with a carry bit of headroom: 255 + 255
+  // needs 9 magnitude bits.
+  const auto sum = Slop_u<9>::add_op(Slop_u<8>{255}, Slop_u<8>{255});
+  EXPECT_TRUE(sum == 510);
+  EXPECT_TRUE(canonical_ok(sum));
+
+  // sra_op of a non-negative value is a logical shift and stays in range. The
+  // width bound must hold at amount 0, which is why it is M <= N, not M <= N+1.
+  EXPECT_TRUE(Slop_u<8>::sra_op(Slop_u<8>{0xa5}, 0) == 0xa5);
+  EXPECT_TRUE(Slop_u<8>::sra_op(Slop_u<8>{0xa5}, 4) == 0x0a);
+  EXPECT_TRUE(canonical_ok(Slop_u<8>::sra_op(Slop_u<8>{0xa5}, 0)));
+  EXPECT_TRUE(canonical_ok(Slop_u<64>::sra_op(Slop_u<64>{Slop<65>::create_integer(-1)}, 1)));
+}
+
+// The static compares rebuild their 0/1 with create_integer rather than landing
+// a Slop<cw> through the cross-width ctor. At cw == 1 the true value's only bit
+// IS the sign slot, so the ctor would sign-extend it to -1 and deposit a value
+// that breaks the invariant.
+TEST(Slop_u_test, static_compares_are_canonical_at_every_width) {
+  EXPECT_TRUE(Slop_u<1>::eq_op(Slop_u<8>{7}, Slop_u<8>{7}) == 1);
+  EXPECT_TRUE(Slop_u<1>::eq_op(Slop_u<8>{7}, Slop_u<8>{8}) == 0);
+  EXPECT_TRUE(Slop_u<1>::lt_op(Slop_u<8>{7}, Slop_u<8>{8}) == 1);
+  EXPECT_TRUE(Slop_u<1>::gt_op(Slop_u<8>{9}, Slop_u<8>{8}) == 1);
+
+  // cw == 1: both operands are one-bit carriers.
+  const auto one_bit_eq = Slop_u<1>::eq_op(Slop<1>::create_integer(0), Slop<1>::create_integer(0));
+  EXPECT_TRUE(one_bit_eq == 1);
+  EXPECT_FALSE(one_bit_eq.is_negative());
+  EXPECT_TRUE(canonical_ok(one_bit_eq));
+  EXPECT_TRUE(Slop_u<1>::eq_op(Slop_u<1>{1}, Slop_u<1>{1}) == 1);
+  EXPECT_TRUE(canonical_ok(Slop_u<1>::eq_op(Slop_u<1>{1}, Slop_u<1>{0})));
+
+  // Wide operands: every word participates (the regression comparisons_read_
+  // every_word guards for the member form).
+  const Slop_u<127> big{Slop<128>::from_pyrope("0x7fff_ffff_ffff_ffff_ffff_ffff_ffff_ffff")};
+  const Slop_u<127> big2{Slop<128>::from_pyrope("0x7fff_ffff_ffff_ffff_ffff_ffff_ffff_fffe")};
+  EXPECT_TRUE(Slop_u<1>::eq_op(big, big) == 1);
+  EXPECT_TRUE(Slop_u<1>::eq_op(big, big2) == 0);
+  EXPECT_TRUE(Slop_u<1>::gt_op(big, big2) == 1);
+  EXPECT_TRUE(canonical_ok(Slop_u<1>::eq_op(big, big2)));
+}
+
+// ── slop_update in both directions ──────────────────────────────────────────
+
+TEST(Slop_u_test, slop_update_canonical_into_lazy) {
+  Slop<9>         dst = Slop<9>::create_integer(0);
+  const Slop_u<8> v{200};
+
+  EXPECT_TRUE(slop_update(dst, v));            // changed
+  EXPECT_TRUE(dst.identical(Slop<9>{v}));      // the free word-copy conversion
+  EXPECT_TRUE(Slop<2>::eq_op(dst, Slop<9>::create_integer(200)).is_known_true());
+  EXPECT_FALSE(slop_update(dst, v));           // idempotent: the change gate holds
+
+  // The destination is WIDER than the source by construction (DstBits > SrcBits
+  // is a static_assert), which is what keeps Slop<N>{Slop_u<M>} from
+  // re-canonicalizing the sign: Slop<9>{Slop_u<8>{255}} is 255, not -1.
+  Slop<9> all_ones = Slop<9>::create_integer(0);
+  EXPECT_TRUE(slop_update(all_ones, Slop_u<8>{255}));
+  EXPECT_FALSE(all_ones.is_negative());
+  EXPECT_TRUE(Slop<2>::eq_op(all_ones, Slop<9>::create_integer(255)).is_known_true());
+}

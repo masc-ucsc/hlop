@@ -46,6 +46,21 @@ class Slop_u;
 template <typename T>
 struct Slop_lane;
 
+// Operand traits for the mixed-width statics: the WIDTH of an operand and
+// whether its storage is CANONICAL. Same declared-not-defined shape as
+// Slop_lane -- the statics only name it through their template parameters, so
+// it is looked up at instantiation, after the specializations below.
+//
+// This is what lets a Slop_u<W> be passed to Slop<N>::add_op & co. bare. It is
+// not only syntax: `.raw()` hands back a Slop<W+1> whose canonicality the
+// compiler cannot see, so widening it re-runs widen_'s runtime sign fill. With
+// the trait, awords_ picks zero_widen_ instead.
+template <typename T>
+struct Slop_arg;
+
+template <typename T>
+concept Slop_operand = requires { Slop_arg<T>::bits; };
+
 template <int N>
 class Slop {
   static_assert(N >= 1, "Slop bit width must be >= 1");
@@ -198,6 +213,15 @@ public:
       r.base_[top_word] &= static_cast<int64_t>((uint64_t(1) << (keep % 64)) - 1);
     }
     return r;
+  }
+
+  // Name the value zext_to already produced. zext_to<W, W+1>() IS
+  // Slop_u<W>'s invariant, so this hands the masked carrier straight to the
+  // private canonical factory -- one mask total, where `Slop_u<W>{x}` would
+  // mask and then mask again inside the ctor.
+  template <int W>
+  Slop_u<W> zext_to_u() const {
+    return Slop_u<W>::from_canonical_(zext_to<W, W + 1>());
   }
 
   // Unsigned materialization -> signed carrier. A Slop_u<M> is CANONICAL by
@@ -600,6 +624,43 @@ public:
   template <int A, int B>
   static constexpr bool one_word_ = (n_words == 1 && Slop<A>::n_words == 1 && Slop<B>::n_words == 1);
 
+  // Widen a CANONICAL source: the invariant guarantees every bit at and above
+  // the source width is zero, so the upper words are compile-time zero and the
+  // runtime sign fill widen_ computes drops out entirely.
+  template <int M>
+  static constexpr std::array<int64_t, n_words> zero_widen_(const Slop<M>& s) {
+    std::array<int64_t, n_words> a{};
+    constexpr int                cw = (Slop<M>::n_words < n_words) ? Slop<M>::n_words : n_words;
+    for (int i = 0; i < cw; ++i) {
+      a[i] = s.base_[i];
+    }
+    return a;
+  }
+
+  template <Slop_operand T>
+  static constexpr const Slop<Slop_arg<T>::bits>& sref_(const T& t) {
+    return Slop_arg<T>::s(t);
+  }
+
+  template <Slop_operand T>
+  static constexpr decltype(auto) awords_(const T& t) {
+    constexpr int  M = Slop_arg<T>::bits;
+    const Slop<M>& s = Slop_arg<T>::s(t);
+    if constexpr (Slop<M>::n_words == n_words) {
+      return (s.base_);
+    } else if constexpr (Slop_arg<T>::canonical) {
+      return zero_widen_(s);
+    } else {
+      return widen_(s);
+    }
+  }
+
+  // one_word_ over operand TYPES rather than raw widths: a Slop_u<W> carries
+  // its value in a Slop<W+1>, so the scalar fast path has to ask the trait.
+  template <typename X, typename Y>
+  static constexpr bool one_word_a_
+      = (n_words == 1 && Slop<Slop_arg<X>::bits>::n_words == 1 && Slop<Slop_arg<Y>::bits>::n_words == 1);
+
   // Fixed-width Slop is only a materialization of an unlimited-precision HLOP
   // value. Codegen may choose a wider result carrier, but an ordinary operation
   // must never choose one narrower than an input carrier. Explicitly reducing
@@ -610,76 +671,88 @@ public:
     static_assert(((N >= InputBits) && ...), "Slop result is narrower than an input; code generation would lose precision");
   }
 
-  template <int A, int B>
-  static Slop add_op(const Slop<A>& x, const Slop<B>& y) {
-    input_width_check<A, B>();
+  template <Slop_operand X, Slop_operand Y>
+  static Slop add_op(const X& xa, const Y& ya) {
+    const auto& x = sref_(xa);
+    const auto& y = sref_(ya);
+    input_width_check<Slop_arg<X>::bits, Slop_arg<Y>::bits>();
     Slop r;
-    if constexpr (one_word_<A, B>) {
+    if constexpr (one_word_a_<X, Y>) {
       r.base_[0] = x.base_[0] + y.base_[0];
     } else {
-      Blop::add<n_words>(r.base_, words_(x), words_(y));
+      Blop::add<n_words>(r.base_, awords_(xa), awords_(ya));
     }
     return r;
   }
 
-  template <int A, int B>
-  static Slop sub_op(const Slop<A>& x, const Slop<B>& y) {
-    input_width_check<A, B>();
+  template <Slop_operand X, Slop_operand Y>
+  static Slop sub_op(const X& xa, const Y& ya) {
+    const auto& x = sref_(xa);
+    const auto& y = sref_(ya);
+    input_width_check<Slop_arg<X>::bits, Slop_arg<Y>::bits>();
     Slop r;
-    if constexpr (one_word_<A, B>) {
+    if constexpr (one_word_a_<X, Y>) {
       r.base_[0] = x.base_[0] - y.base_[0];
     } else {
       // One borrow chain, not a negate pass followed by a carry chain: the old
       // spelling walked the words twice and cost ~50% more instructions than
       // add_op at the same width.
-      Blop::sub<n_words>(r.base_, words_(x), words_(y));
+      Blop::sub<n_words>(r.base_, awords_(xa), awords_(ya));
     }
     return r;
   }
 
-  template <int A, int B>
-  static Slop mult_op(const Slop<A>& x, const Slop<B>& y) {
-    input_width_check<A, B>();
+  template <Slop_operand X, Slop_operand Y>
+  static Slop mult_op(const X& xa, const Y& ya) {
+    const auto& x = sref_(xa);
+    const auto& y = sref_(ya);
+    input_width_check<Slop_arg<X>::bits, Slop_arg<Y>::bits>();
     Slop r;
-    if constexpr (one_word_<A, B>) {
+    if constexpr (one_word_a_<X, Y>) {
       r.base_[0] = x.base_[0] * y.base_[0];
     } else {
-      Blop::mult<n_words>(r.base_, words_(x), words_(y));
+      Blop::mult<n_words>(r.base_, awords_(xa), awords_(ya));
     }
     return r;
   }
 
-  template <int A, int B>
-  static Slop and_op(const Slop<A>& x, const Slop<B>& y) {
+  template <Slop_operand X, Slop_operand Y>
+  static Slop and_op(const X& xa, const Y& ya) {
+    const auto& x = sref_(xa);
+    const auto& y = sref_(ya);
     Slop r;
-    if constexpr (one_word_<A, B>) {
+    if constexpr (one_word_a_<X, Y>) {
       r.base_[0] = x.base_[0] & y.base_[0];
     } else {
-      Blop::band<n_words>(r.base_, words_(x), words_(y));
+      Blop::band<n_words>(r.base_, awords_(xa), awords_(ya));
     }
     return r;
   }
 
-  template <int A, int B>
-  static Slop or_op(const Slop<A>& x, const Slop<B>& y) {
-    input_width_check<A, B>();
+  template <Slop_operand X, Slop_operand Y>
+  static Slop or_op(const X& xa, const Y& ya) {
+    const auto& x = sref_(xa);
+    const auto& y = sref_(ya);
+    input_width_check<Slop_arg<X>::bits, Slop_arg<Y>::bits>();
     Slop r;
-    if constexpr (one_word_<A, B>) {
+    if constexpr (one_word_a_<X, Y>) {
       r.base_[0] = x.base_[0] | y.base_[0];
     } else {
-      Blop::bor<n_words>(r.base_, words_(x), words_(y));
+      Blop::bor<n_words>(r.base_, awords_(xa), awords_(ya));
     }
     return r;
   }
 
-  template <int A, int B>
-  static Slop xor_op(const Slop<A>& x, const Slop<B>& y) {
-    input_width_check<A, B>();
+  template <Slop_operand X, Slop_operand Y>
+  static Slop xor_op(const X& xa, const Y& ya) {
+    const auto& x = sref_(xa);
+    const auto& y = sref_(ya);
+    input_width_check<Slop_arg<X>::bits, Slop_arg<Y>::bits>();
     Slop r;
-    if constexpr (one_word_<A, B>) {
+    if constexpr (one_word_a_<X, Y>) {
       r.base_[0] = x.base_[0] ^ y.base_[0];
     } else {
-      Blop::bxor<n_words>(r.base_, words_(x), words_(y));
+      Blop::bxor<n_words>(r.base_, awords_(xa), awords_(ya));
     }
     return r;
   }
@@ -701,35 +774,41 @@ public:
   // Boolean-typed Slop, but it forced cgen to append `.zext_to<1>().zext_to<W>()`
   // to every compare (740 sites in one design) to recover the 0/1 an LGraph
   // LT/GT/EQ cell is defined to produce. These give cgen that value directly.
-  template <int A, int B>
-  static Slop eq_op(const Slop<A>& x, const Slop<B>& y) {
+  template <Slop_operand X, Slop_operand Y>
+  static Slop eq_op(const X& xa, const Y& ya) {
+    const auto& x = sref_(xa);
+    const auto& y = sref_(ya);
     Slop r;
-    if constexpr (one_word_<A, B>) {
+    if constexpr (one_word_a_<X, Y>) {
       r.base_[0] = (x.base_[0] == y.base_[0]) ? 1 : 0;
     } else {
-      r.base_[0] = Blop::eq<n_words>(words_(x), words_(y)) ? 1 : 0;
+      r.base_[0] = Blop::eq<n_words>(awords_(xa), awords_(ya)) ? 1 : 0;
     }
     return r;
   }
 
-  template <int A, int B>
-  static Slop lt_op(const Slop<A>& x, const Slop<B>& y) {
+  template <Slop_operand X, Slop_operand Y>
+  static Slop lt_op(const X& xa, const Y& ya) {
+    const auto& x = sref_(xa);
+    const auto& y = sref_(ya);
     Slop r;
-    if constexpr (one_word_<A, B>) {
+    if constexpr (one_word_a_<X, Y>) {
       r.base_[0] = (x.base_[0] < y.base_[0]) ? 1 : 0;
     } else {
-      r.base_[0] = Blop::lt<n_words>(words_(x), words_(y)) ? 1 : 0;
+      r.base_[0] = Blop::lt<n_words>(awords_(xa), awords_(ya)) ? 1 : 0;
     }
     return r;
   }
 
-  template <int A, int B>
-  static Slop gt_op(const Slop<A>& x, const Slop<B>& y) {
+  template <Slop_operand X, Slop_operand Y>
+  static Slop gt_op(const X& xa, const Y& ya) {
+    const auto& x = sref_(xa);
+    const auto& y = sref_(ya);
     Slop r;
-    if constexpr (one_word_<A, B>) {
+    if constexpr (one_word_a_<X, Y>) {
       r.base_[0] = (x.base_[0] > y.base_[0]) ? 1 : 0;
     } else {
-      r.base_[0] = Blop::lt<n_words>(words_(y), words_(x)) ? 1 : 0;
+      r.base_[0] = Blop::lt<n_words>(awords_(ya), awords_(xa)) ? 1 : 0;
     }
     return r;
   }
@@ -737,15 +816,16 @@ public:
   // Shifts: the amount is a plain count, never a materialized Slop constant.
   // cgen previously built a full Slop<W>::create_integer(k) operand just to
   // pass a shift count (788 sites in one design, 270 of them multi-word).
-  template <int A>
-  static Slop shl_op(const Slop<A>& x, int64_t amount) {
-    input_width_check<A>();
+  template <Slop_operand X>
+  static Slop shl_op(const X& xa, int64_t amount) {
+    const auto& x = sref_(xa);
+    input_width_check<Slop_arg<X>::bits>();
     Slop r;
     // No `amount == 0` early-out: Blop::shl already handles a zero count
     // (`x << 0` for one word, the plain word copy for many), so the test only
     // added a compare + select on every RUNTIME shift amount -- a constant
     // amount folds either way.
-    Blop::shl<n_words>(r.base_, words_(x), amount);
+    Blop::shl<n_words>(r.base_, awords_(xa), amount);
     return r;
   }
 
@@ -755,10 +835,11 @@ public:
     return shl_op(x, amount.base_[0]);
   }
 
-  template <int A>
-  static Slop sra_op(const Slop<A>& x, int64_t amount) {
+  template <Slop_operand X>
+  static Slop sra_op(const X& xa, int64_t amount) {
+    const auto& x = sref_(xa);
     Slop r;
-    Blop::shr<n_words>(r.base_, words_(x), amount);  // zero count handled inside
+    Blop::shr<n_words>(r.base_, awords_(xa), amount);  // zero count handled inside
     return r;
   }
 
@@ -1164,8 +1245,10 @@ public:
   // pass/bitwidth, cgen_verilog, cgen_sim). Producing the value the cell is
   // defined to produce lets those clamps go. The member form keeps its old
   // contract, so nothing that relies on it changes.
-  template <int A, int M>
-  static Slop get_mask_op(const Slop<A>& x, const Slop<M>& mask) {
+  template <Slop_operand XT, Slop_operand MT>
+  static Slop get_mask_op(const XT& xa, const MT& ma) {
+    const auto& x    = sref_(xa);
+    const auto& mask = sref_(ma);
     // FAST PATH — positive contiguous mask [lo, hi): a word-wise shift of x,
     // zero-filled above (the unsigned LSB-first pack this form is defined to
     // produce, single selected bit included). Kept small and free of any
@@ -1173,7 +1256,7 @@ public:
     // walk lives out of line for the same reason as the member form's.
     if (!mask.is_negative()) {
       int lo = 0, hi = 0;
-      if (Slop<M>::contiguous_range_(mask, lo, hi)) {
+      if (Slop<Slop_arg<MT>::bits>::contiguous_range_(mask, lo, hi)) {
         return extract_bits_(x, lo, hi - lo);
       }
     }
@@ -1582,11 +1665,12 @@ public:
   // muxes in a real design that is n-1 conversions and n*sizeof(Slop) bytes of
   // traffic thrown away. The short-circuiting `||` fold below stops at the
   // selected arm, so only its conversion is ever executed and nothing spills.
-  template <int SelBits, int... ValueBits>
-  static Slop mux_op(const Slop<SelBits>& sel, const Slop<ValueBits>&... values) {
-    static_assert(sizeof...(ValueBits) > 0, "Mux requires at least one data input");
-    input_width_check<ValueBits...>();
-    constexpr int64_t n = sizeof...(ValueBits);
+  template <Slop_operand Sel, Slop_operand... Vals>
+  static Slop mux_op(const Sel& sel_a, const Vals&... values) {
+    static_assert(sizeof...(Vals) > 0, "Mux requires at least one data input");
+    input_width_check<Slop_arg<Vals>::bits...>();
+    const auto&       sel = sref_(sel_a);
+    constexpr int64_t n   = sizeof...(Vals);
 
     int64_t idx;
     if constexpr (n == 2) {
@@ -1605,11 +1689,11 @@ public:
 
   // Return the idx-th pack element promoted to this width, converting nothing
   // else. `idx` is already known to be in range.
-  template <int... ValueBits>
-  static Slop pick_arm_(int64_t idx, const Slop<ValueBits>&... values) {
+  template <Slop_operand... Vals>
+  static Slop pick_arm_(int64_t idx, const Vals&... values) {
     Slop    out;
     int64_t i = 0;
-    (void)((idx == i++ ? (out = Slop{values}, true) : false) || ...);
+    (void)((idx == i++ ? (out = Slop{sref_(values)}, true) : false) || ...);
     return out;
   }
 
@@ -2115,6 +2199,15 @@ class Slop_u {
 
   template <int>
   friend class Slop_u;
+  // Slop::zext_to_u<W>() deposits an already-masked carrier.
+  template <int>
+  friend class Slop;
+
+  static Slop_u from_canonical_(const Slop<N + 1>& masked) {
+    Slop_u r;
+    r.v_ = masked;
+    return r;
+  }
 
 public:
   // N magnitude bits + the always-zero sign slot: the same word count as
@@ -2130,11 +2223,29 @@ public:
   // the only place: a Slop_u can only be built by masking.
   Slop_u(int64_t val) : v_(Carrier::create_integer(val).template zext_to<N, N + 1>()) {}
 
+  // UNCHECKED and IMPLICIT, deliberately: this is the "mask whatever you were
+  // given" entry point. It accepts a source of ANY width, so it cannot catch a
+  // mis-sized codegen expression the way `Slop<W> v = expr;` does through the
+  // EXPLICIT cross-width ctor. A caller that wants that check spells `land`
+  // (below) instead.
   template <int M>
   Slop_u(const Slop<M>& s) : v_(s.template zext_to<N, N + 1>()) {}
 
   template <int M>
   Slop_u(const Slop_u<M>& s) : v_(s.template zext_to<N, N + 1>()) {}
+
+  // The checked TEMP-DECLARATION landing for codegen. `Slop<W> v = expr;` got its
+  // build-time width check from the EXPLICIT cross-width ctor; the Slop_u ctors
+  // above are implicit and masking, so a mis-sized node_expr would silently
+  // wrap instead of failing the build. `land` is the checked entry point:
+  // node_expr MUST have landed at the declared carrier width N+1. A deliberate
+  // narrowing (the sub_width_expr_ arm) is spelled `.zext_to_u<N>()` at the
+  // call site, where it is visible.
+  template <int M>
+  static Slop_u land(const Slop<M>& s) {
+    static_assert(M == N + 1, "codegen did not land the value at the declared carrier width N+1");
+    return from_canonical_(s.template zext_to<N, N + 1>());
+  }
 
   static Slop_u create_integer(int64_t val) { return Slop_u(val); }
   // Literals land through the signed parser and are then masked to N bits, so
@@ -2162,6 +2273,48 @@ public:
     }
   }
 
+  // Canonical -> canonical re-width. Widening (W >= N) is a word
+  // copy; narrowing masks exactly once. This is the read every consumer of a
+  // materialized unsigned temp wants, and the reason none of them needs a
+  // separate .zext_to<>() first.
+  template <int W>
+  Slop_u<W> zext_to_u() const {
+    if constexpr (W >= N) {
+      return Slop_u<W>::from_canonical_(Slop<W + 1>::from_canonical_(v_));
+    } else {
+      return Slop_u<W>::from_canonical_(v_.template zext_to<W, W + 1>());
+    }
+  }
+
+  // STATIC cell-shaped compares, mirroring Slop<W>::eq_op. Operands
+  // at ANY width and ANY canonicality; the 0/1 result is canonical by
+  // construction, so cgen's compare cells land in Slop_u with no conversion on
+  // either side.
+  //
+  // The 0/1 is rebuilt with create_integer rather than landed through the
+  // cross-width ctor: `Slop<cw>::eq_op` returns its true value as base_[0] == 1,
+  // and at cw == 1 that bit IS the sign slot, so `Slop<N+1>{...}` would
+  // sign-extend it to -1 and deposit a value that breaks the invariant.
+  // is_known_true() reads the words, not the sign, so it is exact at every cw.
+  template <Slop_operand X, Slop_operand Y>
+  static Slop_u eq_op(const X& x, const Y& y) {
+    static_assert(N >= 1, "compare result needs one magnitude bit");
+    constexpr int cw = (Slop_arg<X>::bits > Slop_arg<Y>::bits ? Slop_arg<X>::bits : Slop_arg<Y>::bits);
+    return from_canonical_(Carrier::create_integer(Slop<cw>::eq_op(x, y).is_known_true() ? 1 : 0));
+  }
+  template <Slop_operand X, Slop_operand Y>
+  static Slop_u lt_op(const X& x, const Y& y) {
+    static_assert(N >= 1, "compare result needs one magnitude bit");
+    constexpr int cw = (Slop_arg<X>::bits > Slop_arg<Y>::bits ? Slop_arg<X>::bits : Slop_arg<Y>::bits);
+    return from_canonical_(Carrier::create_integer(Slop<cw>::lt_op(x, y).is_known_true() ? 1 : 0));
+  }
+  template <Slop_operand X, Slop_operand Y>
+  static Slop_u gt_op(const X& x, const Y& y) {
+    static_assert(N >= 1, "compare result needs one magnitude bit");
+    constexpr int cw = (Slop_arg<X>::bits > Slop_arg<Y>::bits ? Slop_arg<X>::bits : Slop_arg<Y>::bits);
+    return from_canonical_(Carrier::create_integer(Slop<cw>::gt_op(x, y).is_known_true() ? 1 : 0));
+  }
+
   // n-ary concat_op — MSB-first, same lane rules as Slop::concat_op (see the
   // comment there). The unsigned landing: each lane is masked into its own
   // window, so the assembly is already canonical and there is nothing to do
@@ -2175,6 +2328,45 @@ public:
     Slop_u r;
     Carrier::concat_into_(r.v_, lanes...);
     return r;
+  }
+
+  // The ops that keep the value canonical FOR FREE, so the result is
+  // named Slop_u with NO mask at all. Each precondition is a static_assert;
+  // when it does not hold the call does not compile and codegen falls back to
+  // the lazy Slop form plus one ctor mask.
+  template <Slop_operand X, Slop_operand Y>
+  static Slop_u and_op(const X& x, const Y& y) {
+    static_assert(Slop_arg<X>::canonical || Slop_arg<Y>::canonical, "and_op needs at least ONE canonical operand");
+    static_assert(Slop_arg<X>::bits <= N + 1 && Slop_arg<Y>::bits <= N + 1, "and_op operand wider than the canonical result");
+    return from_canonical_(Carrier::and_op(x, y));
+  }
+  template <Slop_operand X, Slop_operand Y>
+  static Slop_u or_op(const X& x, const Y& y) {
+    static_assert(Slop_arg<X>::canonical && Slop_arg<Y>::canonical, "or_op keeps canonicality only when BOTH operands are canonical");
+    static_assert(Slop_arg<X>::bits <= N + 1 && Slop_arg<Y>::bits <= N + 1, "or_op operand wider than the canonical result");
+    return from_canonical_(Carrier::or_op(x, y));
+  }
+  template <Slop_operand X, Slop_operand Y>
+  static Slop_u xor_op(const X& x, const Y& y) {
+    static_assert(Slop_arg<X>::canonical && Slop_arg<Y>::canonical, "xor_op keeps canonicality only when BOTH operands are canonical");
+    static_assert(Slop_arg<X>::bits <= N + 1 && Slop_arg<Y>::bits <= N + 1, "xor_op operand wider than the canonical result");
+    return from_canonical_(Carrier::xor_op(x, y));
+  }
+  // `amount` is a RUNTIME count, so the bound must hold at amount == 0 too: a
+  // right shift keeps at most the operand's M magnitude bits, and the result is
+  // canonical at N only when N >= M. (M <= N+1 would admit M == N+1, which
+  // deposits a value with bit N set — an invariant break, not a truncation.)
+  template <int M>
+  static Slop_u sra_op(const Slop_u<M>& x, int64_t amount) {
+    static_assert(M <= N, "sra_op result is narrower than the operand");
+    return from_canonical_(Carrier::sra_op(x, amount));
+  }
+  template <Slop_operand X, Slop_operand Y>
+  static Slop_u add_op(const X& x, const Y& y) {
+    static_assert(Slop_arg<X>::canonical && Slop_arg<Y>::canonical, "add_op keeps canonicality only for canonical operands");
+    constexpr int wider = (Slop_arg<X>::bits > Slop_arg<Y>::bits) ? Slop_arg<X>::bits : Slop_arg<Y>::bits;
+    static_assert(N + 1 >= wider + 1, "add_op needs one carry bit of headroom to stay canonical");
+    return from_canonical_(Carrier::add_op(x, y));
   }
 
   // --- Comparisons ---
@@ -2297,6 +2489,20 @@ struct Slop_lane<Slop_u<W>> {
   static constexpr int bits = W;
 };
 
+template <int W>
+struct Slop_arg<Slop<W>> {
+  static constexpr int      bits      = W;
+  static constexpr bool     canonical = false;
+  static const Slop<W>&     s(const Slop<W>& v) { return v; }
+};
+
+template <int W>
+struct Slop_arg<Slop_u<W>> {
+  static constexpr int      bits      = W + 1;
+  static constexpr bool     canonical = true;
+  static const Slop<W + 1>& s(const Slop_u<W>& v) { return v.raw(); }
+};
+
 // ── Whole-array memory helpers (used by cgen_sim) ────────────────────────────
 // A whole-array memory is a std::array<Slop<B>, S> of S entries of B bits. These
 // bridge it to/from the size*bits buses on the Memory cell's `read_all` (async
@@ -2362,6 +2568,20 @@ inline bool slop_update(bool& dst, bool v) {
 // members / slots). No DstBits >= SrcBits check: writing a signed Slop<W> into
 // a Slop_u<W-1> IS the intended materialization — the mask is the point, not a
 // loss of precision — so the width relation is the emitter's call.
+// The other direction -- writing a CANONICAL value into a lazily
+// typed destination (a boundary slot, a state member, an output field). Free:
+// the source's invariant means there is nothing to mask or sign-fill.
+template <int DstBits, int SrcBits>
+inline bool slop_update(Slop<DstBits>& dst, const Slop_u<SrcBits>& v) {
+  static_assert(DstBits > SrcBits, "Slop{Slop_u} re-canonicalizes the sign when DstBits <= SrcBits");
+  const Slop<DstBits> nv{v};
+  if (dst.identical(nv)) {
+    return false;
+  }
+  dst = nv;
+  return true;
+}
+
 template <int DstBits, int SrcBits>
 inline bool slop_update(Slop_u<DstBits>& dst, const Slop<SrcBits>& v) {
   const Slop_u<DstBits> masked{v};  // the one materialization mask
