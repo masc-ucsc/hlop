@@ -10,6 +10,7 @@
 
 #include <array>
 #include <cstdint>
+#include <type_traits>
 
 using namespace hlop;
 
@@ -17,6 +18,8 @@ namespace {
 
 using V8  = Slop<8>;
 using V16 = Slop<16>;
+using U8  = Slop_u<8>;
+using U16 = Slop_u<16>;
 using D   = spool_ptr<Dlop>;
 
 constexpr V8 v8(int64_t x) { return V8::create_integer(x); }
@@ -261,6 +264,36 @@ TEST(MemoryWholeArray, read_all_and_apply_update_round_trip) {
   for (std::size_t i = 0; i < 4; ++i) {
     EXPECT_EQ(m2[i].to_just_i64(), m[i].to_just_i64());
   }
+}
+
+TEST(MemoryUnsigned, storage_reads_and_whole_array_bus_stay_canonical) {
+  Memory_fwd<U8, 8, 4, 1, 1> m;
+  m[0] = U8::create_integer(0x81);
+  m[1] = U8::create_integer(0x82);
+  m.stage_write<0>(U8::create_integer(1), U8::create_integer(1), U8::create_integer(0xFF));
+
+  const auto forwarded = m.read<0>(U8::create_integer(1));
+  static_assert(std::is_same_v<decltype(forwarded), const U8>);
+  EXPECT_EQ(forwarded.to_just_i64(), 0xFF);
+  m.tick();
+
+  const auto bus = m.read_all();
+  static_assert(std::is_same_v<decltype(bus), const Slop_u<32>>);
+  EXPECT_EQ(static_cast<uint64_t>(bus.to_just_i64()) & 0xFFFFu, 0xFF81u);
+
+  Memory_old<U8, 8, 4, 1, 1> restored;
+  EXPECT_TRUE(restored.apply_update(bus));
+  EXPECT_EQ(restored[0].to_just_i64(), 0x81);
+  EXPECT_EQ(restored[1].to_just_i64(), 0xFF);
+  EXPECT_FALSE(restored.apply_update(bus));
+}
+
+TEST(MemoryUnsigned, subword_enable_changes_only_the_selected_lane) {
+  Memory_old<U16, 16, 8, /*NRd=*/1, /*NWr=*/1, /*NUserWr=*/1, /*WenSize=*/4> m;
+  m[0] = U16::create_integer(0x1234);
+  m.stage_write<0>(U16::create_integer(0b1000), U16::create_integer(0), U16::create_integer(0xABCD));
+  m.tick();
+  EXPECT_EQ(m[0].to_just_i64(), 0xA234);
 }
 
 // ===========================================================================

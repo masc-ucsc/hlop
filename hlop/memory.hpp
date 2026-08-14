@@ -126,6 +126,34 @@ struct Mem_val<Slop<N>> {
   static int64_t to_i64(const V& a) { return a.to_just_i64(); }
 };
 
+template <int N>
+struct Mem_val<Slop_u<N>> {
+  using V = Slop_u<N>;
+
+  static V       zero() { return V::create_integer(0); }
+  static V       ones(int nbits) { return V{Slop<N + 1>::create_integer(-1).adjust_bits(nbits)}; }
+  // Slop has no x plane. Preserve the memory backend's seeded-random
+  // undefined behavior, then canonicalize the N-bit result once at storage.
+  static V       undef(int nbits) { return V{Slop<N>::unknown(nbits)}; }
+  static V       or_(const V& a, const V& b) { return V::or_op(a, b); }
+  static V       and_(const V& a, const V& b) { return V::and_op(a, b); }
+  static V       not_(const V& a) { return V::not_op(a); }
+  static V       shl_(const V& a, int64_t n) { return V::shl_op(a, n); }
+  static V       sra_(const V& a, int64_t n) { return V::sra_op(a, n); }
+  // An unsigned entry is already the finite N-bit realization. Memory lane
+  // merging must retain that interpretation rather than sign-extending bit
+  // N-1 as the Slop adapter does.
+  static V       sext_(const V& a, int) { return a; }
+  static V       undef_lanes(const V& a, const V& mask, int) { return V{a.raw().unknown_lanes(mask.raw())}; }
+  static bool    bit_test(const V& a, int pos) { return a.bit_test(pos); }
+  static bool    truthy(const V& a) { return a.is_known_true(); }
+  static bool    uncertain(const V&) { return false; }
+  static bool    bit_unknown(const V&, int) { return false; }
+  static int     nbits(const V&) { return N; }
+  static bool    addr_known(const V& a) { return a.is_just_i64(); }
+  static int64_t to_i64(const V& a) { return a.to_just_i64(); }
+};
+
 template <>
 struct Mem_val<spool_ptr<Dlop>> {
   using V = spool_ptr<Dlop>;
@@ -173,6 +201,10 @@ struct Mem_width {
 };
 template <int N>
 struct Mem_width<Slop<N>> {
+  static constexpr int value = N;
+};
+template <int N>
+struct Mem_width<Slop_u<N>> {
   static constexpr int value = N;
 };
 
@@ -377,6 +409,10 @@ public:
   auto read_all() const { return slop_read_all(data_); }
   template <int W>
   bool apply_update(const Slop<W>& bus) {  // true = some entry changed
+    return slop_apply_update(data_, bus);
+  }
+  template <int W>
+  bool apply_update(const Slop_u<W>& bus) {  // canonical whole-array bus
     return slop_apply_update(data_, bus);
   }
 

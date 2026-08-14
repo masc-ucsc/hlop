@@ -305,6 +305,8 @@ TEST(Slop_u_test, checkpoint_mem_hex_roundtrip) {
 }
 
 TEST(Slop_u_test, vcd_bits) {
+  EXPECT_TRUE(Slop_u<8>{5}.same_repr(Slop_u<8>{5}));
+  EXPECT_FALSE(Slop_u<8>{5}.same_repr(Slop_u<8>{6}));
   EXPECT_EQ(vcd::to_vcd_bits(Slop_u<8>{5}, 8), "b00000101");
   EXPECT_EQ(vcd::to_vcd_bits(Slop_u<1>{1}, 1), "1");
   EXPECT_EQ(vcd::to_vcd_bits(Slop_u<1>{0}, 1), "0");

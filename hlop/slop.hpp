@@ -2623,6 +2623,7 @@ public:
   // Representational equality, the sim's change-gated compare (same width, so
   // the invariant makes it exact).
   bool identical(const Slop_u& o) const { return v_.identical(o.v_); }
+  bool same_repr(const Slop_u& o) const { return v_.same_repr(o.v_); }
 
   // --- Queries (delegated; the value is always a non-negative Integer) ---
   // Two different widths are on offer here, deliberately:
@@ -2717,6 +2718,17 @@ Slop<B* static_cast<int>(S)> slop_read_all(const std::array<Slop<B>, S>& a) {
   return bus;
 }
 
+template <int B, std::size_t S>
+Slop_u<B* static_cast<int>(S)> slop_read_all(const std::array<Slop_u<B>, S>& a) {
+  constexpr int W = B * static_cast<int>(S);
+  Slop_u<W>     bus;
+  for (std::size_t i = 0; i < S; ++i) {
+    const Slop_u<W> lane{a[i]};
+    bus = Slop_u<W>::or_op(bus, Slop_u<W>::shl_op(lane, static_cast<int64_t>(i) * B));
+  }
+  return bus;
+}
+
 // Scatter a W-bit `update` bus into the per-entry array. The cross-width ctor
 // truncates+sign-fits each slice to the canonical signed B-bit entry, matching
 // how cgen_sim stores/reads entries elsewhere (so logical-vs-arith shift of the
@@ -2727,6 +2739,19 @@ bool slop_apply_update(std::array<Slop<B>, S>& dst, const Slop<W>& bus) {
   bool changed = false;
   for (std::size_t i = 0; i < S; ++i) {
     Slop<B> nv{bus.sra_op(static_cast<int64_t>(i) * B)};
+    if (!dst[i].identical(nv)) {
+      dst[i]  = nv;
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+template <int B, std::size_t S, Slop_operand Bus>
+bool slop_apply_update(std::array<Slop_u<B>, S>& dst, const Bus& bus) {
+  bool changed = false;
+  for (std::size_t i = 0; i < S; ++i) {
+    const auto nv = Slop_u<B>{Slop<Slop_arg<Bus>::bits>::sra_op(bus, static_cast<int64_t>(i) * B)};
     if (!dst[i].identical(nv)) {
       dst[i]  = nv;
       changed = true;
