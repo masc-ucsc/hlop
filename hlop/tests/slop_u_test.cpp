@@ -45,14 +45,14 @@ uint64_t RefLane(const L& lane) {
 // ── the invariant ───────────────────────────────────────────────────────────
 
 TEST(Slop_u_test, ctor_masks_every_source) {
-  EXPECT_TRUE(Slop_u<8>(300) == 44);                                  // int64_t
-  EXPECT_TRUE(Slop_u<8>(-1) == 255);                                  // negative int64_t
-  EXPECT_TRUE(Slop_u<8>(Slop<9>::create_integer(-1)) == 255);         // Slop
-  EXPECT_TRUE(Slop_u<8>(Slop<4>::create_integer(-1)) == 15);          // narrower Slop: 4-bit -1
-  EXPECT_TRUE(Slop_u<4>(Slop_u<8>(255)) == 15);                       // narrowing Slop_u
-  EXPECT_TRUE(Slop_u<12>(Slop_u<8>(255)) == 255);                     // widening Slop_u
-  EXPECT_TRUE(Slop_u<8>::from_pyrope("-1") == 255);                   // literal
-  EXPECT_TRUE(Slop_u<8>::from_pyrope("0x1ff") == 255);                // over-wide literal
+  EXPECT_TRUE(Slop_u<8>(300) == 44);                           // int64_t
+  EXPECT_TRUE(Slop_u<8>(-1) == 255);                           // negative int64_t
+  EXPECT_TRUE(Slop_u<8>(Slop<9>::create_integer(-1)) == 255);  // Slop
+  EXPECT_TRUE(Slop_u<8>(Slop<4>::create_integer(-1)) == 15);   // narrower Slop: 4-bit -1
+  EXPECT_TRUE(Slop_u<4>(Slop_u<8>(255)) == 15);                // narrowing Slop_u
+  EXPECT_TRUE(Slop_u<12>(Slop_u<8>(255)) == 255);              // widening Slop_u
+  EXPECT_TRUE(Slop_u<8>::from_pyrope("-1") == 255);            // literal
+  EXPECT_TRUE(Slop_u<8>::from_pyrope("0x1ff") == 255);         // over-wide literal
   EXPECT_TRUE(Slop_u<3>::from_binary("111", /*unsigned_result=*/true) == 7);
 }
 
@@ -74,7 +74,7 @@ TEST(Slop_u_test, canonical_where_slop_is_dirty) {
 
 TEST(Slop_u_test, wide_ctor_masks) {
   const Slop_u<65> u{Slop<200>::from_pyrope("0x3_ffff_ffff_ffff_ffff")};  // 66 bits set
-  EXPECT_EQ(u.to_hex(), "1ffffffffffffffff");                            // masked to 65
+  EXPECT_EQ(u.to_hex(), "1ffffffffffffffff");                             // masked to 65
   EXPECT_TRUE(u.bit_test(64));
   EXPECT_FALSE(u.bit_test(65));
   EXPECT_EQ(u.get_bits(), 66);  // magnitude + sign slot
@@ -254,9 +254,9 @@ TEST(Slop_u_test, concat_matches_per_bit_reference) {
     const Slop_u<11> b{static_cast<int64_t>(rng())};
     const Slop<13>   c = Slop<13>::create_integer(static_cast<int64_t>(rng()));
 
-    const uint64_t ra = RefLane<7>(a);
-    const uint64_t rb = RefLane<11>(b);
-    const uint64_t rc = RefLane<13>(c);
+    const uint64_t ra       = RefLane<7>(a);
+    const uint64_t rb       = RefLane<11>(b);
+    const uint64_t rc       = RefLane<13>(c);
     const uint64_t expected = (ra << 24) | (rb << 13) | rc;
 
     const auto got = Slop_u<31>::concat_op(a, b, c);
@@ -264,7 +264,7 @@ TEST(Slop_u_test, concat_matches_per_bit_reference) {
         << "iter " << iter << " got " << got.to_hex() << " want " << std::hex << expected;
 
     // The signed landing is the same bits, sign-extended from bit 30.
-    const auto signed_got = Slop<31>::concat_op(a, b, c);
+    const auto    signed_got  = Slop<31>::concat_op(a, b, c);
     const int64_t want_signed = static_cast<int64_t>(expected << 33) >> 33;
     ASSERT_EQ(signed_got.to_just_i64(), want_signed) << "iter " << iter;
   }
@@ -381,6 +381,66 @@ TEST(Slop_u_test, slop_operand_matches_raw_multiword) {
   EXPECT_TRUE(wide.identical(Slop<130>::from_pyrope("0x1_0000_0000_0000_0000")));
 }
 
+// A Slop_u<N-1> IS a Slop<N> whose MSB is zero, so every same-width operand
+// slot must take it with no conversion at all. These are the ops cgen actually
+// emits, by frequency over lhdsuite's minion: set_mask_op_opt 16,879,
+// not_op 6,049, a runtime shift amount 871, hotmux_op 1,524, member
+// get_mask_op 39.
+TEST(Slop_u_test, same_width_operand_slots_take_slop_u_bare) {
+  const Slop<9>   base{Slop<9>::create_integer(0)};
+  const Slop_u<8> value{0xa5};
+  const Slop_u<8> mask{0x0f};
+
+  // set_mask_op_opt: the value slot. Read SIGNED by contract -- a canonical
+  // value is never negative, so the sign fill is zeros, i.e. the unsigned read.
+  EXPECT_TRUE(base.set_mask_op_opt(0, 8, value).identical(base.set_mask_op_opt(0, 8, value.raw())));
+  EXPECT_TRUE(base.set_mask_op_opt(0, 8, value).identical(Slop<9>::create_integer(0xa5)));
+  // The operand slot is SAME-WIDTH, exactly as it was for Slop<N> (the
+  // cross-width ctor is explicit, so a narrower Slop never bound here either):
+  // Slop<20> takes a Slop_u<19>, not a Slop_u<8>. A range wider than the
+  // canonical value's magnitude then fills with ZERO, where the same word held
+  // as a negative Slop fills with ones.
+  EXPECT_TRUE(Slop<20>::create_integer(0).set_mask_op_opt(0, 16, Slop_u<19>{0xff}).identical(Slop<20>::create_integer(0xff)));
+  EXPECT_TRUE(
+      Slop<20>::create_integer(0).set_mask_op_opt(0, 16, Slop<20>::create_integer(-1)).identical(Slop<20>::create_integer(0xffff)));
+
+  // set_mask_op: both slots.
+  EXPECT_TRUE(base.set_mask_op(mask, value).identical(base.set_mask_op(mask.raw(), value.raw())));
+
+  // member get_mask_op: the mask slot.
+  const Slop<9> src = Slop<9>::create_integer(0xa5);
+  EXPECT_TRUE(src.get_mask_op(mask).identical(src.get_mask_op(mask.raw())));
+  EXPECT_TRUE(src.get_mask_op(mask).identical(Slop<9>::create_integer(0x5)));
+
+  // not_op: the static form.
+  EXPECT_TRUE(Slop<9>::not_op(value).identical(Slop<9>::not_op(value.raw())));
+
+  // A RUNTIME shift amount, in either slot.
+  EXPECT_TRUE(Slop<12>::shl_op(value, Slop_u<3>{3}).identical(Slop<12>::shl_op(value.raw(), 3)));
+  EXPECT_TRUE(Slop<9>::sra_op(value, Slop_u<3>{4}).identical(Slop<9>::sra_op(value.raw(), 4)));
+  EXPECT_TRUE(
+      Slop<12>::shl_op(Slop<9>::create_integer(0xa5), Slop_u<3>{3}).identical(Slop<12>::shl_op(Slop<9>::create_integer(0xa5), 3)));
+
+  // hotmux_op: selector and arms.
+  const Slop_u<8> arm0{11};
+  const Slop_u<8> arm1{22};
+  EXPECT_TRUE(Slop<9>::hotmux_op(Slop_u<2>{1}, arm0, arm1).identical(Slop<9>::create_integer(11)));
+  EXPECT_TRUE(Slop<9>::hotmux_op(Slop_u<2>{2}, arm0, arm1).identical(Slop<9>::create_integer(22)));
+  EXPECT_TRUE(Slop<9>::hotmux_op(Slop<3>::create_integer(2), arm0, arm1).identical(Slop<9>::create_integer(22)));
+
+  // Slop::concat_op already reads lane widths from the TYPE, so a MIXED lane
+  // list needs no conversion either. Note the landing differs by result type,
+  // as documented: Slop::concat_op SEXTs from the assembled top bit, so a top
+  // lane with its MSB set lands negative; Slop_u::concat_op zero-extends.
+  EXPECT_TRUE(Slop_u<12>::concat_op(Slop_u<4>{0xa}, Slop<5>::create_integer(0x5), Slop_u<3>{0x7})
+              == ((0xa << 8) | (0x5 << 3) | 0x7));
+  EXPECT_TRUE(Slop<13>::concat_op(Slop_u<4>{0xa}, Slop<5>::create_integer(0x5), Slop_u<3>{0x7})
+                  .identical(Slop<13>::create_integer(((0xa << 8) | (0x5 << 3) | 0x7) - (1 << 12))));
+  // A top lane whose MSB is clear lands the same either way.
+  EXPECT_TRUE(Slop<13>::concat_op(Slop_u<3>{0x2}, Slop<5>::create_integer(0x5), Slop_u<3>{0x7})
+                  .identical(Slop<13>::create_integer((0x2 << 8) | (0x5 << 3) | 0x7)));
+}
+
 TEST(Slop_u_test, slop_operand_get_mask_and_mux) {
   const Slop_u<8> v{0xa5};
 
@@ -435,6 +495,21 @@ TEST(Slop_u_test, land_is_the_checked_landing) {
   const Slop<9> over = Slop<9>::add_op(Slop<9>::create_integer(200), Slop<9>::create_integer(100));
   EXPECT_TRUE(Slop_u<8>::land(over) == 44);
   EXPECT_TRUE(canonical_ok(Slop_u<8>::land(over)));
+
+  // A mixed expression may already have the checked destination type. Landing
+  // it again is an identity, not a round trip through the Slop carrier.
+  const Slop_u<8> canonical{0xa5};
+  EXPECT_TRUE(Slop_u<8>::land(canonical) == canonical);
+  EXPECT_TRUE(canonical_ok(Slop_u<8>::land(canonical)));
+}
+
+TEST(Slop_u_test, from_proven_is_a_mask_free_checked_width_landing) {
+  const Slop<9> canonical = Slop<9>::create_integer(200);
+  EXPECT_TRUE(Slop_u<8>::from_proven(canonical) == 200);
+  EXPECT_TRUE(canonical_ok(Slop_u<8>::from_proven(canonical)));
+
+  const Slop_u<8> already_canonical{0xa5};
+  EXPECT_TRUE(Slop_u<8>::from_proven(already_canonical) == already_canonical);
 }
 
 // ── the canonical-preserving statics ────────────────────────────────────────
@@ -478,6 +553,127 @@ TEST(Slop_u_test, canonical_preserving_statics) {
   EXPECT_TRUE(canonical_ok(Slop_u<64>::sra_op(Slop_u<64>{Slop<65>::create_integer(-1)}, 1)));
 }
 
+TEST(Slop_u_test, generated_member_mask_spellings_accept_mixed_operands) {
+  const Slop_u<8> base{0xa5};
+  const Slop<9>   value = Slop<9>::create_integer(3);
+
+  EXPECT_TRUE(base.set_mask_op_opt(4, 8, value) == 0x35);
+  EXPECT_TRUE(base.clear_mask_op_opt(4, 8) == 0x05);
+  EXPECT_TRUE(canonical_ok(base.set_mask_op_opt(4, 8, value)));
+  EXPECT_TRUE(canonical_ok(base.clear_mask_op_opt(4, 8)));
+
+  const Slop<9> mask = Slop<9>::create_integer(0xf0);
+  EXPECT_TRUE(Slop_u<8>::land(base.set_mask_op(mask, value)) == 0x35);
+  EXPECT_EQ(base.get_mask_op(mask).zext_to<4>().to_just_i64(), 0xa);
+}
+
+// Every op cgen emits, as a Slop_u RESULT. The value must match the lazy
+// computation read back at the same width, and the invariant must hold.
+// Frequencies over lhdsuite's minion drive which ops are here at all.
+TEST(Slop_u_test, slop_u_as_a_result_type) {
+  const Slop_u<8> a{0xa5};
+  const Slop_u<8> b{0x3c};
+
+  // FREE (no mask): the result is canonical by construction.
+  const auto prod = Slop_u<16>::mult_op(a, b);  // 104 sites
+  EXPECT_TRUE(prod == (0xa5 * 0x3c));
+  EXPECT_TRUE(canonical_ok(prod));
+
+  const auto m0 = Slop_u<8>::mux_op(Slop_u<2>{0}, a, b);
+  const auto m1 = Slop_u<8>::mux_op(Slop<3>::create_integer(1), a, b);
+  EXPECT_TRUE(m0 == 0xa5);
+  EXPECT_TRUE(m1 == 0x3c);
+  EXPECT_TRUE(canonical_ok(m0));
+
+  const auto h0 = Slop_u<8>::hotmux_op(Slop_u<2>{1}, a, b);  // 1,524 sites
+  const auto h1 = Slop_u<8>::hotmux_op(Slop<3>::create_integer(2), a, b);
+  EXPECT_TRUE(h0 == 0xa5);
+  EXPECT_TRUE(h1 == 0x3c);
+  EXPECT_TRUE(canonical_ok(h1));
+
+  const Slop_u<8> base{0};
+  const auto      spliced = Slop_u<8>::set_mask_op_opt(base, 0, 4, Slop_u<8>{0xf});  // 16,879 sites
+  EXPECT_TRUE(spliced == 0xf);
+  EXPECT_TRUE(canonical_ok(spliced));
+  EXPECT_TRUE(Slop_u<8>::set_mask_op_opt(Slop_u<8>{0xff}, 4, 8, Slop_u<8>{0x0}) == 0x0f);
+  EXPECT_TRUE(Slop_u<8>::clear_mask_op_opt(Slop_u<8>{0xff}, 4, 8) == 0x0f);  // 534 sites
+  EXPECT_TRUE(canonical_ok(Slop_u<8>::clear_mask_op_opt(Slop_u<8>{0xff}, 4, 8)));
+
+  // ONE MASK, replacing a conversion the caller was already emitting.
+  const auto inv = Slop_u<8>::not_op(a);  // 6,049 sites
+  EXPECT_TRUE(inv == (~0xa5 & 0xff));
+  EXPECT_TRUE(canonical_ok(inv));
+  EXPECT_TRUE(Slop_u<8>::not_op(Slop<9>::create_integer(0)) == 0xff);
+
+  const auto sh = Slop_u<12>::shl_op(a, 3);  // 8,269 sites
+  EXPECT_TRUE(sh == ((0xa5 << 3) & 0xfff));
+  EXPECT_TRUE(canonical_ok(sh));
+  EXPECT_TRUE(Slop_u<12>::shl_op(a, Slop_u<3>{3}) == ((0xa5 << 3) & 0xfff));
+  // The mask is load bearing: a shift past the result width truncates rather
+  // than leaving dirty bits above N.
+  EXPECT_TRUE(canonical_ok(Slop_u<8>::shl_op(a, 5)));
+  EXPECT_TRUE(Slop_u<8>::shl_op(a, 5) == ((0xa5 << 5) & 0xff));
+
+  const auto gm = Slop_u<8>::get_mask_op(Slop<9>::create_integer(0xa5), Slop<9>::create_integer(0x0f));
+  EXPECT_TRUE(gm == 0x5);
+  EXPECT_TRUE(canonical_ok(gm));
+  // The STATIC form packs unsigned, so a single selected bit is 0/1 here --
+  // not the signed -1 the member form returns.
+  EXPECT_TRUE(Slop_u<8>::get_mask_op(Slop<9>::create_integer(0xa5), Slop<9>::create_integer(0x1)) == 1);
+  EXPECT_TRUE(canonical_ok(Slop_u<8>::get_mask_op(Slop<9>::create_integer(0xa5), Slop<9>::create_integer(0x1))));
+
+  // sub_op: canonical only under the CALLER's x >= y obligation, which is the
+  // range proof the bitwidth pass stamps as unsigned. In contract it is free
+  // and exact.                                                       // 135 sites
+  const auto diff = Slop_u<8>::sub_op(a, b);
+  EXPECT_TRUE(diff == (0xa5 - 0x3c));
+  EXPECT_TRUE(canonical_ok(diff));
+  EXPECT_TRUE(Slop_u<8>::sub_op(a, a) == 0);
+  EXPECT_TRUE(canonical_ok(Slop_u<8>::sub_op(a, a)));
+
+  // A C++ ternary over two Slop_u arms is already a Slop_u result with no
+  // library support at all -- which is what the 22,588 emitted `? :` selects
+  // become once the arms are typed.
+  const bool      cond = a > b;
+  const Slop_u<8> tern = cond ? a : b;
+  EXPECT_TRUE(tern == 0xa5);
+  EXPECT_TRUE(canonical_ok(tern));
+}
+
+// sub_op is the only entry point whose precondition is a VALUE fact, so sweep
+// it: every in-contract (x >= y) pair must equal the lazy carrier computation
+// and satisfy the invariant, at one word and across a word boundary.
+TEST(Slop_u_test, sub_op_is_exact_over_its_contract) {
+  std::mt19937_64 rng(12345);
+
+  for (int i = 0; i < 4000; ++i) {
+    const int64_t x  = static_cast<int64_t>(rng() & 0xff);
+    const int64_t y  = static_cast<int64_t>(rng() & 0xff);
+    const int64_t hi = x > y ? x : y;
+    const int64_t lo = x > y ? y : x;  // hi >= lo: the contract
+
+    const Slop_u<8> a{hi};
+    const Slop_u<8> b{lo};
+    const auto      d = Slop_u<8>::sub_op(a, b);
+    EXPECT_TRUE(d == (hi - lo)) << "hi=" << hi << " lo=" << lo;
+    EXPECT_TRUE(canonical_ok(d)) << "hi=" << hi << " lo=" << lo;
+    EXPECT_TRUE(d.raw().identical(Slop<9>::sub_op(a.raw(), b.raw()))) << "hi=" << hi << " lo=" << lo;
+  }
+
+  // Across a word boundary, where a borrow-out would corrupt the upper word.
+  const Slop_u<70> big{Slop<71>::from_pyrope("0x3f_ffff_ffff_ffff_ffff")};
+  const Slop_u<70> one{1};
+  const auto       d = Slop_u<70>::sub_op(big, one);
+  EXPECT_TRUE(canonical_ok(d));
+  EXPECT_TRUE(d.raw().identical(Slop<71>::sub_op(big.raw(), one.raw())));
+  EXPECT_TRUE(Slop_u<70>::sub_op(big, big) == 0);
+  EXPECT_TRUE(canonical_ok(Slop_u<70>::sub_op(big, big)));
+
+  // Mixed widths stay exact as long as the result carrier covers both.
+  EXPECT_TRUE(Slop_u<16>::sub_op(Slop_u<16>{1000}, Slop_u<8>{255}) == 745);
+  EXPECT_TRUE(canonical_ok(Slop_u<16>::sub_op(Slop_u<16>{1000}, Slop_u<8>{255})));
+}
+
 // The static compares rebuild their 0/1 with create_integer rather than landing
 // a Slop<cw> through the cross-width ctor. At cw == 1 the true value's only bit
 // IS the sign slot, so the ctor would sign-extend it to -1 and deposit a value
@@ -512,10 +708,10 @@ TEST(Slop_u_test, slop_update_canonical_into_lazy) {
   Slop<9>         dst = Slop<9>::create_integer(0);
   const Slop_u<8> v{200};
 
-  EXPECT_TRUE(slop_update(dst, v));            // changed
-  EXPECT_TRUE(dst.identical(Slop<9>{v}));      // the free word-copy conversion
+  EXPECT_TRUE(slop_update(dst, v));        // changed
+  EXPECT_TRUE(dst.identical(Slop<9>{v}));  // the free word-copy conversion
   EXPECT_TRUE(Slop<2>::eq_op(dst, Slop<9>::create_integer(200)).is_known_true());
-  EXPECT_FALSE(slop_update(dst, v));           // idempotent: the change gate holds
+  EXPECT_FALSE(slop_update(dst, v));  // idempotent: the change gate holds
 
   // The destination is WIDER than the source by construction (DstBits > SrcBits
   // is a static_assert), which is what keeps Slop<N>{Slop_u<M>} from

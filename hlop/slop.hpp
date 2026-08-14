@@ -720,7 +720,7 @@ public:
   static Slop and_op(const X& xa, const Y& ya) {
     const auto& x = sref_(xa);
     const auto& y = sref_(ya);
-    Slop r;
+    Slop        r;
     if constexpr (one_word_a_<X, Y>) {
       r.base_[0] = x.base_[0] & y.base_[0];
     } else {
@@ -757,14 +757,14 @@ public:
     return r;
   }
 
-  template <int A>
-  static Slop not_op(const Slop<A>& x) {
-    input_width_check<A>();
+  template <Slop_operand X>
+  static Slop not_op(const X& xa) {
+    input_width_check<Slop_arg<X>::bits>();
     Slop r;
-    if constexpr (n_words == 1 && Slop<A>::n_words == 1) {
-      r.base_[0] = ~x.base_[0];
+    if constexpr (n_words == 1 && Slop<Slop_arg<X>::bits>::n_words == 1) {
+      r.base_[0] = ~sref_(xa).base_[0];
     } else {
-      Blop::bnot<n_words>(r.base_, words_(x));
+      Blop::bnot<n_words>(r.base_, awords_(xa));
     }
     return r;
   }
@@ -778,7 +778,7 @@ public:
   static Slop eq_op(const X& xa, const Y& ya) {
     const auto& x = sref_(xa);
     const auto& y = sref_(ya);
-    Slop r;
+    Slop        r;
     if constexpr (one_word_a_<X, Y>) {
       r.base_[0] = (x.base_[0] == y.base_[0]) ? 1 : 0;
     } else {
@@ -791,7 +791,7 @@ public:
   static Slop lt_op(const X& xa, const Y& ya) {
     const auto& x = sref_(xa);
     const auto& y = sref_(ya);
-    Slop r;
+    Slop        r;
     if constexpr (one_word_a_<X, Y>) {
       r.base_[0] = (x.base_[0] < y.base_[0]) ? 1 : 0;
     } else {
@@ -804,7 +804,7 @@ public:
   static Slop gt_op(const X& xa, const Y& ya) {
     const auto& x = sref_(xa);
     const auto& y = sref_(ya);
-    Slop r;
+    Slop        r;
     if constexpr (one_word_a_<X, Y>) {
       r.base_[0] = (x.base_[0] > y.base_[0]) ? 1 : 0;
     } else {
@@ -818,7 +818,6 @@ public:
   // pass a shift count (788 sites in one design, 270 of them multi-word).
   template <Slop_operand X>
   static Slop shl_op(const X& xa, int64_t amount) {
-    const auto& x = sref_(xa);
     input_width_check<Slop_arg<X>::bits>();
     Slop r;
     // No `amount == 0` early-out: Blop::shl already handles a zero count
@@ -829,23 +828,22 @@ public:
     return r;
   }
 
-  template <int A, int AmountBits>
-  static Slop shl_op(const Slop<A>& x, const Slop<AmountBits>& amount) {
-    input_width_check<A>();
-    return shl_op(x, amount.base_[0]);
+  template <Slop_operand X, Slop_operand Amount>
+  static Slop shl_op(const X& xa, const Amount& amount) {
+    input_width_check<Slop_arg<X>::bits>();
+    return shl_op(xa, sref_(amount).base_[0]);
   }
 
   template <Slop_operand X>
   static Slop sra_op(const X& xa, int64_t amount) {
-    const auto& x = sref_(xa);
     Slop r;
     Blop::shr<n_words>(r.base_, awords_(xa), amount);  // zero count handled inside
     return r;
   }
 
-  template <int A, int AmountBits>
-  static Slop sra_op(const Slop<A>& x, const Slop<AmountBits>& amount) {
-    return sra_op(x, amount.base_[0]);
+  template <Slop_operand X, Slop_operand Amount>
+  static Slop sra_op(const X& xa, const Amount& amount) {
+    return sra_op(xa, sref_(amount).base_[0]);
   }
 
   // --- Arithmetic ---
@@ -1154,7 +1152,14 @@ public:
   // Single-bit result: when exactly one bit is selected, the result is the
   // signed 1-bit integer -1 (bit set) or 0 (bit clear), not 0sb01. Detected
   // from the selected-bit count after the loop — no popcount needed.
-  Slop get_mask_op(const Slop& mask) const {
+  //
+  // The mask goes through Slop_arg, so a Slop_u<N-1> mask is accepted with no
+  // conversion. A canonical mask is never negative, so it always takes the
+  // contiguous fast path's `!is_negative()` arm.
+  template <Slop_operand MT>
+  Slop get_mask_op(const MT& mask_a) const {
+    static_assert(Slop_arg<MT>::bits == N, "get_mask_op mask must be at this width (Slop<N> or Slop_u<N-1>)");
+    const auto& mask = sref_(mask_a);
     nil_check_(mask);
 
     // FAST PATH — positive contiguous mask [lo, hi): the extract is a
@@ -1323,7 +1328,12 @@ public:
   // set_mask_op(mask, value): replace the bits selected by `mask` with bits
   // taken LSB-first from `value`; bits not selected stay unchanged. Mirrors
   // Lconst::set_mask_op for the non-string, non-unknown path.
-  Slop set_mask_op(const Slop& mask, const Slop& value) const {
+  template <Slop_operand MT, Slop_operand VT>
+  Slop set_mask_op(const MT& mask_a, const VT& value_a) const {
+    static_assert(Slop_arg<MT>::bits == N && Slop_arg<VT>::bits == N,
+                  "set_mask_op operands must be at this width (Slop<N> or Slop_u<N-1>)");
+    const auto& mask  = sref_(mask_a);
+    const auto& value = sref_(value_a);
     nil_check_(mask);
     I(!value.is_nil());
     if (mask.is_known_false()) {
@@ -1441,7 +1451,15 @@ public:
   // landing at bit `lo`. `value` is read SIGNED: a range wider than the value's
   // significant bits is filled with its sign, exactly as set_mask_op's LSB-first
   // value.bit_test() walk does (bit_test sign-extends past storage).
-  Slop set_mask_op_opt(int lo, int hi, const Slop& value) const {
+  //
+  // `value` is taken through Slop_arg, so a Slop_u<N-1> is accepted with NO
+  // conversion: its carrier IS Slop<N>. The signed read above stays correct for
+  // it -- a canonical value is never negative, so the sign fill is zeros, which
+  // is exactly the unsigned read.
+  template <Slop_operand V>
+  Slop set_mask_op_opt(int lo, int hi, const V& value_a) const {
+    static_assert(Slop_arg<V>::bits == N, "set_mask_op_opt value must be at this width (Slop<N> or Slop_u<N-1>)");
+    const auto& value = sref_(value_a);
     nil_check_();
     I(!value.is_nil());
     I(lo >= 0 && hi <= N, "set_mask_op_opt range is outside Slop<N>");
@@ -1718,13 +1736,14 @@ public:
 
   // Heterogeneous data-arm form. As with mux_op, promotion is lossless and an
   // undersized generated result is rejected while compiling the kernel.
-  template <int SelBits, int... ValueBits>
-  static Slop hotmux_op(const Slop<SelBits>& sel, const Slop<ValueBits>&... values) {
-    static_assert(sizeof...(ValueBits) > 0, "Hotmux requires at least one data input");
-    input_width_check<ValueBits...>();
+  template <Slop_operand Sel, Slop_operand... Vals>
+  static Slop hotmux_op(const Sel& sel_a, const Vals&... values) {
+    static_assert(sizeof...(Vals) > 0, "Hotmux requires at least one data input");
+    input_width_check<Slop_arg<Vals>::bits...>();
+    const auto& sel = sref_(sel_a);
     assert(sel.popcount() == 1 && "hotmux select must be one-hot");
     const int b = sel.get_first_bit_set();
-    if (b < 0 || b >= static_cast<int>(sizeof...(ValueBits))) {
+    if (b < 0 || b >= static_cast<int>(sizeof...(Vals))) {
       return invalid();
     }
     // Only the hot arm is promoted -- see mux_op's note.
@@ -2212,8 +2231,8 @@ class Slop_u {
 public:
   // N magnitude bits + the always-zero sign slot: the same word count as
   // Slop<N+1> (and as Slop<N> except when N is a multiple of 64).
-  using Carrier                = Slop<N + 1>;
-  static constexpr int width   = N;
+  using Carrier              = Slop<N + 1>;
+  static constexpr int width = N;
 
   // Invariant: v_ == v_.zext_to<N>() — Integer-tagged, every bit at and above
   // N zero, so the value is never negative and is always in [0, 2^N).
@@ -2245,6 +2264,34 @@ public:
   static Slop_u land(const Slop<M>& s) {
     static_assert(M == N + 1, "codegen did not land the value at the declared carrier width N+1");
     return from_canonical_(s.template zext_to<N, N + 1>());
+  }
+
+  // A mixed Slop/Slop_u expression (most commonly a mux whose arms include an
+  // already-canonical temporary) can already have the destination Slop_u type.
+  // Keep the same checked-landing contract without forcing it back through its
+  // Slop carrier: matching widths are an identity, mismatches remain a build
+  // error instead of silently narrowing through a converting constructor.
+  template <int M>
+  static Slop_u land(const Slop_u<M>& s) {
+    static_assert(M == N, "codegen did not land the value at the declared Slop_u width N");
+    return s;
+  }
+
+  // Width-checked landing for a value whose producer has ALREADY proved the
+  // canonical-unsigned invariant. Unlike land(), this does not mask: it is the
+  // codegen fast path after bitwidth proves the result is in [0, 2^N). Keep it
+  // separate from the converting constructors so ordinary callers cannot
+  // accidentally turn an assumption into the default conversion behavior.
+  template <int M>
+  static Slop_u from_proven(const Slop<M>& s) {
+    static_assert(M == N + 1, "proven value did not land at the declared carrier width N+1");
+    return from_canonical_(s);
+  }
+
+  template <int M>
+  static Slop_u from_proven(const Slop_u<M>& s) {
+    static_assert(M == N, "proven value did not land at the declared Slop_u width N");
+    return s;
   }
 
   static Slop_u create_integer(int64_t val) { return Slop_u(val); }
@@ -2342,13 +2389,15 @@ public:
   }
   template <Slop_operand X, Slop_operand Y>
   static Slop_u or_op(const X& x, const Y& y) {
-    static_assert(Slop_arg<X>::canonical && Slop_arg<Y>::canonical, "or_op keeps canonicality only when BOTH operands are canonical");
+    static_assert(Slop_arg<X>::canonical && Slop_arg<Y>::canonical,
+                  "or_op keeps canonicality only when BOTH operands are canonical");
     static_assert(Slop_arg<X>::bits <= N + 1 && Slop_arg<Y>::bits <= N + 1, "or_op operand wider than the canonical result");
     return from_canonical_(Carrier::or_op(x, y));
   }
   template <Slop_operand X, Slop_operand Y>
   static Slop_u xor_op(const X& x, const Y& y) {
-    static_assert(Slop_arg<X>::canonical && Slop_arg<Y>::canonical, "xor_op keeps canonicality only when BOTH operands are canonical");
+    static_assert(Slop_arg<X>::canonical && Slop_arg<Y>::canonical,
+                  "xor_op keeps canonicality only when BOTH operands are canonical");
     static_assert(Slop_arg<X>::bits <= N + 1 && Slop_arg<Y>::bits <= N + 1, "xor_op operand wider than the canonical result");
     return from_canonical_(Carrier::xor_op(x, y));
   }
@@ -2367,6 +2416,151 @@ public:
     constexpr int wider = (Slop_arg<X>::bits > Slop_arg<Y>::bits) ? Slop_arg<X>::bits : Slop_arg<Y>::bits;
     static_assert(N + 1 >= wider + 1, "add_op needs one carry bit of headroom to stay canonical");
     return from_canonical_(Carrier::add_op(x, y));
+  }
+
+  // sub_op is the one op whose canonicality CANNOT be decided from the operand
+  // widths: `x - y` is non-negative exactly when x >= y, a VALUE fact. LiveHD's
+  // bitwidth pass proves that range in some cones and stamps the result
+  // unsigned; this entry point is for those, and the proof is the CALLER's
+  // obligation.
+  //
+  // It ASSERTS the obligation and MASKS anyway, and it needs to do both:
+  //
+  //  * the assert is what makes an over-claimed stamp findable. A borrow-out
+  //    fills the top word, so `is_negative()` on the carrier is an exact test
+  //    for the violation -- one word compare, compiled out in release. This is
+  //    the only check in this class that can catch a bad `unsign` stamp at all,
+  //    because the failure shows up in the computed VALUE, not in a width.
+  //
+  //  * the mask is what keeps a violation from escaping. Depositing the
+  //    negative carrier would hand downstream code a Slop_u that breaks the
+  //    invariant every other entry point here relies on (or_op assumes both
+  //    operands canonical, concat_op assumes lanes pre-masked, the comparisons
+  //    assume non-negative) -- one bad value would corrupt arbitrarily far.
+  //    Masking instead yields the mod-2^N wrap, which is BOTH what the lazy
+  //    Slop form already produces (its consumers each re-mask) and what the
+  //    hardware does. So release behaviour is unchanged and the invariant
+  //    holds unconditionally.
+  //
+  // Cost is therefore one mask, same as not_op/shl_op below -- and it is the
+  // same trade: one mask at the write replaces one per read.
+  template <Slop_operand X, Slop_operand Y>
+  static Slop_u sub_op(const X& x, const Y& y) {
+    static_assert(Slop_arg<X>::canonical && Slop_arg<Y>::canonical, "sub_op keeps canonicality only for canonical operands");
+    static_assert(N + 1 >= Slop_arg<X>::bits && N + 1 >= Slop_arg<Y>::bits, "sub_op operand wider than the canonical result");
+    const Carrier r = Carrier::sub_op(x, y);
+    I(!r.is_negative(), "Slop_u sub_op went negative: the unsigned stamp on this cell does not hold");
+    return from_canonical_(r.template zext_to<N, N + 1>());
+  }
+
+  // Product of two non-negative values is non-negative and needs the sum of
+  // their magnitudes. No mask.
+  template <Slop_operand X, Slop_operand Y>
+  static Slop_u mult_op(const X& x, const Y& y) {
+    static_assert(Slop_arg<X>::canonical && Slop_arg<Y>::canonical, "mult_op keeps canonicality only for canonical operands");
+    static_assert(N >= (Slop_arg<X>::bits - 1) + (Slop_arg<Y>::bits - 1),
+                  "mult_op result needs the SUM of the operand magnitudes to stay canonical");
+    return from_canonical_(Carrier::mult_op(x, y));
+  }
+
+  // A SELECT copies one arm, so the result is canonical exactly when every arm
+  // is. No mask on any path.
+  //
+  // DIVERGENCE from Slop::mux_op / Slop::hotmux_op, which return invalid() on
+  // an out-of-range (or non-one-hot) selector: Slop_u has no type tag, so it
+  // has no invalid() to return. The bad selector is a codegen error, so it is
+  // an assert here and yields 0 in a release build. A caller that needs the
+  // invalid() tag must stay on the Slop form.
+  template <Slop_operand Sel, Slop_operand... Vals>
+  static Slop_u mux_op(const Sel& sel, const Vals&... values) {
+    static_assert(sizeof...(Vals) > 0, "Mux requires at least one data input");
+    static_assert((Slop_arg<Vals>::canonical && ...), "mux_op keeps canonicality only when EVERY arm is canonical");
+    static_assert(((Slop_arg<Vals>::bits <= N + 1) && ...), "mux_op arm wider than the canonical result");
+    return from_canonical_(Carrier::mux_op(sel, values...));
+  }
+
+  template <Slop_operand Sel, Slop_operand... Vals>
+  static Slop_u hotmux_op(const Sel& sel, const Vals&... values) {
+    static_assert(sizeof...(Vals) > 0, "Hotmux requires at least one data input");
+    static_assert((Slop_arg<Vals>::canonical && ...), "hotmux_op keeps canonicality only when EVERY arm is canonical");
+    static_assert(((Slop_arg<Vals>::bits <= N + 1) && ...), "hotmux_op arm wider than the canonical result");
+    return from_canonical_(Carrier::hotmux_op(sel, values...));
+  }
+
+  // A field splice into [lo, hi) leaves every bit at and above `hi` alone, so
+  // with a canonical base and hi <= N the result is canonical. No mask. `lo`
+  // and `hi` are runtime parameters (codegen passes literals), so the bound is
+  // an assert rather than a static_assert.
+  template <Slop_operand B, Slop_operand V>
+  static Slop_u set_mask_op_opt(const B& base, int lo, int hi, const V& value) {
+    static_assert(Slop_arg<B>::canonical, "set_mask_op_opt needs a canonical base to stay canonical");
+    static_assert(Slop_arg<B>::bits == N + 1, "set_mask_op_opt base must be at the result width");
+    static_assert(Slop_arg<V>::bits == N + 1, "set_mask_op_opt value must be at the result width");
+    I(hi <= N, "set_mask_op_opt would write the canonical sign slot");
+    return from_canonical_(Slop_arg<B>::s(base).set_mask_op_opt(lo, hi, value));
+  }
+
+  template <Slop_operand B>
+  static Slop_u clear_mask_op_opt(const B& base, int lo, int hi) {
+    static_assert(Slop_arg<B>::canonical, "clear_mask_op_opt needs a canonical base to stay canonical");
+    static_assert(Slop_arg<B>::bits == N + 1, "clear_mask_op_opt base must be at the result width");
+    I(hi <= N, "clear_mask_op_opt would write the canonical sign slot");
+    return from_canonical_(Slop_arg<B>::s(base).clear_mask_op_opt(lo, hi));
+  }
+
+  // Member spellings used when a generated expression was written before its
+  // base became canonical. They keep the source in Slop_u instead of forcing a
+  // `.raw()` conversion at every call site. The contiguous forms preserve the
+  // invariant and return Slop_u; the general runtime-mask form returns the lazy
+  // carrier for the caller's checked landing.
+  template <Slop_operand V>
+  Slop_u set_mask_op_opt(int lo, int hi, const V& value) const {
+    return Slop_u::set_mask_op_opt(*this, lo, hi, value);
+  }
+
+  Slop_u clear_mask_op_opt(int lo, int hi) const { return Slop_u::clear_mask_op_opt(*this, lo, hi); }
+
+  template <Slop_operand M, Slop_operand V>
+  Carrier set_mask_op(const M& mask, const V& value) const {
+    return v_.set_mask_op(mask, value);
+  }
+
+  template <Slop_operand M>
+  Carrier get_mask_op(const M& mask) const {
+    return v_.get_mask_op(mask);
+  }
+
+  // The three below each cost ONE mask, unlike everything above. They are here
+  // anyway because the mask REPLACES a conversion the caller was already
+  // emitting -- codegen writes `Slop<W>::not_op(...)` and then a `.zext_to<>()`
+  // to recover the unsigned value -- so naming the result Slop_u is a wash at
+  // runtime and one fewer operation in the generated text.
+
+  // ~x sets every bit above the operand's magnitude, so this one genuinely has
+  // to mask. Nothing about the operand needs to be canonical.
+  template <Slop_operand X>
+  static Slop_u not_op(const X& x) {
+    return from_canonical_(Carrier::not_op(x).template zext_to<N, N + 1>());
+  }
+
+  // The shift amount is a RUNTIME value, so the result width cannot be bounded
+  // at compile time: mask.
+  template <Slop_operand X>
+  static Slop_u shl_op(const X& x, int64_t amount) {
+    return from_canonical_(Carrier::shl_op(x, amount).template zext_to<N, N + 1>());
+  }
+  template <Slop_operand X, Slop_operand Amount>
+  static Slop_u shl_op(const X& x, const Amount& amount) {
+    return from_canonical_(Carrier::shl_op(x, amount).template zext_to<N, N + 1>());
+  }
+
+  // The STATIC Slop::get_mask_op already produces the unsigned LSB-first pack
+  // (unlike the member form, whose single-bit result is the signed -1), so this
+  // is the natural unsigned cell. The mask is a runtime operand, so the pack
+  // width is not known at compile time: mask.
+  template <Slop_operand X, Slop_operand M>
+  static Slop_u get_mask_op(const X& x, const M& mask) {
+    return from_canonical_(Carrier::get_mask_op(x, mask).template zext_to<N, N + 1>());
   }
 
   // --- Comparisons ---
@@ -2491,9 +2685,9 @@ struct Slop_lane<Slop_u<W>> {
 
 template <int W>
 struct Slop_arg<Slop<W>> {
-  static constexpr int      bits      = W;
-  static constexpr bool     canonical = false;
-  static const Slop<W>&     s(const Slop<W>& v) { return v; }
+  static constexpr int  bits      = W;
+  static constexpr bool canonical = false;
+  static const Slop<W>& s(const Slop<W>& v) { return v; }
 };
 
 template <int W>
