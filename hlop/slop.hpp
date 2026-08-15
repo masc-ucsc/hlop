@@ -1413,12 +1413,13 @@ public:
     return result;
   }
 
-  // --- Contiguous-range mask writes (`_opt`) ---
+  // --- Contiguous-range mask reads and writes (`_opt`) ---
   //
   // `_opt` marks an OPTIMIZED SPECIAL CASE, not an LGraph cell: unlike
-  // set_mask_op these have no Set_mask counterpart in livehd graph/cell.* to
-  // keep name-for-name in sync. They are set_mask_op narrowed to the mask shape
-  // a packed-field write always has — one contiguous run of ones.
+  // set_mask_op / get_mask_op these have no Set_mask / Get_mask counterpart in
+  // livehd graph/cell.* to keep name-for-name in sync. They are those ops
+  // narrowed to the mask shape a packed-field access always has — one
+  // contiguous run of ones.
   //
   // set_mask_op already fast-paths that shape, but the CALLER still has to
   // materialize the mask, and the callee still has to rediscover its range on
@@ -1516,6 +1517,120 @@ public:
       result.base_[w] = static_cast<int64_t>(static_cast<uint64_t>(result.base_[w]) & ~range_word_mask_(w, lo, hi));
     }
     return result;
+  }
+
+  // 64 bits of the source starting at bit `pos`, i.e. word `pos / 64` of
+  // (x >> pos). The one primitive get_mask_op_opt is built from. Positions at
+  // or above the source's STORAGE read as `fill`, matching extract_bits_'s
+  // xword() lambda — a range that stays inside the source never reaches there,
+  // and `fill` is then the compile-time 0 that src_fill_ hands back.
+  //
+  // With a literal `pos` both word indices and both shift counts are constants,
+  // so this is one load (two when the field straddles a word boundary) plus a
+  // funnel shift — EXTR on arm64, SHRD on x86-64.
+  template <int A>
+  [[gnu::always_inline]] static inline uint64_t src_word_(const Slop<A>& x, int pos, uint64_t fill) {
+    constexpr int  aw = Slop<A>::n_words;
+    const int      wi = pos / 64;
+    const int      sh = pos % 64;
+    const uint64_t w0 = wi < aw ? static_cast<uint64_t>(x.base_[wi]) : fill;
+    if (sh == 0) {
+      return w0;
+    }
+    const uint64_t w1 = wi + 1 < aw ? static_cast<uint64_t>(x.base_[wi + 1]) : fill;
+    return (w0 >> sh) | (w1 << (64 - sh));
+  }
+
+  // What the source reads as ABOVE its storage. Zero for a canonical operand
+  // (a Slop_u is zero at and above its width, so no read at all), and otherwise
+  // the storage sign — the same rule extract_bits_ applies. Only asked for when
+  // `hi` reaches past the storage, which for a literal `hi` is decided at
+  // compile time, so the common in-range call loads nothing.
+  template <Slop_operand XT>
+  [[gnu::always_inline]] static inline uint64_t src_fill_(const XT& xa, int hi) {
+    if constexpr (Slop_arg<XT>::canonical) {
+      return 0;
+    } else {
+      constexpr int aw = Slop<Slop_arg<XT>::bits>::n_words;
+      return (hi > 64 * aw && sref_(xa).is_negative()) ? ~uint64_t(0) : uint64_t(0);
+    }
+  }
+
+  // get_mask_op_opt(x, lo, hi): bits [lo, hi) of `x`, LSB-aligned into Slop<N>.
+  // The READ counterpart of set_mask_op_opt — the same half-open range, and the
+  // same reason to exist: `x.get_mask_op(m)` makes the caller materialize `m`
+  // (a from_pyrope string parse per cycle once it is wider than 64 bits) and
+  // then makes the callee rediscover [lo, hi) with a ctz/clz sweep and a
+  // contiguity check, all to say what cgen knew literally.
+  //
+  // ONE non-empty range only (hi > lo, the shape cgen emits and the shape a
+  // packed-field read has), so there is no empty-mask early-out and no
+  // single-bit special case: like the mixed-width static get_mask_op this is
+  // the UNSIGNED LSB-first pack the Get_mask cell is defined to produce, so a
+  // one-bit range yields 0/1, never the member form's signed -1.
+  //
+  // WITH LITERAL BOUNDS — always, from cgen — the whole body folds: `len`,
+  // every word index and every shift count are constants, the word loops
+  // disappear (a sub-word field touches exactly one), and what is left is one
+  // bitfield extract. For a Slop<10> result taking bits [20, 30) of a one-word
+  // source that is SBFX + the Integer tag, i.e. two instructions.
+  //
+  // ARITH vs LOGICAL is decided by the RESULT TYPE, and falls out of `len == N`:
+  //
+  //   Slop<N>   is a SIGNED N-bit value, so a result that fills the width
+  //             (len == N) has the extracted top bit AS its sign and must be
+  //             sign-extended from it — an arithmetic shift (SBFX). A narrower
+  //             range leaves bit N-1 clear, where sign-extending from N-1 and
+  //             zero-filling are the same thing, so it takes the logical form.
+  //
+  //   Slop_u<N> carries the value in a Slop<N+1>, one bit wider than any range
+  //             it accepts, so it NEVER hits len == N in the carrier: always
+  //             the logical shift (UBFX), always canonical. See the forwarder
+  //             on Slop_u.
+  //
+  // Bit-exact with `Slop<N>::get_mask_op(x, m)` for every 0 <= lo < hi with
+  // hi - lo <= N, where `m` holds exactly bits [lo, hi) — EXCEPT for that
+  // signed landing at len == N, which the mask form (a pure zero-extending
+  // pack) cannot express: it would deposit a Slop<N> whose storage contradicts
+  // its own sign bit, which every signed read (is_negative, lt_op, sra_op)
+  // would then get wrong.
+  template <Slop_operand XT>
+  [[gnu::always_inline]] static inline Slop get_mask_op_opt(const XT& xa, int lo, int hi) {
+    const auto& x = sref_(xa);
+    I(lo >= 0 && hi > lo, "get_mask_op_opt wants a non-empty range");
+    I(hi - lo <= N, "get_mask_op_opt result does not fit Slop<N>");
+
+    // Both clamps are outside the contract above and fold away with a literal
+    // range. They are here so that violating it stays a failed assert rather
+    // than becoming undefined behaviour in a release build: the upper one keeps
+    // `tw` inside the word array (extract_bits_ caps the same way), the lower
+    // one keeps every shift count below in [0, 64).
+    const int  len      = std::clamp(hi - lo, 1, 64 * n_words);
+    const int  tw       = (len - 1) / 64;  // top result word the field reaches
+    const int  ub       = len - 64 * tw;   // bits it uses there, 1..64
+    const bool sign_ext = len == N;        // the extracted top bit IS this width's sign
+
+    const uint64_t fill = src_fill_(xa, hi);
+
+    std::array<int64_t, n_words> b;  // every word is written below
+    for (int w = 0; w < tw; ++w) {   // whole 64-bit slices below the top one
+      b[w] = static_cast<int64_t>(src_word_(x, lo + 64 * w, fill));
+    }
+    const uint64_t top = src_word_(x, lo + 64 * tw, fill);
+    if (ub == 64) {  // nothing above the field in this word to drop
+      b[tw] = static_cast<int64_t>(top);
+    } else if (sign_ext) {
+      b[tw] = static_cast<int64_t>(top << (64 - ub)) >> (64 - ub);
+    } else {
+      b[tw] = static_cast<int64_t>(top & ((uint64_t(1) << ub) - 1));
+    }
+    // Above the field. Zero, never a sign fill: sign_ext means len == N, and
+    // (N - 1) / 64 + 1 == n_words for every N, so a sign-extended result always
+    // reaches the top word and this loop does not run.
+    for (int w = tw + 1; w < n_words; ++w) {
+      b[w] = 0;
+    }
+    return Slop(Type::Integer, b);
   }
 
   // ror_op: OR-reduction with another operand to a single bit (1 if either
@@ -2498,6 +2613,21 @@ public:
     static_assert(Slop_arg<V>::bits == N + 1, "set_mask_op_opt value must be at the result width");
     I(hi <= N, "set_mask_op_opt would write the canonical sign slot");
     return from_canonical_(Slop_arg<B>::s(base).set_mask_op_opt(lo, hi, value));
+  }
+
+  // A field read into [0, hi - lo) leaves every bit at and above the range
+  // width zero, so with hi - lo <= N the pack is canonical for free — no mask,
+  // and no `.zext_to_u<N>()` at the call site.
+  //
+  // This is also the UNSIGNED half of the arith/logical pair: the carrier is
+  // Slop<N + 1>, one bit wider than any range this accepts, so the carrier's
+  // `len == N + 1` sign-extending case is unreachable and the extract is always
+  // the logical one (UBFX). The value the Get_mask cell is defined to produce,
+  // landed in the type that says it is non-negative.
+  template <Slop_operand X>
+  [[gnu::always_inline]] static inline Slop_u get_mask_op_opt(const X& x, int lo, int hi) {
+    I(hi - lo <= N, "get_mask_op_opt result does not fit Slop_u<N>");
+    return from_canonical_(Carrier::get_mask_op_opt(x, lo, hi));
   }
 
   template <Slop_operand B>

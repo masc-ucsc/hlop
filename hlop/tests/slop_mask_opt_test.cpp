@@ -1,8 +1,10 @@
 //  This file is distributed under the BSD 3-Clause License. See LICENSE for details.
 //
-// Differential test for the contiguous-range mask writes
+// Differential test for the contiguous-range mask reads and writes
 //   Slop<N>::set_mask_op_opt(lo, hi, value)
 //   Slop<N>::clear_mask_op_opt(lo, hi)
+//   Slop<N>::get_mask_op_opt(x, lo, hi)
+//   Slop_u<N>::get_mask_op_opt(x, lo, hi)
 //
 // These are set_mask_op specialized to the mask shape a packed-field write
 // always has, and set_mask_op's fast path now DELEGATES to set_mask_op_opt --
@@ -312,6 +314,211 @@ TEST(Slop_mask_opt, set_range_not_representable_as_positive_mask) {
   // path's exact extent depends on out_bits (and so on the operands' widths),
   // and pinning it here would only duplicate set_mask_op's own tests.
   EXPECT_FALSE(SameBits(x.set_mask_op(mask, v), x.set_mask_op_opt(64, 128, v)));
+}
+
+// =========================================================================
+// get_mask_op_opt -- the READ side
+// =========================================================================
+
+// Independent model: bit k of the result is bit lo+k of the source, taken with
+// bit_test (which reads storage word by word and sign-extends past it, so a
+// range reaching beyond the source's words picks up its sign). Everything above
+// the range is zero -- EXCEPT when the range fills the result width, where the
+// extracted top bit IS the result's sign and gets replicated. Built from
+// or/shl only, sharing no code with the extraction under test.
+template <int R, int A>
+Slop<R> RefGetRange(const Slop<A>& x, int lo, int hi) {
+  const int     len = hi - lo;
+  const Slop<R> one = Slop<R>::create_integer(1);
+  Slop<R>       r   = Slop<R>::create_integer(0);
+  for (int k = 0; k < storage_bits<R>(); ++k) {
+    const bool bit = (k < len) ? x.bit_test(lo + k) : (len == R && x.bit_test(hi - 1));
+    if (bit) {
+      r = r.or_op(one.shl_op(k));
+    }
+  }
+  return r;
+}
+
+// One (lo, hi) read at result width R, checked every way it can be checked.
+// `MW` is the width the equivalent Get_mask CONSTANT is built at: wide enough
+// that the [lo, hi) mask stays positive there, which is what the general
+// get_mask_op needs to agree (see the file header).
+template <int R, int MW, int A>
+void CheckGetRange(const Slop<A>& x, int lo, int hi) {
+  const int len = hi - lo;
+  ASSERT_LE(len, R);
+
+  const Slop<R> got  = Slop<R>::get_mask_op_opt(x, lo, hi);
+  const Slop<R> want = RefGetRange<R>(x, lo, hi);
+  EXPECT_TRUE(SameBits(got, want)) << "get_mask_op_opt R=" << R << " A=" << A << " [" << lo << "," << hi << ")";
+  EXPECT_TRUE(got.is_integer()) << "get_mask_op_opt result is an Integer";
+
+  // The unsigned landing: same bits, in a carrier one bit wider than any range
+  // it accepts, so it never takes the signed arm and is canonical by
+  // construction.
+  const Slop_u<R> gotu = Slop_u<R>::get_mask_op_opt(x, lo, hi);
+  EXPECT_TRUE(SameBits(gotu.raw(), RefGetRange<R + 1>(x, lo, hi)))
+      << "Slop_u get_mask_op_opt R=" << R << " A=" << A << " [" << lo << "," << hi << ")";
+  EXPECT_FALSE(gotu.raw().is_negative()) << "Slop_u get_mask_op_opt stayed canonical";
+
+  // Against the general Get_mask, wherever the two are defined to agree: the
+  // mask form is a pure zero-extending pack, so it cannot express the signed
+  // landing at len == R.
+  if (len < R && hi <= MW) {
+    const Slop<MW> mask = BitMask<MW>(lo, hi);
+    ASSERT_FALSE(mask.is_negative()) << "premise: the mask is positive at width " << MW;
+    EXPECT_TRUE(SameBits(got, Slop<R>::get_mask_op(x, mask)))
+        << "get_mask_op vs _opt R=" << R << " A=" << A << " [" << lo << "," << hi << ")";
+  }
+}
+
+// Positions worth reading from: every word boundary and its neighbours, the
+// declared width, and PAST the storage -- where the source reads as its sign.
+template <int A>
+std::vector<int> ReadPositions(std::mt19937_64& rng, int n_random) {
+  std::vector<int> p;
+  auto             add = [&](int v) {
+    if (v >= 0 && v <= storage_bits<A>() + 8) {
+      p.push_back(v);
+    }
+  };
+  for (int b = 0; b <= storage_bits<A>(); b += 64) {
+    add(b - 1);
+    add(b);
+    add(b + 1);
+  }
+  add(A - 1);
+  add(A);
+  add(A + 1);
+  add(storage_bits<A>() + 8);
+  for (int i = 0; i < n_random; ++i) {
+    add(static_cast<int>(rng() % (storage_bits<A>() + 9)));
+  }
+  std::sort(p.begin(), p.end());
+  p.erase(std::unique(p.begin(), p.end()), p.end());
+  return p;
+}
+
+// Every interesting (lo, len) against a pool of sources, at result width R.
+template <int A, int R, int MW = (A > R ? A : R) + 1>
+void RunGetSweep(uint64_t seed, int n_pool_random = 2, int n_random_pos = 5) {
+  std::mt19937_64 rng{seed};
+  const auto      pool = BuildPool<A>(rng, n_pool_random);
+  const auto      pos  = ReadPositions<A>(rng, n_random_pos);
+
+  std::vector<int> lens;
+  for (int l : {1, 2, 3, 63, 64, 65, 127, 128, 129, R - 1, R}) {
+    if (l >= 1 && l <= R) {
+      lens.push_back(l);
+    }
+  }
+  std::sort(lens.begin(), lens.end());
+  lens.erase(std::unique(lens.begin(), lens.end()), lens.end());
+
+  for (int lo : pos) {
+    for (int len : lens) {
+      for (const auto& x : pool) {
+        CheckGetRange<R, MW>(x, lo, lo + len);
+      }
+    }
+  }
+}
+
+// Sub-word widths, exhaustively: every (lo, hi) the asserts admit.
+TEST(Slop_mask_opt, get_exhaustive_tiny_widths) {
+  std::mt19937_64 rng{0x11};
+  const auto      pool = BuildPool<8>(rng, 3);
+  for (int lo = 0; lo <= 72; ++lo) {
+    for (int len = 1; len <= 8; ++len) {
+      for (const auto& x : pool) {
+        CheckGetRange<8, 96>(x, lo, lo + len);   // range can fill the result -> signed landing
+        CheckGetRange<20, 96>(x, lo, lo + len);  // range always narrower -> zero-filled
+      }
+    }
+  }
+}
+
+// One word, the width every scalar signal lands at.
+TEST(Slop_mask_opt, get_single_word_widths) {
+  RunGetSweep<64, 64>(0x21);
+  RunGetSweep<64, 20>(0x22);
+  RunGetSweep<64, 1>(0x23);
+  RunGetSweep<32, 32>(0x24);
+  RunGetSweep<65, 64>(0x25);
+  RunGetSweep<65, 65>(0x26);
+}
+
+// Multi-word sources -- the motivating shape is a wide one whose field fits a
+// single word, but the multi-word result has to be right too.
+TEST(Slop_mask_opt, get_multiword_widths) {
+  RunGetSweep<128, 20>(0x31);
+  RunGetSweep<128, 128>(0x32);
+  RunGetSweep<200, 64>(0x33);
+  RunGetSweep<200, 200>(0x34, /*n_pool_random=*/1, /*n_random_pos=*/3);
+  RunGetSweep<544, 20>(0x35, /*n_pool_random=*/1, /*n_random_pos=*/3);
+  RunGetSweep<544, 100>(0x36, /*n_pool_random=*/1, /*n_random_pos=*/3);
+}
+
+// A Slop_u source: canonical, so every bit at and above its width is zero and
+// the fill above storage is a compile-time 0 rather than a sign read.
+TEST(Slop_mask_opt, get_from_canonical_source) {
+  std::mt19937_64 rng{0x41};
+  for (int i = 0; i < 8; ++i) {
+    const Slop_u<100> x{RandomValue<100>(rng)};
+    for (int lo : {0, 1, 31, 63, 64, 65, 90, 99, 100, 101, 120, 128}) {
+      for (int len : {1, 8, 20}) {
+        const auto got = Slop_u<20>::get_mask_op_opt(x, lo, lo + len);
+        // Read through the carrier: same contract, same model.
+        EXPECT_TRUE(SameBits(got.raw(), RefGetRange<21>(x.raw(), lo, lo + len)))
+            << "Slop_u source [" << lo << "," << lo + len << ")";
+      }
+    }
+  }
+}
+
+// The shape this exists for, spelled out: a sub-word field of a one-word value.
+TEST(Slop_mask_opt, get_field_extract_matches_shift_and_mask) {
+  std::mt19937_64 rng{0x51};
+  for (int i = 0; i < 64; ++i) {
+    const auto     raw = static_cast<int64_t>(rng());
+    const Slop<64> x   = Slop<64>::create_integer(raw);
+
+    // Zero-filled: the result is wider than the field.
+    const auto narrow = Slop<20>::get_mask_op_opt(x, 20, 30);
+    EXPECT_EQ(narrow.to_just_i64(), (raw >> 20) & 0x3ff);
+
+    // Signed: the field FILLS the result, so bit 29 lands as the sign.
+    const auto exact = Slop<10>::get_mask_op_opt(x, 20, 30);
+    EXPECT_EQ(exact.to_just_i64(), static_cast<int64_t>(static_cast<uint64_t>(raw) << 34) >> 54);
+    EXPECT_EQ(exact.is_negative(), ((raw >> 29) & 1) != 0);
+
+    // Unsigned: same bits, never negative.
+    const auto u = Slop_u<10>::get_mask_op_opt(x, 20, 30);
+    EXPECT_EQ(u.to_just_i64(), (raw >> 20) & 0x3ff);
+
+    // A single-bit range is the UNSIGNED 0/1 -- the static Get_mask contract,
+    // not the member form's signed -1.
+    for (int b : {0, 1, 33, 62, 63}) {
+      EXPECT_EQ(Slop<20>::get_mask_op_opt(x, b, b + 1).to_just_i64(), (raw >> b) & 1) << "bit " << b;
+    }
+  }
+}
+
+// A range reaching PAST the source's storage reads its sign, exactly as
+// bit_test does -- the one place the extraction has to look at the value.
+TEST(Slop_mask_opt, get_past_storage_reads_the_sign) {
+  const auto neg = Slop<64>::create_integer(-1);
+  const auto pos = Slop<64>::create_integer(1);
+
+  EXPECT_EQ(Slop<20>::get_mask_op_opt(neg, 60, 70).to_just_i64(), 0x3ff);
+  EXPECT_EQ(Slop<20>::get_mask_op_opt(pos, 60, 70).to_just_i64(), 0);
+  EXPECT_EQ(Slop<20>::get_mask_op_opt(neg, 64, 72).to_just_i64(), 0xff);
+  EXPECT_EQ(Slop<20>::get_mask_op_opt(pos, 64, 72).to_just_i64(), 0);
+
+  // A canonical source has no sign to read: it is zero up there by invariant.
+  const Slop_u<64> u{neg};
+  EXPECT_EQ(Slop<20>::get_mask_op_opt(u, 60, 70).to_just_i64(), 0xf);  // bits 60..63 set, 64..69 zero
 }
 
 }  // namespace
