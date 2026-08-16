@@ -2895,18 +2895,21 @@ bool slop_apply_update(std::array<Slop_u<B>, S>& dst, const Bus& bus) {
 // write and state commit through this, accumulating the result into the
 // instance's `__gen` generation counter — the substrate for skipping settles
 // of quiesced (idle / clock-gated) cones.
+// The unchanged path dominates steady-state simulation. Keep it as the hot
+// fallthrough; placing the hint here also guides the inlined identical()
+// comparisons rather than only the caller's changed-result branch.
 template <int DstBits, int SrcBits>
 inline bool slop_update(Slop<DstBits>& dst, const Slop<SrcBits>& v) {
   static_assert(DstBits >= SrcBits, "Slop update destination is narrower than the source; code generation would lose precision");
   const Slop<DstBits> widened{v};
-  if (dst.identical(widened)) {
+  if (dst.identical(widened)) [[likely]] {
     return false;
   }
   dst = widened;
   return true;
 }
 inline bool slop_update(bool& dst, bool v) {
-  if (dst == v) {
+  if (dst == v) [[likely]] {
     return false;
   }
   dst = v;
@@ -2924,7 +2927,7 @@ template <int DstBits, int SrcBits>
 inline bool slop_update(Slop<DstBits>& dst, const Slop_u<SrcBits>& v) {
   static_assert(DstBits > SrcBits, "Slop{Slop_u} re-canonicalizes the sign when DstBits <= SrcBits");
   const Slop<DstBits> nv{v};
-  if (dst.identical(nv)) {
+  if (dst.identical(nv)) [[likely]] {
     return false;
   }
   dst = nv;
@@ -2934,7 +2937,7 @@ inline bool slop_update(Slop<DstBits>& dst, const Slop_u<SrcBits>& v) {
 template <int DstBits, int SrcBits>
 inline bool slop_update(Slop_u<DstBits>& dst, const Slop<SrcBits>& v) {
   const Slop_u<DstBits> masked{v};  // the one materialization mask
-  if (dst.identical(masked)) {
+  if (dst.identical(masked)) [[likely]] {
     return false;
   }
   dst = masked;
@@ -2945,7 +2948,7 @@ template <int DstBits, int SrcBits>
 inline bool slop_update(Slop_u<DstBits>& dst, const Slop_u<SrcBits>& v) {
   static_assert(DstBits >= SrcBits, "Slop_u update destination is narrower than the source; code generation would lose precision");
   const Slop_u<DstBits> widened{v};
-  if (dst.identical(widened)) {
+  if (dst.identical(widened)) [[likely]] {
     return false;
   }
   dst = widened;
