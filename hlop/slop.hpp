@@ -1929,6 +1929,28 @@ public:
   bool is_string() const { return type_ == Type::String; }
   bool is_nil() const { return type_ == Type::Nil; }
 
+  // Stable packed-word transport for generated native-code ABIs. The words
+  // are little-endian and contain exactly the low N value bits; the in-memory
+  // Slop representation and its sign-extension padding remain private.
+  static constexpr size_t packed_word_count = n_words;
+
+  void copy_packed_words(uint64_t* dst, size_t count = packed_word_count) const {
+    const size_t copied = std::min(count, static_cast<size_t>(n_words));
+    for (size_t i = 0; i < copied; ++i) {
+      dst[i] = static_cast<uint64_t>(base_[i]);
+    }
+  }
+
+  static Slop from_packed_words(const uint64_t* src, size_t count = packed_word_count) {
+    Slop         result;
+    const size_t copied = std::min(count, static_cast<size_t>(n_words));
+    for (size_t i = 0; i < copied; ++i) {
+      result.base_[i] = static_cast<int64_t>(src[i]);
+    }
+    Blop::sext<n_words>(result.base_, result.base_, N - 1);
+    return result;
+  }
+
   // Exact representational equality: same type tag, same stored words. Used by
   // the sim's change-gated evaluation (a compare that says "different" for
   // equal values would only cost a wasted re-settle; one that says "equal" for
@@ -2420,6 +2442,18 @@ public:
 
   // The raw read: no mask, ever. Feed it to the mixed-width Slop statics.
   const Carrier& raw() const { return v_; }
+
+  static constexpr size_t packed_word_count = (N + 63) / 64;
+
+  void copy_packed_words(uint64_t* dst) const { v_.copy_packed_words(dst, packed_word_count); }
+
+  static Slop_u from_packed_words(const uint64_t* src) {
+    // Carrier is N+1 bits so its sign slot is guaranteed zero. This matters at
+    // exact 64-bit boundaries, where Carrier owns one more storage word than
+    // the packed N-bit ABI value.
+    auto carrier = Carrier::from_packed_words(src, packed_word_count);
+    return from_canonical_(carrier);
+  }
 
   // Keep the low min(N, W) bits at carrier width C. When W >= N — the case
   // every read hits — the invariant already guarantees the result, so this is
