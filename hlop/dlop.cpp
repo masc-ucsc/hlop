@@ -1735,47 +1735,58 @@ spool_ptr<Dlop> Dlop::mux_op(const Dlop& sel, std::span<const spool_ptr<Dlop>> v
   return merge_unknown(cands);
 }
 
-spool_ptr<Dlop> Dlop::hotmux_op(const Dlop& sel, std::span<const spool_ptr<Dlop>> values) {
-  assert(!values.empty());
+// See dlop.hpp for the (control, value) pin encoding this mirrors.
+spool_ptr<Dlop> Dlop::hotmux_op(std::span<const spool_ptr<Dlop>> pins) {
+  assert(pins.size() >= 2);
 
-  // A non-numeric selector (string / nil / invalid / ref) is illegal → nil.
-  if (!sel.is_numeric()) {
-    return nil();
-  }
+  const size_t n_arms = pins.size() / 2;
 
-  int scan = std::max(sel.get_bits(), static_cast<int>(values.size()));
+  // A control is DEFINITELY non-zero when some bit is known-set; DEFINITELY
+  // zero when every bit is known and clear; otherwise it MIGHT be either.
+  auto definitely_active = [](const Dlop& c) {
+    if (!c.has_unknowns()) {
+      return !c.is_known_zero();
+    }
+    for (int b = 0, e = std::max(c.get_bits(), 1); b < e; ++b) {
+      if (!c.unknown_bit_test(b) && c.bit_test(b)) {
+        return true;
+      }
+    }
+    return false;
+  };
 
-  int known_set   = -1;
-  int known_count = 0;
-  for (int b = 0; b < scan; ++b) {
-    if (!sel.unknown_bit_test(b) && sel.bit_test(b)) {
-      ++known_count;
-      known_set = b;
+  int    active   = 0;
+  size_t selected = 0;
+  for (size_t i = 0; i < n_arms; ++i) {
+    const Dlop& c = *pins[2 * i];
+    if (!c.is_numeric()) {
+      return nil();
+    }
+    if (definitely_active(c)) {
+      if (++active > 1) {
+        return nil();  // the one-hot-or-zero obligation does not hold
+      }
+      selected = i;
     }
   }
-  // Selector must be one-hot. More than one known-set bit is an illegal
-  // selector → nil (formerly an assertion failure).
-  if (known_count > 1) {
-    return nil();
+  if (active == 1) {
+    return clone(*pins[2 * selected + 1]);
   }
 
-  if (known_count == 1) {
-    if (static_cast<size_t>(known_set) >= values.size()) {
-      return invalid();
-    }
-    return clone(*values[known_set]);
-  }
+  // No control is definitely active, so the result is the default unless an
+  // unknown control might still claim its arm.
+  spool_ptr<Dlop> fallback = (pins.size() % 2) ? clone(*pins.back()) : create_integer(0);
 
-  // No known-set bit: the hot bit is among the unknown positions in range.
   std::vector<const Dlop*> cands;
-  for (size_t b = 0; b < values.size(); ++b) {
-    if (sel.unknown_bit_test(static_cast<int>(b))) {
-      cands.push_back(&*values[b]);
+  for (size_t i = 0; i < n_arms; ++i) {
+    if (pins[2 * i]->has_unknowns()) {
+      cands.push_back(&*pins[2 * i + 1]);
     }
   }
   if (cands.empty()) {
-    return invalid();  // selector is a known zero -> not one-hot
+    return fallback;
   }
+  cands.push_back(&*fallback);  // every control could also resolve to zero
   return merge_unknown(cands);
 }
 

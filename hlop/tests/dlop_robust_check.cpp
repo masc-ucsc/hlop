@@ -121,7 +121,8 @@ std::vector<BinOp> binops() {
       {"set_mask_op", [](const SP& a, const SP& b) { return a->set_mask_op(*b, *b); }},
       {"concat_op", [](const SP& a, const SP& b) { return a->concat_op(*b); }},
       {"mux_op", [](const SP& a, const SP& b) { return Dlop::mux_op(*a, {b, b}); }},
-      {"hotmux_op", [](const SP& a, const SP& b) { return Dlop::hotmux_op(*a, {b, b}); }},
+      // (control, value) + trailing default: `a` gates arm `b`, else `b`.
+      {"hotmux_op", [](const SP& a, const SP& b) { return Dlop::hotmux_op({a, b, b}); }},
       {"lut_op", [](const SP& a, const SP& b) { return Dlop::lut_op(*a, *b); }},
       {"sum_op", [](const SP& a, const SP& b) { return Dlop::sum_op({a}, {b}); }},
   };

@@ -312,12 +312,32 @@ TEST_F(Slop_test, mux_op) {
 }
 
 TEST_F(Slop_test, hotmux_op) {
-  using S8 = Slop<8>;
-  std::vector<S8> vals{S8::from_pyrope("0x11"), S8::from_pyrope("0x22"), S8::from_pyrope("0x33")};
+  using S8       = Slop<8>;
+  const auto v0  = S8::from_pyrope("0x11");
+  const auto v1  = S8::from_pyrope("0x22");
+  const auto v2  = S8::from_pyrope("0x33");
+  const auto on  = S8::create_integer(1);
+  const auto off = S8::create_integer(0);
 
-  EXPECT_EQ(S8::hotmux_op(S8::create_integer(0b001), vals).to_just_i64(), 0x11);
-  EXPECT_EQ(S8::hotmux_op(S8::create_integer(0b010), vals).to_just_i64(), 0x22);
-  EXPECT_EQ(S8::hotmux_op(S8::create_integer(0b100), vals).to_just_i64(), 0x33);
+  // Interleaved (control, value) pairs -- the LGraph Hotmux pin layout.
+  EXPECT_EQ(S8::hotmux_op(on, v0, off, v1, off, v2).to_just_i64(), 0x11);
+  EXPECT_EQ(S8::hotmux_op(off, v0, on, v1, off, v2).to_just_i64(), 0x22);
+  EXPECT_EQ(S8::hotmux_op(off, v0, off, v1, on, v2).to_just_i64(), 0x33);
+
+  // NON-ZERO, not == 1, is what makes a control active.
+  EXPECT_EQ(S8::hotmux_op(off, v0, S8::create_integer(2), v1).to_just_i64(), 0x22);
+
+  // All-zero is legal: the trailing default, or 0 when there is none.
+  EXPECT_EQ(S8::hotmux_op(off, v0, off, v1, v2).to_just_i64(), 0x33);
+  EXPECT_EQ(S8::hotmux_op(off, v0, off, v1).to_just_i64(), 0);
+
+  // Dynamic form.
+  std::vector<std::pair<S8, S8>> arms;
+  arms.emplace_back(off, v0);
+  arms.emplace_back(on, v1);
+  EXPECT_EQ(S8::hotmux_op(std::span<const std::pair<S8, S8>>(arms)).to_just_i64(), 0x22);
+  arms[1].first = off;
+  EXPECT_EQ(S8::hotmux_op(std::span<const std::pair<S8, S8>>(arms), v2).to_just_i64(), 0x33);
 }
 
 TEST_F(Slop_test, lut_op) {

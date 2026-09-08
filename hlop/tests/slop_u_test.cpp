@@ -423,12 +423,15 @@ TEST(Slop_u_test, same_width_operand_slots_take_slop_u_bare) {
   EXPECT_TRUE(
       Slop<12>::shl_op(Slop<9>::create_integer(0xa5), Slop_u<3>{3}).identical(Slop<12>::shl_op(Slop<9>::create_integer(0xa5), 3)));
 
-  // hotmux_op: selector and arms.
+  // hotmux_op: both the control and the value slot of each (control, value) pair.
   const Slop_u<8> arm0{11};
   const Slop_u<8> arm1{22};
-  EXPECT_TRUE(Slop<9>::hotmux_op(Slop_u<2>{1}, arm0, arm1).identical(Slop<9>::create_integer(11)));
-  EXPECT_TRUE(Slop<9>::hotmux_op(Slop_u<2>{2}, arm0, arm1).identical(Slop<9>::create_integer(22)));
-  EXPECT_TRUE(Slop<9>::hotmux_op(Slop<3>::create_integer(2), arm0, arm1).identical(Slop<9>::create_integer(22)));
+  const Slop_u<1> on{1};
+  const Slop_u<1> off{0};
+  EXPECT_TRUE(Slop<9>::hotmux_op(on, arm0, off, arm1).identical(Slop<9>::create_integer(11)));
+  EXPECT_TRUE(Slop<9>::hotmux_op(off, arm0, on, arm1).identical(Slop<9>::create_integer(22)));
+  EXPECT_TRUE(Slop<9>::hotmux_op(Slop<3>::create_integer(0), arm0, Slop<3>::create_integer(1), arm1)
+                  .identical(Slop<9>::create_integer(22)));
 
   // Slop::concat_op already reads lane widths from the TYPE, so a MIXED lane
   // list needs no conversion either. Note the landing differs by result type,
@@ -587,8 +590,8 @@ TEST(Slop_u_test, slop_u_as_a_result_type) {
   EXPECT_TRUE(m1 == 0x3c);
   EXPECT_TRUE(canonical_ok(m0));
 
-  const auto h0 = Slop_u<8>::hotmux_op(Slop_u<2>{1}, a, b);  // 1,524 sites
-  const auto h1 = Slop_u<8>::hotmux_op(Slop<3>::create_integer(2), a, b);
+  const auto h0 = Slop_u<8>::hotmux_op(Slop_u<1>{1}, a, Slop_u<1>{0}, b);  // 1,524 sites
+  const auto h1 = Slop_u<8>::hotmux_op(Slop<3>::create_integer(0), a, Slop<3>::create_integer(1), b);
   EXPECT_TRUE(h0 == 0xa5);
   EXPECT_TRUE(h1 == 0x3c);
   EXPECT_TRUE(canonical_ok(h1));

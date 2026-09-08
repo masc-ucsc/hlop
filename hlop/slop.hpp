@@ -26,6 +26,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "blop.hpp"
@@ -1830,39 +1831,84 @@ public:
     return out;
   }
 
-  // hotmux_op: one-hot selector — bit `i` selects values[i]. Selector width is
-  // independent of the result/data width: a wide one-hot decode can select a
-  // narrow value. The selector is asserted to be one-hot; an out-of-range hot
-  // bit returns invalid().
-  template <int SelBits>
-  static Slop hotmux_op(const Slop<SelBits>& sel, std::span<const Slop> values) {
-    assert(!values.empty());
-    assert(sel.popcount() == 1 && "hotmux select must be one-hot");
-    int b = sel.get_first_bit_set();
-    if (b < 0 || static_cast<size_t>(b) >= values.size()) {
-      return invalid();
-    }
-    return values[b];
-  }
-  template <int SelBits>
-  static Slop hotmux_op(const Slop<SelBits>& sel, std::initializer_list<Slop> values) {
-    return hotmux_op(sel, std::span<const Slop>(values.begin(), values.size()));
+  // A Hotmux argument list is the LGraph Hotmux pin layout (livehd
+  // graph/node_util.hpp) flattened: control `i` at position 2i, its value at
+  // 2i+1, and — when the list is ODD — one trailing default at position n-1.
+  // True for the positions that carry a RESULT value (the odd ones plus that
+  // trailing default), which are the only ones the width contract binds.
+  static constexpr bool hotmux_is_value_(std::size_t i, std::size_t n) { return (i % 2 == 1) || (n % 2 == 1 && i + 1 == n); }
+
+  // hotmux_op: interleaved (control, value) pairs with an optional trailing
+  // default. Without that default the all-controls-zero case is 0 — all-zero
+  // is a LEGAL state of the cell (it is what a `unique if` with no `else`
+  // means); only overlap is not.
+  //
+  // A control is ACTIVE when it is NON-ZERO, not when it equals 1. Controls are
+  // one-bit predicates by contract, but nothing in the graph narrows them, so
+  // this has to agree with cgen_verilog's `(ctl) != 1'b0` case item and with
+  // the SMT encoders' `DISTINCT(ctl, 0)`.
+  //
+  // Controls are mutually exclusive (one-hot-or-zero); discharging that is
+  // pass.formal's job, not this kernel's. Overlap asserts here, and once the
+  // assert is compiled out the FIRST active arm wins — the same priority
+  // `unique case` and both SMT encoders use, so a contract-violating run still
+  // agrees with every other backend instead of inventing a third answer.
+  //
+  // livehd's inou/cgen/cgen_sim.cpp OPEN-CODES this rather than calling it (a
+  // call evaluates every arm, and its arms are whole inlined expression trees):
+  // the two must keep the same three answers above.
+  template <Slop_operand... Args>
+  static Slop hotmux_op(const Args&... args) {
+    static_assert(sizeof...(Args) >= 2, "Hotmux requires at least one (control, value) pair");
+    return hotmux_pick_(std::index_sequence_for<Args...>{}, args...);
   }
 
-  // Heterogeneous data-arm form. As with mux_op, promotion is lossless and an
-  // undersized generated result is rejected while compiling the kernel.
-  template <Slop_operand Sel, Slop_operand... Vals>
-  static Slop hotmux_op(const Sel& sel_a, const Vals&... values) {
-    static_assert(sizeof...(Vals) > 0, "Hotmux requires at least one data input");
-    input_width_check<Slop_arg<Vals>::bits...>();
-    const auto& sel = sref_(sel_a);
-    assert(sel.popcount() == 1 && "hotmux select must be one-hot");
-    const int b = sel.get_first_bit_set();
-    if (b < 0 || b >= static_cast<int>(sizeof...(Vals))) {
-      return invalid();
+  template <std::size_t... Is, Slop_operand... Args>
+  static Slop hotmux_pick_(std::index_sequence<Is...>, const Args&... args) {
+    constexpr std::size_t n = sizeof...(Args);
+    static_assert(((hotmux_is_value_(Is, n) ? (N >= Slop_arg<Args>::bits) : true) && ...),
+                  "Slop result is narrower than a Hotmux value arm; code generation would lose precision");
+
+    // Every control is scanned, not just up to the first hit: a control test is
+    // a word-zero read, far cheaper than the ONE arm promotion below, and the
+    // full scan is what lets the assert see an overlap at all.
+    int64_t arm = -1;
+    int     hot = 0;
+    ((hotmux_is_value_(Is, n) || !sref_(args).is_known_true()
+          ? void()
+          : (void)(++hot, arm = (arm < 0 ? static_cast<int64_t>(Is) + 1 : arm))),
+     ...);
+    assert(hot <= 1 && "Slop hotmux controls overlap: the cell's one-hot-or-zero obligation does not hold");
+    (void)hot;  // the count exists only for that assert
+
+    if (arm < 0) {
+      if constexpr (n % 2 == 1) {
+        return pick_arm_(static_cast<int64_t>(n) - 1, args...);  // the trailing default
+      } else {
+        return create_integer(0);
+      }
     }
-    // Only the hot arm is promoted -- see mux_op's note.
-    return pick_arm_(b, values...);
+    // Only the claimed arm is promoted -- see mux_op's note.
+    return pick_arm_(arm, args...);
+  }
+
+  // Dynamic form: `arms[i]` is one (control, value) pair and `fallback` is the
+  // value for the all-zero case (0 when the cell carries no default pin).
+  static Slop hotmux_op(std::span<const std::pair<Slop, Slop>> arms, const Slop& fallback = create_integer(0)) {
+    assert(!arms.empty());
+    const Slop* sel = nullptr;
+    int         hot = 0;
+    for (const auto& [control, value] : arms) {
+      if (control.is_known_true()) {
+        ++hot;
+        if (sel == nullptr) {
+          sel = &value;
+        }
+      }
+    }
+    assert(hot <= 1 && "Slop hotmux controls overlap: the cell's one-hot-or-zero obligation does not hold");
+    (void)hot;
+    return sel == nullptr ? fallback : *sel;
   }
 
   // lut_op: Yosys `$lut` semantics — 1-bit result `table[addr]` (bit `addr` of
@@ -2615,11 +2661,13 @@ public:
   // A SELECT copies one arm, so the result is canonical exactly when every arm
   // is. No mask on any path.
   //
-  // DIVERGENCE from Slop::mux_op / Slop::hotmux_op, which return invalid() on
-  // an out-of-range (or non-one-hot) selector: Slop_u has no type tag, so it
-  // has no invalid() to return. The bad selector is a codegen error, so it is
-  // an assert here and yields 0 in a release build. A caller that needs the
-  // invalid() tag must stay on the Slop form.
+  // DIVERGENCE from Slop::mux_op, which returns invalid() on an out-of-range
+  // selector: Slop_u has no type tag, so it has no invalid() to return. The bad
+  // selector is a codegen error, so it is an assert here and yields 0 in a
+  // release build. A caller that needs the invalid() tag must stay on the Slop
+  // form. hotmux_op has no such divergence — under the (control, value) pin
+  // encoding NO control pattern is out of range, so it never returned invalid()
+  // in either form.
   template <Slop_operand Sel, Slop_operand... Vals>
   static Slop_u mux_op(const Sel& sel, const Vals&... values) {
     static_assert(sizeof...(Vals) > 0, "Mux requires at least one data input");
@@ -2628,12 +2676,24 @@ public:
     return from_canonical_(Carrier::mux_op(sel, values...));
   }
 
-  template <Slop_operand Sel, Slop_operand... Vals>
-  static Slop_u hotmux_op(const Sel& sel, const Vals&... values) {
-    static_assert(sizeof...(Vals) > 0, "Hotmux requires at least one data input");
-    static_assert((Slop_arg<Vals>::canonical && ...), "hotmux_op keeps canonicality only when EVERY arm is canonical");
-    static_assert(((Slop_arg<Vals>::bits <= N + 1) && ...), "hotmux_op arm wider than the canonical result");
-    return from_canonical_(Carrier::hotmux_op(sel, values...));
+  // Interleaved (control, value) pairs plus an optional trailing default — see
+  // Slop::hotmux_op. Only the VALUE positions bind the canonicality contract: a
+  // control never reaches the result, and the no-default all-zero result is the
+  // literal 0, which is canonical at every width.
+  template <Slop_operand... Args>
+  static Slop_u hotmux_op(const Args&... args) {
+    static_assert(sizeof...(Args) >= 2, "Hotmux requires at least one (control, value) pair");
+    hotmux_arm_check_<Args...>(std::index_sequence_for<Args...>{});
+    return from_canonical_(Carrier::hotmux_op(args...));
+  }
+
+  template <typename... Args, std::size_t... Is>
+  static consteval void hotmux_arm_check_(std::index_sequence<Is...>) {
+    constexpr std::size_t n = sizeof...(Args);
+    static_assert(((Carrier::hotmux_is_value_(Is, n) ? Slop_arg<Args>::canonical : true) && ...),
+                  "hotmux_op keeps canonicality only when EVERY value arm is canonical");
+    static_assert(((Carrier::hotmux_is_value_(Is, n) ? (Slop_arg<Args>::bits <= N + 1) : true) && ...),
+                  "hotmux_op value arm wider than the canonical result");
   }
 
   // A field splice into [lo, hi) leaves every bit at and above `hi` alone, so

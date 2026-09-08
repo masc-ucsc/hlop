@@ -321,16 +321,22 @@ TEST(Slop_mixed_width, mux_condition_and_heterogeneous_arms) {
       Slop<80>::mux_op(Slop<80>::from_pyrope("0x1_0000_0000_0000_0000"), narrow, middle, wide).is_invalid());
 }
 
-// A Hotmux's one-hot selector width follows its arm count, not its result
-// width. A wide decode must therefore be able to select a narrow value without
-// truncating the selector to the result width.
-TEST(Slop_mixed_width, hotmux_selector_width_is_independent) {
+// A Hotmux control is a one-bit predicate whose CARRIER width is independent of
+// the result width, and only the claimed arm is promoted. A wide control must
+// therefore gate a narrow value without either being resized to the other.
+TEST(Slop_mixed_width, hotmux_control_width_is_independent) {
   const auto narrow = Slop<2>::create_integer(0);
   const auto middle = Slop<17>::create_integer(1);
   const auto wide   = Slop<70>::create_integer(int64_t{0x123456789});
+  const auto on     = Slop<8>::create_integer(1);
+  const auto off    = Slop<8>::create_integer(0);
 
-  EXPECT_EQ(Slop<80>::hotmux_op(Slop<8>::create_integer(0b00000100), narrow, middle, wide).to_just_i64(), int64_t{0x123456789});
-  EXPECT_TRUE(Slop<80>::hotmux_op(Slop<8>::create_integer(0b00001000), narrow, middle, wide).is_invalid());
+  EXPECT_EQ(Slop<80>::hotmux_op(off, narrow, off, middle, on, wide).to_just_i64(), int64_t{0x123456789});
+  // Active means non-zero at any carrier width, not equal to 1.
+  EXPECT_EQ(Slop<80>::hotmux_op(off, narrow, Slop<8>::create_integer(0b1000), middle, off, wide).to_just_i64(), 1);
+  // Every control zero: 0 without a default arm, that default with one.
+  EXPECT_EQ(Slop<80>::hotmux_op(off, narrow, off, middle, off, wide).to_just_i64(), 0);
+  EXPECT_EQ(Slop<80>::hotmux_op(off, narrow, off, middle, wide).to_just_i64(), int64_t{0x123456789});
 }
 
 TEST(Slop_mixed_width, update_losslessly_widens_source) {

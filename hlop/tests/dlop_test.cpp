@@ -458,10 +458,13 @@ TEST_F(Dlop_test, illegal_operands_return_nil) {
   EXPECT_TRUE(i->set_mask_op(*Dlop::unknown(4), *i)->is_nil());
   EXPECT_TRUE(s->set_mask_op(*i, *i)->is_nil());
 
-  // hotmux with a non-one-hot selector → nil (formerly an assertion failure).
-  std::vector<spool_ptr<Dlop>> vals = {Dlop::create_integer(10), Dlop::create_integer(20)};
-  EXPECT_TRUE(Dlop::hotmux_op(*Dlop::create_integer(0b11), vals)->is_nil());
-  EXPECT_TRUE(Dlop::hotmux_op(*Dlop::create_integer(-1), vals)->is_nil());
+  // Two definitely-active controls break the cell's one-hot-or-zero obligation
+  // → nil. A non-numeric control is illegal → nil.
+  auto on  = Dlop::create_integer(1);
+  auto v10 = Dlop::create_integer(10);
+  auto v20 = Dlop::create_integer(20);
+  EXPECT_TRUE(Dlop::hotmux_op({on, v10, on, v20})->is_nil());
+  EXPECT_TRUE(Dlop::hotmux_op({s, v10})->is_nil());
 
   // concat with nil / invalid → nil.
   EXPECT_TRUE(i->concat_op(*n)->is_nil());
@@ -1141,45 +1144,67 @@ TEST_F(Dlop_test, mux_unknown_select_merges) {
 }
 
 TEST_F(Dlop_test, hotmux_known_onehot) {
-  auto                         v0 = Dlop::from_pyrope("0x11");
-  auto                         v1 = Dlop::from_pyrope("0x22");
-  auto                         v2 = Dlop::from_pyrope("0x33");
-  std::vector<spool_ptr<Dlop>> vals{v0, v1, v2};
+  auto v0  = Dlop::from_pyrope("0x11");
+  auto v1  = Dlop::from_pyrope("0x22");
+  auto v2  = Dlop::from_pyrope("0x33");
+  auto on  = Dlop::create_integer(1);
+  auto off = Dlop::create_integer(0);
 
-  // one-hot bit 0 -> values[0], bit 1 -> values[1], bit 2 -> values[2]
-  EXPECT_EQ(Dlop::hotmux_op(*Dlop::create_integer(0b001), vals)->to_just_i64(), 0x11);
-  EXPECT_EQ(Dlop::hotmux_op(*Dlop::create_integer(0b010), vals)->to_just_i64(), 0x22);
-  EXPECT_EQ(Dlop::hotmux_op(*Dlop::create_integer(0b100), vals)->to_just_i64(), 0x33);
+  // (control, value) pairs: the arm whose control is set claims the result.
+  EXPECT_EQ(Dlop::hotmux_op({on, v0, off, v1, off, v2})->to_just_i64(), 0x11);
+  EXPECT_EQ(Dlop::hotmux_op({off, v0, on, v1, off, v2})->to_just_i64(), 0x22);
+  EXPECT_EQ(Dlop::hotmux_op({off, v0, off, v1, on, v2})->to_just_i64(), 0x33);
+
+  // A control is ACTIVE when NON-ZERO, not when it equals 1.
+  EXPECT_EQ(Dlop::hotmux_op({off, v0, Dlop::create_integer(2), v1})->to_just_i64(), 0x22);
+}
+
+TEST_F(Dlop_test, hotmux_all_controls_zero) {
+  auto v0  = Dlop::from_pyrope("0x11");
+  auto v1  = Dlop::from_pyrope("0x22");
+  auto def = Dlop::from_pyrope("0x33");
+  auto off = Dlop::create_integer(0);
+
+  // All-zero is a LEGAL state (a `unique if` with no `else`), not invalid():
+  // an odd pin list ends in the default, an even one reads 0.
+  EXPECT_EQ(Dlop::hotmux_op({off, v0, off, v1, def})->to_just_i64(), 0x33);
+  EXPECT_EQ(Dlop::hotmux_op({off, v0, off, v1})->to_just_i64(), 0);
 }
 
 TEST_F(Dlop_test, hotmux_heterogeneous_arms_preserve_selected_width) {
   auto narrow = Dlop::create_integer(3);
   auto wide   = Dlop::from_pyrope("0ux123456789abcdef0123");
-  std::vector<spool_ptr<Dlop>> vals{narrow, wide};
+  auto on     = Dlop::create_integer(1);
+  auto off    = Dlop::create_integer(0);
 
-  EXPECT_TRUE(Dlop::hotmux_op(*Dlop::create_integer(0b10), vals)->same_repr(*wide));
+  EXPECT_TRUE(Dlop::hotmux_op({off, narrow, on, wide})->same_repr(*wide));
 }
 
-TEST_F(Dlop_test, hotmux_known_bit_with_unknown_elsewhere) {
-  // bit 1 is known-set; one-hot guarantees the unknown bit 4 is 0, so pick v1.
-  auto                         v0 = Dlop::from_pyrope("0x11");
-  auto                         v1 = Dlop::from_pyrope("0x22");
-  std::vector<spool_ptr<Dlop>> vals{v0, v1};
+TEST_F(Dlop_test, hotmux_known_control_beats_unknown_control) {
+  // Arm 1's control is known set; one-hot guarantees arm 0's unknown control is
+  // 0, so v1 is picked outright rather than merged.
+  auto v0  = Dlop::from_pyrope("0x11");
+  auto v1  = Dlop::from_pyrope("0x22");
+  auto unk = Dlop::unknown(1);
+  auto on  = Dlop::create_integer(1);
 
-  auto r = Dlop::hotmux_op(*Dlop::from_pyrope("0ub?0010"), vals);
-  EXPECT_EQ(r->to_just_i64(), 0x22);
+  EXPECT_EQ(Dlop::hotmux_op({unk, v0, on, v1})->to_just_i64(), 0x22);
 }
 
-TEST_F(Dlop_test, hotmux_unknown_select_merges) {
-  // No known-set bit; the hot bit is among the unknown low two positions, so
-  // values[0] and values[1] are merged.
-  auto                         v0 = Dlop::from_pyrope("0x0f");
-  auto                         v1 = Dlop::from_pyrope("0x07");
-  std::vector<spool_ptr<Dlop>> vals{v0, v1};
+TEST_F(Dlop_test, hotmux_unknown_control_merges_with_the_default) {
+  auto v0  = Dlop::from_pyrope("0x0f");
+  auto v1  = Dlop::from_pyrope("0x07");
+  auto unk = Dlop::unknown(1);
+  auto off = Dlop::create_integer(0);
 
-  auto r = Dlop::hotmux_op(*Dlop::from_pyrope("0ub??"), vals);
+  // No control is definitely active, so the unknown arm and the all-zero
+  // result (here the trailing default v1) are ternary-merged.
+  auto r = Dlop::hotmux_op({unk, v0, v1});
   EXPECT_TRUE(r->has_unknowns());
   EXPECT_TRUE(r->same_repr(*Dlop::from_pyrope("0sb0?111")));
+
+  // A known-zero control drops its arm out of the merge entirely.
+  EXPECT_TRUE(Dlop::hotmux_op({off, v0, unk, v1, v1})->same_repr(*v1));
 }
 
 TEST_F(Dlop_test, lut_known_addr) {

@@ -720,15 +720,27 @@ public:
   static spool_ptr<Dlop> mux_op(const Dlop& sel, std::initializer_list<spool_ptr<Dlop>> values) {
     return mux_op(sel, std::span<const spool_ptr<Dlop>>(values.begin(), values.size()));
   }
-  // hotmux_op: one-hot selector — bit `i` set selects values[i]. The selector
-  // is asserted to be one-hot (at most one *known*-set bit). If exactly one
-  // bit is known-set, that value is picked (one-hot guarantees the rest are 0,
-  // even when they are unknown). If no bit is known-set but some bits are
-  // unknown, the hot bit lies among the unknown positions and those values are
-  // ternary-merged as in mux_op. A known all-zero selector returns invalid().
-  static spool_ptr<Dlop> hotmux_op(const Dlop& sel, std::span<const spool_ptr<Dlop>> values);
-  static spool_ptr<Dlop> hotmux_op(const Dlop& sel, std::initializer_list<spool_ptr<Dlop>> values) {
-    return hotmux_op(sel, std::span<const spool_ptr<Dlop>>(values.begin(), values.size()));
+  // hotmux_op: `pins` is the LGraph Hotmux pin list flattened — control `i` at
+  // pins[2i], its value at pins[2i+1], and an ODD-sized list ends with one
+  // default value. A control is ACTIVE when it is NON-ZERO (not when it equals
+  // 1: nothing in the graph narrows a control, so this must agree with
+  // cgen_verilog's `(ctl) != 1'b0` and the SMT encoders' `DISTINCT(ctl, 0)`).
+  //
+  //   exactly one definitely-active control  -> that arm's value. One-hot makes
+  //       the remaining controls zero even where they are unknown.
+  //   two or more definitely active          -> nil. That breaks the cell's
+  //       one-hot-or-zero obligation, and a fold is not the place to pick a
+  //       winner for a design that has not discharged it.
+  //   none active, some control unknown      -> the unknown-control arms AND the
+  //       default are ternary-merged, as in mux_op.
+  //   every control known zero               -> the trailing default, or 0 when
+  //       there is none. All-zero is a LEGAL state of the cell (a `unique if`
+  //       with no `else`), NOT the invalid() the packed-selector form returned.
+  //
+  // A non-numeric control (string / nil / invalid / ref) is illegal -> nil.
+  static spool_ptr<Dlop> hotmux_op(std::span<const spool_ptr<Dlop>> pins);
+  static spool_ptr<Dlop> hotmux_op(std::initializer_list<spool_ptr<Dlop>> pins) {
+    return hotmux_op(std::span<const spool_ptr<Dlop>>(pins.begin(), pins.size()));
   }
   // lut_op: Yosys `$lut` semantics — `table` is the 2^W-bit truth table and
   // `addr` is the index; the 1-bit result is `table[addr]` (bit `addr` of the
