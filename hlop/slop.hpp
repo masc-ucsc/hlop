@@ -2995,12 +2995,23 @@ bool slop_apply_update(std::array<Slop_u<B>, S>& dst, const Bus& bus) {
 template <int DstBits, int SrcBits>
 inline bool slop_update(Slop<DstBits>& dst, const Slop<SrcBits>& v) {
   static_assert(DstBits >= SrcBits, "Slop update destination is narrower than the source; code generation would lose precision");
-  const Slop<DstBits> widened{v};
-  if (dst.identical(widened)) [[likely]] {
-    return false;
+  if constexpr (DstBits == SrcBits) {
+    // Same type: compare in place. The widening temporary below is a full
+    // carrier copy, which for a wide value (a 7,800-bit loop invariant
+    // re-bound every iteration) cost more than the compare it fed.
+    if (dst.identical(v)) [[likely]] {
+      return false;
+    }
+    dst = v;
+    return true;
+  } else {
+    const Slop<DstBits> widened{v};
+    if (dst.identical(widened)) [[likely]] {
+      return false;
+    }
+    dst = widened;
+    return true;
   }
-  dst = widened;
-  return true;
 }
 inline bool slop_update(bool& dst, bool v) {
   if (dst == v) [[likely]] {
@@ -3041,10 +3052,18 @@ inline bool slop_update(Slop_u<DstBits>& dst, const Slop<SrcBits>& v) {
 template <int DstBits, int SrcBits>
 inline bool slop_update(Slop_u<DstBits>& dst, const Slop_u<SrcBits>& v) {
   static_assert(DstBits >= SrcBits, "Slop_u update destination is narrower than the source; code generation would lose precision");
-  const Slop_u<DstBits> widened{v};
-  if (dst.identical(widened)) [[likely]] {
-    return false;
+  if constexpr (DstBits == SrcBits) {
+    if (dst.identical(v)) [[likely]] {  // same type: no carrier copy before the compare
+      return false;
+    }
+    dst = v;
+    return true;
+  } else {
+    const Slop_u<DstBits> widened{v};
+    if (dst.identical(widened)) [[likely]] {
+      return false;
+    }
+    dst = widened;
+    return true;
   }
-  dst = widened;
-  return true;
 }
