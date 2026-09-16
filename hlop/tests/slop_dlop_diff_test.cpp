@@ -51,7 +51,7 @@ std::vector<PoolEntry> BuildPool() {
       char c = (rng() & 1) ? '1' : '0';
       e.concrete.push_back(c);
       // The first char (MSB) is the sign indicator in "0sb…" — keep it
-      // known so ops whose result width depends on get_bits() (concat,
+      // known so ops whose result width depends on get_signed_bits() (concat,
       // get_mask, …) agree between Dlop and Slop. Unknowns inside the
       // bit field still exercise every propagation path.
       bool can_unknown = (b > 0);
@@ -93,7 +93,7 @@ void ExpectConsistent(const Dlop& d, const S& s, const std::string& tag) {
   ASSERT_FALSE(d.is_invalid()) << "Dlop returned Invalid for " << tag;
   // Compare bit positions [0, max+pad). bit_test sign-extends beyond the
   // natural width so any reasonable upper bound works.
-  int w = std::max(d.get_bits(), s.get_bits()) + 2;
+  int w = std::max(d.get_signed_bits(), s.get_signed_bits()) + 2;
   for (int pos = 0; pos < w; ++pos) {
     char dc = DlopTriBit(d, pos);
     char sc = SlopBit(s, pos);
@@ -214,7 +214,7 @@ void RunOnce(std::mt19937_64& rng, const std::vector<PoolEntry>& pool, int op_id
       break;
     }
     case 26: {
-      // concat_op width = lhs.get_bits() + rhs.get_bits(). With unknown bits
+      // concat_op width = lhs.get_signed_bits() + rhs.get_signed_bits(). With unknown bits
       // the effective width is concretization-dependent (Slop sees one width,
       // Dlop sees another). Only exercise concat on the no-unknowns slice of
       // the pool — the underlying lsh/or/get_mask are already covered.

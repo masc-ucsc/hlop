@@ -834,7 +834,7 @@ public:
   // A positive value v needs floor(log2(v)) + 2 bits (one for sign).
   // A negative value v needs floor(log2(-v-1)) + 2 bits.
   // =========================================================================
-  static constexpr int get_bits64(const int64_t src) {
+  static constexpr int get_signed_bits64(const int64_t src) {
     if (src == 0) {
       return 0;
     }
@@ -847,7 +847,7 @@ public:
     return 64 - __builtin_clzll(static_cast<uint64_t>(-(src + 1))) + 1;
   }
 
-  static constexpr int get_bitsn(const int64_t* src, size_t sz) {
+  static constexpr int get_signed_bitsn(const int64_t* src, size_t sz) {
     int64_t sign = src[sz - 1] < 0 ? -1 : 0;
 
     // Find topmost word that differs from sign extension
@@ -867,7 +867,7 @@ public:
       if (sign == -1 && src[0] >= 0) {
         return 65;
       }
-      return get_bits64(src[0]);
+      return get_signed_bits64(src[0]);
     }
 
     // The value at src[top] is significant
@@ -886,11 +886,11 @@ public:
   }
 
   template <size_t N>
-  static constexpr int get_bits(const std::array<int64_t, N>& src) {
+  static constexpr int get_signed_bits(const std::array<int64_t, N>& src) {
     if constexpr (N == 1) {
-      return get_bits64(src[0]);
+      return get_signed_bits64(src[0]);
     } else {
-      return get_bitsn(src.data(), N);
+      return get_signed_bitsn(src.data(), N);
     }
   }
 

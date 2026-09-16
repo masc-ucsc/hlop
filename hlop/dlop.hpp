@@ -508,7 +508,10 @@ public:
   // Pyrope nil literal — distinct from invalid()
   static spool_ptr<Dlop> nil();
 
-  // Mask helpers (statics): (1<<bits)-1, contiguous slice [l..h], and ~((1<<bits)-1)
+  // Mask helpers (statics). Defined for EVERY non-negative argument, with no
+  // narrow-width exception: get_mask_value(bits) == 2^bits - 1 (so 0, 1, 3...)
+  // and get_neg_mask_value(bits) == -2^bits (so -1, -2, -4...). The contiguous
+  // slice form sets bits [l..h] inclusive.
   static spool_ptr<Dlop> get_mask_value(int bits);
   static spool_ptr<Dlop> get_mask_value(int h, int l);
   static spool_ptr<Dlop> get_neg_mask_value(int bits);
@@ -519,6 +522,9 @@ public:
   static spool_ptr<Dlop> unserialize(std::string_view v);
 
   uint64_t hash() const;
+  // Words that survive sign-extension trimming of BOTH planes (what normalize
+  // would shrink to). hash() keys on it so equal values hash equal at any size.
+  int minimal_word_count() const;
 
 protected:
   // --- Integer-amount op kernels ---
@@ -558,6 +564,15 @@ public:
   spool_ptr<Dlop> xor_op(const Dlop& other) const;
   spool_ptr<Dlop> xor_op(spool_ptr<Dlop> other) const { return xor_op(*other); }
   spool_ptr<Dlop> not_op() const;
+  // LOGICAL not (Pyrope `!x` / `not x`): exactly `x == 0`, which is also how
+  // the LGraph spells it (tolg lowers log_not to EQ(x, 0)). Boolean result,
+  // three-valued on unknowns. Any numeric operand is accepted (whether `not`
+  // may be applied to an integer is the typecheck's question, not the
+  // folder's); a non-numeric one (string / invalid / ref) is nil, like a
+  // string fed to and_op. NOT the bitwise not_op: with true == 1, ~1 == -2 is
+  // still truthy, so the two must never be confused.
+  spool_ptr<Dlop> lnot_op() const;
+  Type            logic_result_type(const Dlop& other) const;
 
   // --- Shift operations ---
   // The shift amount is a Dlop operand (LiveHD passes shift counts as constant
@@ -626,6 +641,15 @@ public:
   spool_ptr<Dlop> get_mask_op() const;
   spool_ptr<Dlop> get_mask_op(const Dlop& mask) const;
   spool_ptr<Dlop> get_mask_op(spool_ptr<Dlop> mask) const { return get_mask_op(*mask); }
+
+  // RANGE forms, the shape every real mask has (the Slop twins are
+  // get_mask_op_opt / set_mask_op_opt). Bits [lo, hi), half-open, LSB-aligned
+  // into the result; the caller states the window instead of materializing a
+  // mask VALUE for the callee to rediscover with a ctz/clz sweep -- which for a
+  // wide mask also meant parsing a multi-word literal. An empty range (hi <= lo)
+  // reads as 0 and writes nothing.
+  spool_ptr<Dlop> get_mask_op_opt(int lo, int hi) const;
+  spool_ptr<Dlop> set_mask_op_opt(int lo, int hi, const Dlop& value) const;
   spool_ptr<Dlop> set_mask_op(const Dlop& mask, const Dlop& value) const;
   spool_ptr<Dlop> set_mask_op(spool_ptr<Dlop> mask, spool_ptr<Dlop> value) const { return set_mask_op(*mask, *value); }
   // Make the bits selected by `mask` UNKNOWN, keeping every other bit. Unlike
@@ -645,7 +669,7 @@ public:
   // --- n-ary concat_op (the LGraph Concat cell) ------------------------------
   // One lane: a value and the DECLARED width of the window it occupies. The
   // width is NOT the value's significant bits — that is exactly what the binary
-  // concat_op above uses (`other.get_bits()`), and why it cannot express a
+  // concat_op above uses (`other.get_signed_bits()`), and why it cannot express a
   // Verilog `{a, b}`: dropping a lane's leading zeros shifts every lane above
   // it. Slop gets these widths from the operand types at compile time; Dlop has
   // no declared width, so the caller passes them.
@@ -768,18 +792,32 @@ public:
   // the same Invalid tag but stores the byte-packed identifier in `base`.
   bool is_ref() const;
 
-  // Bitwidth slice helpers (instance form): walk contiguous 1-runs in base.
-  // Returns (-1,-1) when no contiguous range exists (or empty for pairs).
+  // Bit ENVELOPE (instance form): the all-ones mask covering this value's
+  // magnitude bits, never narrower than one bit (a safe over-approximation).
   spool_ptr<Dlop>                  get_mask_value() const;
-  std::vector<std::pair<int, int>> get_mask_range_pairs() const;
-  std::pair<int, int>              get_mask_range() const;
+
+  // The half-open [lo, hi) range of the single contiguous 1-run in base, or
+  // (-1, -1) when there is none. (The multi-run get_mask_range_pairs() is gone:
+  // a Get_mask / Set_mask mask is ONE window or the -1 whole-value spelling,
+  // and no consumer scans for runs any more.)
+  std::pair<int, int> get_mask_range() const;
 
   // Pyrope tuple-field stringification (subset of to_pyrope allowed as a field key)
   std::string to_field() const;
 
   // Resolve unknown bits to fresh random known bits (deterministic per-process seed)
   spool_ptr<Dlop> to_known_rand() const;
-  int             get_bits() const;
+  // Two WIDTHS, two meanings. Never one name for both:
+  //  * get_signed_bits: the minimal two's-complement carrier (0 -> 0, 1 -> 2,
+  //    -1 -> 1, 255 -> 9). Every non-negative value spends one bit on the sign
+  //    slot. With unknown bits it is an upper bound over all concretizations.
+  //  * get_payload_bits: the bits a hardware pin has to carry: signed_bits - 1
+  //    for a non-negative value (0 -> 0, 1 -> 1, 255 -> 8, `0ub?` -> 1), the
+  //    full signed width when the value can be negative (its top bit is the
+  //    sign, not headroom). This is the number a width hint may be stamped
+  //    with; the caller clamps to >= 1 where a 0-bit pin makes no sense.
+  int             get_signed_bits() const;
+  int             get_payload_bits() const;
   bool            bit_test(int pos) const;
   int             get_first_bit_set() const;
   int             get_last_bit_set() const;

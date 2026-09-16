@@ -83,7 +83,7 @@ auto MakeDlop(const std::string& bits) { return Dlop::from_pyrope("0sb" + bits);
 // extends past the stored width) gives an exact comparison.
 void ExpectEqual(const Dlop& d, const S& s, const std::string& tag) {
   ASSERT_FALSE(d.is_invalid()) << tag << ": dlop returned Invalid";
-  int w = std::max(d.get_bits(), s.get_bits()) + 2;
+  int w = std::max(d.get_signed_bits(), s.get_signed_bits()) + 2;
   for (int pos = 0; pos < w; ++pos) {
     bool db = d.bit_test(pos);
     bool sb = s.bit_test(pos);

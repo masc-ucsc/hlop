@@ -28,9 +28,26 @@ TEST_F(Slop_test, create_integer) {
 TEST_F(Slop_test, create_bool) {
   auto t = S::create_bool(true);
   EXPECT_TRUE(t.is_known_true());
+  EXPECT_EQ(t.to_just_i64(), 1);  // hardware u1, not all-ones
+  EXPECT_EQ(t.get_payload_bits(), 1);
+  EXPECT_EQ(t.get_signed_bits(), 2);
 
   auto f = S::create_bool(false);
   EXPECT_TRUE(f.is_known_false());
+  EXPECT_EQ(f.to_just_i64(), 0);
+
+  EXPECT_TRUE(t.lnot_op().is_known_false());
+  EXPECT_TRUE(f.lnot_op().is_known_true());
+  EXPECT_TRUE(t.lnot_op().is_bool());
+  EXPECT_TRUE(t.not_op().is_known_true());  // bitwise ~1 is still truthy
+}
+
+TEST_F(Slop_test, get_payload_bits) {
+  EXPECT_EQ(S(0).get_payload_bits(), 0);
+  EXPECT_EQ(S(1).get_payload_bits(), 1);
+  EXPECT_EQ(S(255).get_payload_bits(), 8);
+  EXPECT_EQ(S(-1).get_payload_bits(), 1);
+  EXPECT_EQ(S(-8).get_payload_bits(), 4);
 }
 
 // from_pyrope is constexpr — these static_asserts confirm the parser folds
@@ -236,12 +253,12 @@ TEST_F(Slop_test, eq_op) {
 // =========================================================================
 // Query tests
 // =========================================================================
-TEST_F(Slop_test, get_bits) {
-  EXPECT_EQ(S(0).get_bits(), 0);
-  EXPECT_EQ(S(1).get_bits(), 2);
-  EXPECT_EQ(S(-1).get_bits(), 1);
-  EXPECT_EQ(S(7).get_bits(), 4);
-  EXPECT_EQ(S(-8).get_bits(), 4);
+TEST_F(Slop_test, get_signed_bits) {
+  EXPECT_EQ(S(0).get_signed_bits(), 0);
+  EXPECT_EQ(S(1).get_signed_bits(), 2);
+  EXPECT_EQ(S(-1).get_signed_bits(), 1);
+  EXPECT_EQ(S(7).get_signed_bits(), 4);
+  EXPECT_EQ(S(-8).get_signed_bits(), 4);
 }
 
 TEST_F(Slop_test, is_mask) {
@@ -381,13 +398,21 @@ TEST_F(Slop_test, get_mask_op_negative_source_sign_extends) {
   EXPECT_EQ(p511.get_mask_op(S32::create_integer(0xff)).to_just_i64(), 0xff);
 }
 
-// get_mask_op(mask) — single-bit mask returns the signed 1-bit integer
-// (-1 if the bit is set, 0 if clear), not the unsigned 1/0.
+// get_mask_op(mask) — the pack is UNSIGNED at every width, a single selected
+// bit included: a set bit reads back as 1, never as the signed -1.
 TEST_F(Slop_test, get_mask_op_single_bit) {
   using S32 = Slop<32>;
   auto v    = S32::create_integer(0b1010);
-  EXPECT_EQ(v.get_mask_op(S32::create_integer(0b0010)).to_just_i64(), -1);  // bit set
-  EXPECT_EQ(v.get_mask_op(S32::create_integer(0b0001)).to_just_i64(), 0);   // bit clear
+  EXPECT_EQ(v.get_mask_op(S32::create_integer(0b0010)).to_just_i64(), 1);  // bit set
+  EXPECT_EQ(v.get_mask_op(S32::create_integer(0b0001)).to_just_i64(), 0);  // bit clear
+
+  EXPECT_EQ(S32::create_integer(0b100).get_mask_op(S32::create_integer(0b100)).to_just_i64(), 1);
+  EXPECT_EQ(S32::create_integer(-1).get_mask_op(S32::create_integer(1)).to_just_i64(), 1);
+  EXPECT_EQ(v.get_mask_op(S32::create_integer(0)).to_just_i64(), 0);  // empty mask
+
+  // Same answer as the static / range forms, which already packed unsigned.
+  EXPECT_EQ(S32::get_mask_op(v, S32::create_integer(0b0010)).to_just_i64(), 1);
+  EXPECT_EQ((S32::get_mask_op_opt(v, 1, 2)).to_just_i64(), 1);
 }
 
 // Pyrope `nil` / `null` literals parse to Type::Nil (parity with Dlop), while

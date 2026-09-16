@@ -65,11 +65,25 @@ void check(int64_t xa, int64_t xb) {
     EXPECT_EQ((Slop<R>::xor_op(a, b)).to_binary(), ea.xor_op(eb).to_binary()) << "u.xor";
     EXPECT_EQ((Slop<R>::not_op(a)).to_binary(), ea.not_op().to_binary()) << "u.not";
 
-    // Compares materialize 0/1 directly -- the fixed-width form needs the
-    // .zext_to<1>() clamp because create_bool's true is all-ones.
+    // Compares materialize 0/1 directly; the member form returns a
+    // Boolean-tagged 0/1 at the operand width, so it is zero-extended to
+    // the same carrier before comparing bit patterns.
     EXPECT_EQ((Slop<R>::eq_op(a, b)).to_binary(), ea.eq_op(eb).template zext_to<1>().template zext_to<R>().to_binary()) << "u.eq";
     EXPECT_EQ((Slop<R>::lt_op(a, b)).to_binary(), ea.lt_op(eb).template zext_to<1>().template zext_to<R>().to_binary()) << "u.lt";
     EXPECT_EQ((Slop<R>::gt_op(a, b)).to_binary(), ea.gt_op(eb).template zext_to<1>().template zext_to<R>().to_binary()) << "u.gt";
+    EXPECT_EQ((Slop<R>::ne_op(a, b)).to_binary(), ea.ne_op(eb).template zext_to<1>().template zext_to<R>().to_binary()) << "u.ne";
+    EXPECT_EQ((Slop<R>::le_op(a, b)).to_binary(), ea.le_op(eb).template zext_to<1>().template zext_to<R>().to_binary()) << "u.le";
+    EXPECT_EQ((Slop<R>::ge_op(a, b)).to_binary(), ea.ge_op(eb).template zext_to<1>().template zext_to<R>().to_binary()) << "u.ge";
+    EXPECT_EQ((Slop<R>::lnot_op(a)).to_binary(), ea.lnot_op().template zext_to<1>().template zext_to<R>().to_binary()) << "u.lnot";
+    EXPECT_EQ((Slop<R>::ror_op(a, b)).to_just_i64(), ea.ror_op(eb).to_just_i64()) << "u.ror";
+
+    // The plain-bool forms answer the same question with no Slop built.
+    EXPECT_EQ(Slop<R>::eq_bool(a, b), ea.eq_op(eb).is_known_true()) << "u.eq_bool";
+    EXPECT_EQ(Slop<R>::ne_bool(a, b), !ea.eq_op(eb).is_known_true()) << "u.ne_bool";
+    EXPECT_EQ(Slop<R>::lt_bool(a, b), ea.lt_op(eb).is_known_true()) << "u.lt_bool";
+    EXPECT_EQ(Slop<R>::gt_bool(a, b), ea.gt_op(eb).is_known_true()) << "u.gt_bool";
+    EXPECT_EQ(Slop<R>::le_bool(a, b), ea.le_op(eb).is_known_true()) << "u.le_bool";
+    EXPECT_EQ(Slop<R>::ge_bool(a, b), ea.ge_op(eb).is_known_true()) << "u.ge_bool";
 
     for (int64_t amt : {int64_t{0}, int64_t{1}, int64_t{3}, int64_t{31}, int64_t{64}}) {
       EXPECT_EQ((Slop<R>::shl_op(a, amt)).to_binary(), ea.shl_op(amt).to_binary()) << "u.shl " << amt;
@@ -92,6 +106,19 @@ void check(int64_t xa, int64_t xb) {
     EXPECT_EQ((Slop<R>::eq_op(a, b)).to_binary(), ea.eq_op(eb).template zext_to<1>().template zext_to<R>().to_binary()) << "s.eq";
     EXPECT_EQ((Slop<R>::lt_op(a, b)).to_binary(), ea.lt_op(eb).template zext_to<1>().template zext_to<R>().to_binary()) << "s.lt";
     EXPECT_EQ((Slop<R>::gt_op(a, b)).to_binary(), ea.gt_op(eb).template zext_to<1>().template zext_to<R>().to_binary()) << "s.gt";
+    EXPECT_EQ((Slop<R>::ne_op(a, b)).to_binary(), ea.ne_op(eb).template zext_to<1>().template zext_to<R>().to_binary()) << "s.ne";
+    EXPECT_EQ((Slop<R>::le_op(a, b)).to_binary(), ea.le_op(eb).template zext_to<1>().template zext_to<R>().to_binary()) << "s.le";
+    EXPECT_EQ((Slop<R>::ge_op(a, b)).to_binary(), ea.ge_op(eb).template zext_to<1>().template zext_to<R>().to_binary()) << "s.ge";
+    EXPECT_EQ((Slop<R>::lnot_op(a)).to_binary(), ea.lnot_op().template zext_to<1>().template zext_to<R>().to_binary()) << "s.lnot";
+    EXPECT_EQ((Slop<R>::ror_op(a, b)).to_just_i64(), ea.ror_op(eb).to_just_i64()) << "s.ror";
+
+    // The plain-bool forms answer the same question with no Slop built.
+    EXPECT_EQ(Slop<R>::eq_bool(a, b), ea.eq_op(eb).is_known_true()) << "s.eq_bool";
+    EXPECT_EQ(Slop<R>::ne_bool(a, b), !ea.eq_op(eb).is_known_true()) << "s.ne_bool";
+    EXPECT_EQ(Slop<R>::lt_bool(a, b), ea.lt_op(eb).is_known_true()) << "s.lt_bool";
+    EXPECT_EQ(Slop<R>::gt_bool(a, b), ea.gt_op(eb).is_known_true()) << "s.gt_bool";
+    EXPECT_EQ(Slop<R>::le_bool(a, b), ea.le_op(eb).is_known_true()) << "s.le_bool";
+    EXPECT_EQ(Slop<R>::ge_bool(a, b), ea.ge_op(eb).is_known_true()) << "s.ge_bool";
     for (int64_t amt : {int64_t{0}, int64_t{1}, int64_t{3}, int64_t{31}, int64_t{64}}) {
       EXPECT_EQ((Slop<R>::shl_op(a, amt)).to_binary(), ea.shl_op(amt).to_binary()) << "s.shl " << amt;
       EXPECT_EQ((Slop<R>::sra_op(a, amt)).to_binary(), ea.sra_op(amt).to_binary()) << "s.sra " << amt;
@@ -164,7 +191,7 @@ TEST(Slop_mixed_width, narrow_plus_wide) { sweep<8, 80, 96>(); }
 TEST(Slop_mixed_width, wide_plus_narrow) { sweep<66, 8, 70>(); }
 TEST(Slop_mixed_width, very_wide) { sweep<100, 200, 256>(); }
 
-// Compares must yield a 0/1 MAGNITUDE, not create_bool's all-ones. This is what
+// Compares must yield a 0/1 MAGNITUDE at the requested width. This is what
 // lets cgen_sim drop the `.zext_to<1>().zext_to<W>()` clamp it appends today.
 TEST(Slop_mixed_width, compares_are_zero_or_one) {
   auto a = Slop<8>::create_integer(5);
@@ -227,9 +254,8 @@ TEST(Slop_mixed_width, bitwise_needs_no_result_clamp) {
   sweep_no_clamp<100, 200>();
 }
 
-// Mixed-width get_mask must agree with the member form on every mask shape,
-// EXCEPT the single-selected-bit case, where it deliberately yields the unsigned
-// 0/1 instead of the member form's signed -1.
+// Mixed-width get_mask agrees with the member form on EVERY mask shape, the
+// single-selected-bit case included: both pack unsigned.
 TEST(Slop_mixed_width, get_mask_matches_member_form) {
   std::mt19937_64 rng(0xBEEF);
   const int64_t   masks[] = {-1, 1, 3, 7, 0xff, 0xffff, 0x7fffffff, 126, 0b1010, 0x40, 6, 0x0f0f};
@@ -243,28 +269,43 @@ TEST(Slop_mixed_width, get_mask_matches_member_form) {
       const auto member = x.get_mask_op(m);             // Slop<20>
       const auto mixed  = Slop<20>::get_mask_op(x, m);  // same widths -> must match
 
-      // how many bits does this mask select? (drives the single-bit exception)
-      int sel = 0;
-      if (mk >= 0) {
-        for (int b = 0; b < 20; ++b) {
-          if (mk & (int64_t{1} << b)) {
-            ++sel;
-          }
-        }
-      } else {
-        sel = 99;  // negative mask selects a range; never the 1-bit case here
-      }
-      if (sel == 1) {
-        // member form returns signed -1/0; mixed returns 0/1
-        EXPECT_TRUE(mixed.to_just_i64() == 0 || mixed.to_just_i64() == 1) << "mask=" << mk << " v=" << v;
-        EXPECT_EQ(mixed.to_just_i64() != 0, member.to_just_i64() != 0) << "mask=" << mk << " v=" << v;
-      } else {
-        EXPECT_EQ(mixed.to_binary(), member.to_binary()) << "mask=" << mk << " v=" << v;
-      }
+      EXPECT_EQ(mixed.to_binary(), member.to_binary()) << "mask=" << mk << " v=" << v;
+      EXPECT_FALSE(member.is_negative()) << "mask=" << mk << " v=" << v;
       ++checked;
     }
   }
   EXPECT_GT(checked, 3000);
+}
+
+// The unary Ror cell: ONE operand, the 0/1 landing at the cell's own width.
+// Spelled at a result width that differs from the operand's -- see the note on
+// the variadic static: `Slop<W>::ror_op(x)` with x already a Slop<W> resolves
+// to the BINARY MEMBER instead (same value, Boolean tag).
+TEST(Slop_mixed_width, ror_unary_and_variadic) {
+  EXPECT_EQ(Slop<2>::ror_op(Slop<8>::create_integer(0)).to_just_i64(), 0);
+  EXPECT_EQ(Slop<2>::ror_op(Slop<8>::create_integer(4)).to_just_i64(), 1);
+  EXPECT_EQ(Slop<2>::ror_op(Slop<8>::create_integer(-1)).to_just_i64(), 1);
+
+  const auto z = Slop<8>::create_integer(0);
+  const auto o = Slop<12>::create_integer(1);
+  EXPECT_EQ(Slop<2>::ror_op(z, z, z).to_just_i64(), 0);
+  EXPECT_EQ(Slop<2>::ror_op(z, z, o).to_just_i64(), 1);
+  EXPECT_EQ(Slop<2>::ror_op(o, z).to_just_i64(), 1);
+}
+
+// rand / rxor / popcount read a DECLARED bit count, not the carrier width.
+TEST(Slop_mixed_width, reductions_over_declared_bits) {
+  const auto x = Slop<16>::create_integer(0b1111);
+  EXPECT_EQ(Slop<2>::rand_op(x, 4).to_just_i64(), 1);
+  EXPECT_EQ(Slop<2>::rand_op(x, 5).to_just_i64(), 0);
+  EXPECT_EQ(Slop<2>::rand_op(x, 0).to_just_i64(), 1);  // empty AND-reduction
+  EXPECT_EQ(Slop<2>::rand_op(Slop<16>::create_integer(-1), 16).to_just_i64(), 1);
+
+  EXPECT_EQ(Slop<2>::rxor_op(x, 4).to_just_i64(), 0);
+  EXPECT_EQ(Slop<2>::rxor_op(x, 3).to_just_i64(), 1);
+  EXPECT_EQ(Slop<8>::popcount_op(x, 4).to_just_i64(), 4);
+  EXPECT_EQ(Slop<8>::popcount_op(x, 16).to_just_i64(), 4);
+  EXPECT_EQ(Slop<8>::popcount_op(Slop<16>::create_integer(-1), 16).to_just_i64(), 16);
 }
 
 // The point of the mixed-width form: operands at differing widths, result

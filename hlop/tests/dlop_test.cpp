@@ -27,9 +27,95 @@ TEST_F(Dlop_test, create_bool) {
   auto t = Dlop::create_bool(true);
   EXPECT_TRUE(t->is_known_true());
   EXPECT_TRUE(t->is_bool());
+  // true is the hardware u1 `1`, NOT all-ones: non-negative, one payload bit.
+  EXPECT_EQ(t->to_just_i64(), 1);
+  EXPECT_FALSE(t->is_negative());
+  EXPECT_EQ(t->get_signed_bits(), 2);
+  EXPECT_EQ(t->get_payload_bits(), 1);
 
   auto f = Dlop::create_bool(false);
   EXPECT_TRUE(f->is_known_false());
+  EXPECT_EQ(f->to_just_i64(), 0);
+}
+
+TEST_F(Dlop_test, unknown_bool_is_one_unsigned_unknown_bit) {
+  auto u = Dlop::unknown_bool();
+  EXPECT_TRUE(u->is_bool());
+  EXPECT_TRUE(u->has_unknowns());
+  EXPECT_FALSE(u->is_negative());
+  EXPECT_FALSE(u->is_known_true());
+  EXPECT_FALSE(u->is_known_false());
+  EXPECT_EQ(u->get_payload_bits(), 1);
+}
+
+TEST_F(Dlop_test, lnot_op_is_logical) {
+  auto t = Dlop::create_bool(true);
+  auto f = Dlop::create_bool(false);
+  EXPECT_TRUE(t->lnot_op()->is_known_false());
+  EXPECT_TRUE(f->lnot_op()->is_known_true());
+  EXPECT_TRUE(t->lnot_op()->is_bool());
+  EXPECT_TRUE(f->lnot_op()->lnot_op()->is_known_false());
+  // The bitwise form is NOT a logical not on a 0/1 boolean (~1 == -2 is truthy).
+  EXPECT_TRUE(t->not_op()->is_known_true());
+  // Unknown stays three-valued; an integer operand is `x == 0` (tolg's EQ(x,0)).
+  auto u = Dlop::unknown_bool()->lnot_op();
+  EXPECT_TRUE(u->is_bool() && u->has_unknowns());
+  EXPECT_TRUE(Dlop::create_integer(3)->lnot_op()->is_known_false());
+  EXPECT_TRUE(Dlop::create_integer(0)->lnot_op()->is_known_true());
+  EXPECT_TRUE(Dlop::create_integer(0)->lnot_op()->is_bool());
+  EXPECT_TRUE(Dlop::from_pyrope("0ub1?")->lnot_op()->is_known_false());  // a known 1 bit
+  EXPECT_TRUE(Dlop::from_pyrope("0ub0?")->lnot_op()->has_unknowns());
+  EXPECT_TRUE(Dlop::create_string("x")->lnot_op()->is_nil());
+  EXPECT_TRUE(Dlop::nil()->lnot_op()->is_nil());
+}
+
+TEST_F(Dlop_test, logic_ops_keep_boolean_tag) {
+  auto t = Dlop::create_bool(true);
+  auto f = Dlop::create_bool(false);
+  EXPECT_TRUE(t->and_op(*f)->is_bool());
+  EXPECT_TRUE(t->and_op(*f)->is_known_false());
+  EXPECT_TRUE(t->or_op(*f)->is_bool());
+  EXPECT_TRUE(t->or_op(*f)->is_known_true());
+  EXPECT_TRUE(t->xor_op(*t)->is_bool());
+  EXPECT_TRUE(t->xor_op(*t)->is_known_false());
+  EXPECT_EQ(t->or_op(*f)->to_just_i64(), 1);
+  // A nil short-circuit keeps the deciding operand's tag.
+  EXPECT_TRUE(Dlop::nil()->and_op(*f)->is_bool());
+  EXPECT_TRUE(t->or_op(*Dlop::nil())->is_bool());
+  // Mixed with an integer the result is an integer.
+  EXPECT_TRUE(t->and_op(*Dlop::create_integer(3))->is_integer());
+}
+
+TEST_F(Dlop_test, get_payload_bits) {
+  EXPECT_EQ(Dlop::create_integer(0)->get_payload_bits(), 0);
+  EXPECT_EQ(Dlop::create_integer(1)->get_payload_bits(), 1);
+  EXPECT_EQ(Dlop::create_integer(255)->get_payload_bits(), 8);
+  EXPECT_EQ(Dlop::create_integer(256)->get_payload_bits(), 9);
+  EXPECT_EQ(Dlop::create_integer(-1)->get_payload_bits(), 1);
+  EXPECT_EQ(Dlop::create_integer(-8)->get_payload_bits(), 4);
+  EXPECT_EQ(Dlop::create_integer(-9)->get_payload_bits(), 5);
+  EXPECT_EQ(Dlop::from_pyrope("0ub?")->get_payload_bits(), 1);
+  EXPECT_EQ(Dlop::from_pyrope("0ub1?0")->get_payload_bits(), 3);
+  EXPECT_EQ(Dlop::from_pyrope("0ub??")->get_payload_bits(), 2);
+  EXPECT_EQ(Dlop::create_string("ab")->get_payload_bits(), Dlop::create_string("ab")->get_signed_bits());
+}
+
+TEST_F(Dlop_test, hash_is_width_canonical) {
+  // A value and its sign-extended wider twin are same_repr-equal, so they must
+  // hash equal (constant pools key on hash()).
+  auto narrow = Dlop::create_integer(5);
+  auto wide   = Dlop::create_integer(5)->add_op(*Dlop::get_mask_value(200))->sub_op(*Dlop::get_mask_value(200));
+  ASSERT_TRUE(narrow->same_repr(*wide));
+  EXPECT_EQ(narrow->hash(), wide->hash());
+  auto nneg = Dlop::create_integer(-5);
+  auto wneg = Dlop::create_integer(-5)->add_op(*Dlop::get_mask_value(200))->sub_op(*Dlop::get_mask_value(200));
+  ASSERT_TRUE(nneg->same_repr(*wneg));
+  EXPECT_EQ(nneg->hash(), wneg->hash());
+  EXPECT_NE(narrow->hash(), nneg->hash());
+  // A positive value whose top stored bit is set keeps its zero sign word.
+  auto big = Dlop::get_mask_value(64);  // 2^64-1: word0 all ones, word1 zero
+  EXPECT_FALSE(big->is_negative());
+  EXPECT_NE(big->hash(), Dlop::create_integer(-1)->hash());
 }
 
 TEST_F(Dlop_test, from_pyrope_decimal) {
@@ -96,8 +182,8 @@ TEST_F(Dlop_test, concat_op_string) {
 }
 
 TEST_F(Dlop_test, concat_op_string_byte_aligned) {
-  // Regression for a get_bits()-vs-byte_count mismatch: `"hello "` packs
-  // into 48 bits but get_bits() returns 47 (it reserves a sign bit).
+  // Regression for a get_signed_bits()-vs-byte_count mismatch: `"hello "` packs
+  // into 48 bits but get_signed_bits() returns 47 (it reserves a sign bit).
   // Concat must shift by the byte-aligned width, otherwise the second
   // operand's bytes end up offset by one bit and the round-trip via
   // to_string returns garbage. The cases below all have the property
@@ -149,7 +235,7 @@ TEST_F(Dlop_test, concat_op_integer_unchanged) {
 }
 
 // ── n-ary concat_op: DECLARED lane widths ───────────────────────────────────
-// The binary form above takes each lane's width from its value (get_bits()),
+// The binary form above takes each lane's width from its value (get_signed_bits()),
 // which is why "0ub1010" occupies 5 bits there. The n-ary form takes the width
 // from the caller, so the same values pack into the window the RTL declared.
 
@@ -161,7 +247,7 @@ TEST_F(Dlop_test, concat_op_nary_msb_first) {
   auto r = Dlop::concat_op(a, 3, b, 5);
   EXPECT_EQ(r->to_just_i64(), 0b111'00101);
   EXPECT_FALSE(r->is_negative());  // the result is always non-negative
-  EXPECT_EQ(r->get_bits(), 9);     // 8 lane bits + sign slot
+  EXPECT_EQ(r->get_signed_bits(), 9);     // 8 lane bits + sign slot
 
   // Lane order is the operand order.
   EXPECT_EQ(Dlop::concat_op(b, 5, a, 3)->to_just_i64(), 0b00101'111);
@@ -171,7 +257,7 @@ TEST_F(Dlop_test, concat_op_nary_msb_first) {
   EXPECT_TRUE(Dlop::concat_op({{a.get(), 3}, {b.get(), 5}})->is_known_eq(*r));
 
   // Same values, widths declared instead of inferred: the binary form packs b
-  // into 4 bits (get_bits()), the n-ary form into whatever was asked for.
+  // into 4 bits (get_signed_bits()), the n-ary form into whatever was asked for.
   EXPECT_EQ(Dlop::create_integer(2)->concat_op(*Dlop::create_integer(5))->to_just_i64(), (2 << 4) | 5);
   EXPECT_EQ(Dlop::concat_op(Dlop::create_integer(2), 2, Dlop::create_integer(5), 3)->to_just_i64(), (2 << 3) | 5);
 }
@@ -227,7 +313,7 @@ TEST_F(Dlop_test, concat_op_nary_unknowns_stay_in_lane) {
 // A lane window wider than the value's stored words sign-extends BOTH planes:
 // a value whose top stored bit is unknown stays unknown all the way up. (The
 // extra plane used to fill with 0, turning those positions into known 1s — an
-// unsound claim — and get_bits()'s conservative unknown bound also tripped the
+// unsound claim — and get_signed_bits()'s conservative unknown bound also tripped the
 // fit assert on a legal `0sb?` lane.)
 TEST_F(Dlop_test, concat_op_nary_unknown_sign_extends) {
   auto unk = Dlop::from_pyrope("0sb?");  // one unknown bit; the sign is unknown
@@ -515,12 +601,12 @@ TEST_F(Dlop_test, eq_op) {
 // =========================================================================
 // Query tests
 // =========================================================================
-TEST_F(Dlop_test, get_bits) {
-  EXPECT_EQ(Dlop::create_integer(0)->get_bits(), 0);
-  EXPECT_EQ(Dlop::create_integer(1)->get_bits(), 2);
-  EXPECT_EQ(Dlop::create_integer(-1)->get_bits(), 1);
-  EXPECT_EQ(Dlop::create_integer(7)->get_bits(), 4);
-  EXPECT_EQ(Dlop::create_integer(-8)->get_bits(), 4);
+TEST_F(Dlop_test, get_signed_bits) {
+  EXPECT_EQ(Dlop::create_integer(0)->get_signed_bits(), 0);
+  EXPECT_EQ(Dlop::create_integer(1)->get_signed_bits(), 2);
+  EXPECT_EQ(Dlop::create_integer(-1)->get_signed_bits(), 1);
+  EXPECT_EQ(Dlop::create_integer(7)->get_signed_bits(), 4);
+  EXPECT_EQ(Dlop::create_integer(-8)->get_signed_bits(), 4);
 }
 
 TEST_F(Dlop_test, is_mask) {
@@ -710,21 +796,21 @@ TEST_F(Dlop_test, nil_is_distinct) {
 // Mask helpers
 // =========================================================================
 TEST_F(Dlop_test, get_mask_value_static) {
-  EXPECT_EQ(Dlop::get_mask_value(0)->to_just_i64(), 1);  // bits==0 -> 1 per the contract
+  EXPECT_EQ(Dlop::get_mask_value(0)->to_just_i64(), 0);  // 2^0 - 1
   EXPECT_EQ(Dlop::get_mask_value(1)->to_just_i64(), 1);
   EXPECT_EQ(Dlop::get_mask_value(4)->to_just_i64(), 0xF);
   EXPECT_EQ(Dlop::get_mask_value(8)->to_just_i64(), 0xFF);
   EXPECT_EQ(Dlop::get_mask_value(16)->to_just_i64(), 0xFFFF);
 
   // 63/64/65: the word-boundary masks. 2^64-1 is the 2-word value {-1, 0}
-  // whose Blop::get_bitsn top==0 fallthrough used to misread the low word
+  // whose Blop::get_signed_bitsn top==0 fallthrough used to misread the low word
   // as the int64 -1 (bits=1, to_pyrope "-1").
-  EXPECT_EQ(Dlop::get_mask_value(63)->get_bits(), 64);
-  EXPECT_EQ(Dlop::get_mask_value(64)->get_bits(), 65);
+  EXPECT_EQ(Dlop::get_mask_value(63)->get_signed_bits(), 64);
+  EXPECT_EQ(Dlop::get_mask_value(64)->get_signed_bits(), 65);
   EXPECT_FALSE(Dlop::get_mask_value(64)->is_negative());
   EXPECT_FALSE(Dlop::get_mask_value(64)->is_just_i64());
   EXPECT_EQ(std::string(Dlop::get_mask_value(64)->to_pyrope()), "0x0ffffffffffffffff");
-  EXPECT_EQ(Dlop::get_mask_value(65)->get_bits(), 66);
+  EXPECT_EQ(Dlop::get_mask_value(65)->get_signed_bits(), 66);
 }
 
 TEST_F(Dlop_test, get_mask_value_range) {
@@ -739,9 +825,10 @@ TEST_F(Dlop_test, get_mask_value_range) {
 TEST_F(Dlop_test, get_neg_mask_value_static) {
   // -1 << 4 == -16
   EXPECT_EQ(Dlop::get_neg_mask_value(4)->to_just_i64(), -16);
-  // -1 << 0 == -1  (but bits<=1 returns 1 per legacy semantics)
-  EXPECT_EQ(Dlop::get_neg_mask_value(0)->to_just_i64(), 1);
-  EXPECT_EQ(Dlop::get_neg_mask_value(1)->to_just_i64(), 1);
+  // -2^bits for every bits >= 0 (these two used to return +1)
+  EXPECT_EQ(Dlop::get_neg_mask_value(0)->to_just_i64(), -1);
+  EXPECT_EQ(Dlop::get_neg_mask_value(1)->to_just_i64(), -2);
+  EXPECT_EQ(Dlop::get_neg_mask_value(2)->to_just_i64(), -4);
   EXPECT_EQ(Dlop::get_neg_mask_value(8)->to_just_i64(), -256);
 }
 
@@ -760,18 +847,25 @@ TEST_F(Dlop_test, get_mask_range_shifted) {
   EXPECT_EQ(r.first, 4);
 }
 
-TEST_F(Dlop_test, get_mask_range_pairs_two_runs) {
-  // 0ub0011_0011 -> two runs of 2 ones each at positions 0 and 4
-  auto a     = Dlop::create_integer(0x33);
-  auto pairs = a->get_mask_range_pairs();
-  ASSERT_EQ(pairs.size(), 2u);
-  EXPECT_EQ(pairs[0].first, 0);
-  EXPECT_EQ(pairs[0].second, 2);
-  EXPECT_EQ(pairs[1].first, 4);
-  EXPECT_EQ(pairs[1].second, 2);
+TEST_F(Dlop_test, mask_range_forms) {
+  // get_mask_op_opt(lo, hi) == get_mask_op(get_mask_value(hi-1, lo))
+  auto v = Dlop::from_pyrope("0x0f0");
+  EXPECT_EQ(v->get_mask_op_opt(4, 8)->to_just_i64(), 0xf);
+  EXPECT_EQ(v->get_mask_op_opt(0, 4)->to_just_i64(), 0);
+  EXPECT_EQ(v->get_mask_op_opt(7, 8)->to_just_i64(), 1);  // unsigned single bit: never -1
+  EXPECT_EQ(v->get_mask_op_opt(3, 4)->to_just_i64(), 0);
+  EXPECT_EQ(v->get_mask_op_opt(4, 5)->to_just_i64(), 1);
+  EXPECT_EQ(v->get_mask_op_opt(3, 3)->to_just_i64(), 0);   // empty range
+  EXPECT_EQ(v->get_mask_op_opt(4, 8)->to_just_i64(), v->get_mask_op(*Dlop::get_mask_value(7, 4))->to_just_i64());
+
+  // set_mask_op_opt(lo, hi, value) == set_mask_op(get_mask_value(hi-1, lo), value)
+  auto base = Dlop::create_integer(0xff);
+  EXPECT_EQ(base->set_mask_op_opt(4, 8, *Dlop::create_integer(0xa))->to_just_i64(), 0xaf);
+  EXPECT_EQ(base->set_mask_op_opt(0, 0, *Dlop::create_integer(0xa))->to_just_i64(), 0xff);  // empty range
+  EXPECT_EQ(base->set_mask_op_opt(4, 8, *Dlop::create_integer(0xa))->to_just_i64(),
+            base->set_mask_op(*Dlop::get_mask_value(7, 4), *Dlop::create_integer(0xa))->to_just_i64());
 }
 
-// get_mask_op(mask) — multi-bit mask packs the selected bits LSB-first.
 TEST_F(Dlop_test, get_mask_op_multibit_packed) {
   auto v = Dlop::create_integer(0xfeed);
   // mask 0xff selects the low byte → 0xed
@@ -799,14 +893,20 @@ TEST_F(Dlop_test, get_mask_op_negative_source_sign_extends) {
   EXPECT_EQ(p511->get_mask_op(Dlop::create_integer(0xff))->to_just_i64(), 0xff);
 }
 
-// get_mask_op(mask) — single-bit mask returns the signed 1-bit integer
-// (-1 if the bit is set, 0 if clear), not the unsigned 1/0.
-TEST_F(Dlop_test, get_mask_op_single_bit_set_is_neg_one) {
-  // 0ub1010, bit 1 mask → bit is set → -1
+// get_mask_op(mask) — the pack is UNSIGNED at every width, a single selected
+// bit included: a set bit reads back as 1, never as the signed -1.
+TEST_F(Dlop_test, get_mask_op_single_bit_set_is_one) {
+  // 0ub1010, bit 1 mask → bit is set → 1
   auto v = Dlop::create_integer(0b1010);
   auto r = v->get_mask_op(Dlop::create_integer(0b0010));
-  EXPECT_EQ(r->to_just_i64(), -1);
-  EXPECT_TRUE(r->is_negative());
+  EXPECT_EQ(r->to_just_i64(), 1);
+  EXPECT_FALSE(r->is_negative());
+
+  // Selecting the only bit of an all-ones source is still 1, not -1.
+  EXPECT_EQ(Dlop::create_integer(0b100)->get_mask_op(Dlop::create_integer(0b100))->to_just_i64(), 1);
+  EXPECT_EQ(Dlop::create_integer(-1)->get_mask_op(Dlop::create_integer(1))->to_just_i64(), 1);
+  // An empty mask selects nothing.
+  EXPECT_EQ(Dlop::create_integer(0b1010)->get_mask_op(Dlop::create_integer(0))->to_just_i64(), 0);
 }
 
 TEST_F(Dlop_test, get_mask_op_single_bit_clear_is_zero) {
@@ -828,10 +928,10 @@ TEST_F(Dlop_test, get_mask_op_single_bit_unknown) {
   EXPECT_TRUE(r_unk->has_unknowns());
   EXPECT_EQ(r_unk->to_pyrope(), Dlop::unknown(1)->to_pyrope());
 
-  // Selecting bit 3 (known 1) → -1.
+  // Selecting bit 3 (known 1) → 1.
   auto r_set = v->get_mask_op(Dlop::create_integer(0b1000));
   EXPECT_FALSE(r_set->has_unknowns());
-  EXPECT_EQ(r_set->to_just_i64(), -1);
+  EXPECT_EQ(r_set->to_just_i64(), 1);
 
   // Selecting bit 0 (known 0) → 0.
   auto r_clr = v->get_mask_op(Dlop::create_integer(0b0001));
@@ -845,7 +945,7 @@ TEST_F(Dlop_test, get_mask_op_multibit_unknown_propagates) {
   auto v = Dlop::from_pyrope("0sb10?0");
   auto r = v->get_mask_op(Dlop::create_integer(0b1110));
   EXPECT_TRUE(r->has_unknowns());
-  EXPECT_GE(r->get_bits(), 3);
+  EXPECT_GE(r->get_signed_bits(), 3);
 }
 
 // =========================================================================
@@ -1013,7 +1113,7 @@ TEST_F(Dlop_test, add_unknown_grows_carry) {
   auto a = Dlop::from_pyrope("0sb??");
   auto r = a->add_op(Dlop::create_integer(1));
   EXPECT_TRUE(r->has_unknowns());
-  EXPECT_GE(r->get_bits(), 2);
+  EXPECT_GE(r->get_signed_bits(), 2);
 }
 
 TEST_F(Dlop_test, add_unknown_does_not_propagate_past_known_zero) {
@@ -1128,7 +1228,7 @@ TEST_F(Dlop_test, mux_condition_and_heterogeneous_arms) {
   // ternary merge must retain the widest candidate carrier.
   auto unknown = Dlop::mux_op(*Dlop::from_pyrope("0ub?0000000"), vals);
   EXPECT_TRUE(unknown->has_unknowns());
-  EXPECT_GE(unknown->get_bits(), wide->get_bits());
+  EXPECT_GE(unknown->get_signed_bits(), wide->get_signed_bits());
 }
 
 TEST_F(Dlop_test, mux_unknown_select_merges) {

@@ -464,7 +464,7 @@ TEST(MemoryPrimitives, dlop_ones_is_finite_at_every_width) {
   for (int n : {1, 8, 32, 63, 64, 65, 128}) {
     auto o = Mem_val<D>::ones(n);
     EXPECT_FALSE(o->is_negative()) << "ones(" << n << ") sign-extends";
-    EXPECT_EQ(o->get_bits(), n + 1) << "ones(" << n << ") is not n bits wide";  // +1 signed sign bit
+    EXPECT_EQ(o->get_signed_bits(), n + 1) << "ones(" << n << ") is not n bits wide";  // +1 signed sign bit
     EXPECT_TRUE(o->bit_test(n - 1));
     EXPECT_FALSE(o->bit_test(n));
   }

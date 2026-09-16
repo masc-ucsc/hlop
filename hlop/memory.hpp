@@ -120,7 +120,7 @@ struct Mem_val<Slop<N>> {
   // off -- never uncertain, and no individual enable bit is ever x.
   static bool    uncertain(const V&) { return false; }
   static bool    bit_unknown(const V&, int) { return false; }
-  static int     nbits(const V& a) { return a.get_bits(); }
+  static int     nbits(const V& a) { return a.get_signed_bits(); }
   // Slop never carries unknowns, so an address is always a usable integer.
   static bool    addr_known(const V& a) { return a.is_just_i64(); }
   static int64_t to_i64(const V& a) { return a.to_just_i64(); }
@@ -186,7 +186,7 @@ struct Mem_val<spool_ptr<Dlop>> {
   // its lanes are neither the old nor the new value -- they are x.
   static bool    uncertain(const V& a) { return !a->is_known_true() && !a->is_known_false(); }
   static bool    bit_unknown(const V& a, int pos) { return a->unknown_bit_test(pos); }
-  static int     nbits(const V& a) { return a->get_bits(); }
+  static int     nbits(const V& a) { return a->get_signed_bits(); }
   static bool    addr_known(const V& a) { return !a->has_unknowns() && a->is_just_i64(); }
   static int64_t to_i64(const V& a) { return a->to_just_i64(); }
 };

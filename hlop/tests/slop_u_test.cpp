@@ -77,7 +77,7 @@ TEST(Slop_u_test, wide_ctor_masks) {
   EXPECT_EQ(u.to_hex(), "1ffffffffffffffff");                             // masked to 65
   EXPECT_TRUE(u.bit_test(64));
   EXPECT_FALSE(u.bit_test(65));
-  EXPECT_EQ(u.get_bits(), 66);  // magnitude + sign slot
+  EXPECT_EQ(u.get_signed_bits(), 66);  // magnitude + sign slot
 }
 
 // ── conversions ─────────────────────────────────────────────────────────────
@@ -208,7 +208,7 @@ TEST(Slop_u_test, concat_wider_result_than_lanes) {
   // an unsigned landing.
   const Slop_u<32> r = Slop_u<32>::concat_op(Slop_u<3>{5}, Slop_u<5>{3});
   EXPECT_TRUE(r == ((5 << 5) | 3));
-  EXPECT_EQ(r.get_bits(), 9);  // 163 -> 8 magnitude bits + sign slot
+  EXPECT_EQ(r.get_signed_bits(), 9);  // 163 -> 8 magnitude bits + sign slot
   for (int i = 8; i < 32; ++i) {
     EXPECT_FALSE(r.bit_test(i));
   }

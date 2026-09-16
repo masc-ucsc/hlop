@@ -253,7 +253,8 @@ public:
   }
 
   // --- Factory methods ---
-  static constexpr Slop create_bool(bool val) { return Slop(Type::Boolean, fill_array(val ? -1 : 0)); }
+  // A Boolean is the hardware `u1`: true is 1, false is 0 (same as Dlop).
+  static constexpr Slop create_bool(bool val) { return Slop(Type::Boolean, fill_array(val ? 1 : 0)); }
 
   static constexpr Slop create_integer(int64_t val) { return Slop(Type::Integer, fill_array(val)); }
 
@@ -770,11 +771,10 @@ public:
     return r;
   }
 
-  // Comparisons materialize a 0/1 MAGNITUDE at this width. The member forms
-  // return create_bool(), whose true value is all-ones (-1) -- correct for a
-  // Boolean-typed Slop, but it forced cgen to append `.zext_to<1>().zext_to<W>()`
-  // to every compare (740 sites in one design) to recover the 0/1 an LGraph
-  // LT/GT/EQ cell is defined to produce. These give cgen that value directly.
+  // Comparisons materialize a 0/1 MAGNITUDE at this width, straight into the
+  // caller's carrier: the member forms return a Boolean-tagged create_bool()
+  // at the operand width, these return an Integer-tagged 0/1 at THIS width,
+  // which is what an LGraph LT/GT/EQ cell is defined to produce.
   template <Slop_operand X, Slop_operand Y>
   static Slop eq_op(const X& xa, const Y& ya) {
     const auto& x = sref_(xa);
@@ -811,6 +811,148 @@ public:
     } else {
       r.base_[0] = Blop::lt<n_words>(awords_(ya), awords_(xa)) ? 1 : 0;
     }
+    return r;
+  }
+
+  // ne / le / ge / lnot: the LNAST operators LGraph lowers to a cell CHAIN --
+  // `a != b` is Xor(EQ(a,b), 1), `a <= b` is Xor(GT(a,b), 1), `!x` is EQ(x, 0).
+  // Codegen recognizes the chain and calls these instead, so no intermediate
+  // compare, no full-width zero to compare against and no 1-constant to xor.
+  template <Slop_operand X, Slop_operand Y>
+  static Slop ne_op(const X& xa, const Y& ya) {
+    const auto& x = sref_(xa);
+    const auto& y = sref_(ya);
+    Slop        r;
+    if constexpr (one_word_a_<X, Y>) {
+      r.base_[0] = (x.base_[0] != y.base_[0]) ? 1 : 0;
+    } else {
+      r.base_[0] = Blop::eq<n_words>(awords_(xa), awords_(ya)) ? 0 : 1;
+    }
+    return r;
+  }
+
+  template <Slop_operand X, Slop_operand Y>
+  static Slop le_op(const X& xa, const Y& ya) {
+    const auto& x = sref_(xa);
+    const auto& y = sref_(ya);
+    Slop        r;
+    if constexpr (one_word_a_<X, Y>) {
+      r.base_[0] = (x.base_[0] <= y.base_[0]) ? 1 : 0;
+    } else {
+      r.base_[0] = Blop::lt<n_words>(awords_(ya), awords_(xa)) ? 0 : 1;
+    }
+    return r;
+  }
+
+  template <Slop_operand X, Slop_operand Y>
+  static Slop ge_op(const X& xa, const Y& ya) {
+    const auto& x = sref_(xa);
+    const auto& y = sref_(ya);
+    Slop        r;
+    if constexpr (one_word_a_<X, Y>) {
+      r.base_[0] = (x.base_[0] >= y.base_[0]) ? 1 : 0;
+    } else {
+      r.base_[0] = Blop::lt<n_words>(awords_(xa), awords_(ya)) ? 0 : 1;
+    }
+    return r;
+  }
+
+  // `!x` == `x == 0`, as an Integer 0/1 at THIS width. The member lnot_op
+  // returns a Boolean-tagged value at the operand width.
+  template <Slop_operand X>
+  static Slop lnot_op(const X& xa) {
+    Slop r;
+    r.base_[0] = sref_(xa).is_known_false() ? 1 : 0;
+    return r;
+  }
+
+  // Compare straight to a C++ bool, for the SELECTOR and COMMIT-GUARD contexts
+  // where codegen otherwise builds a Slop only to call is_known_true() on it.
+  // The operands are compared at their common width, so the result does not
+  // depend on N.
+  template <typename X, typename Y>
+  static constexpr int cmp_width_ = (Slop_arg<X>::bits > Slop_arg<Y>::bits) ? Slop_arg<X>::bits : Slop_arg<Y>::bits;
+
+  template <Slop_operand X, Slop_operand Y>
+  static bool eq_bool(const X& xa, const Y& ya) {
+    return Slop<cmp_width_<X, Y>>::eq_op(xa, ya).is_known_true();
+  }
+  template <Slop_operand X, Slop_operand Y>
+  static bool ne_bool(const X& xa, const Y& ya) {
+    return !Slop<cmp_width_<X, Y>>::eq_op(xa, ya).is_known_true();
+  }
+  template <Slop_operand X, Slop_operand Y>
+  static bool lt_bool(const X& xa, const Y& ya) {
+    return Slop<cmp_width_<X, Y>>::lt_op(xa, ya).is_known_true();
+  }
+  template <Slop_operand X, Slop_operand Y>
+  static bool gt_bool(const X& xa, const Y& ya) {
+    return Slop<cmp_width_<X, Y>>::gt_op(xa, ya).is_known_true();
+  }
+  template <Slop_operand X, Slop_operand Y>
+  static bool le_bool(const X& xa, const Y& ya) {
+    return !Slop<cmp_width_<X, Y>>::gt_op(xa, ya).is_known_true();
+  }
+  template <Slop_operand X, Slop_operand Y>
+  static bool ge_bool(const X& xa, const Y& ya) {
+    return !Slop<cmp_width_<X, Y>>::lt_op(xa, ya).is_known_true();
+  }
+
+  // Reduction statics. The member forms return a Boolean-tagged value at the
+  // OPERAND width, so codegen had to clamp the result afterwards; these
+  // materialize the Integer 0/1 (or the count) at THIS width directly.
+  //
+  // ror_op is variadic because the LGraph Ror cell folds every driver of its
+  // one sink pin. An empty fold is false, matching the identity of `or`.
+  // CAVEAT: with exactly ONE operand already at this width, `Slop<N>::ror_op(x)`
+  // resolves to the BINARY MEMBER ror_op(const Slop&) instead -- same 0/1
+  // answer, but Boolean-tagged. Spell the result width apart from the operand's
+  // (a Ror cell's output is u1, so codegen naturally does).
+  template <Slop_operand... Xs>
+  static Slop ror_op(const Xs&... xs) {
+    const bool any = (sref_(xs).is_known_true() || ... || false);
+    Slop       r;
+    r.base_[0] = any ? 1 : 0;
+    return r;
+  }
+
+  // rand_op / rxor_op / popcount_op read a DECLARED bit count, not the operand
+  // carrier: `#&x` on a 4-bit x asks whether bits [0,4) are all set, and a
+  // Slop<8> holding 0xf must answer yes while a Slop<8> holding 0xff must not
+  // depend on how wide the carrier happens to be. (The member forms read the
+  // whole carrier, which is why they cannot serve a cell.)
+  template <Slop_operand X>
+  static Slop rand_op(const X& xa, int nbits) {
+    Slop r;
+    r.base_[0] = 1;  // an empty AND-reduction is true
+    for (int i = 0; i < nbits; ++i) {
+      if (!sref_(xa).bit_test(i)) {
+        r.base_[0] = 0;
+        break;
+      }
+    }
+    return r;
+  }
+
+  template <Slop_operand X>
+  static Slop rxor_op(const X& xa, int nbits) {
+    int parity = 0;
+    for (int i = 0; i < nbits; ++i) {
+      parity ^= sref_(xa).bit_test(i) ? 1 : 0;
+    }
+    Slop r;
+    r.base_[0] = parity;
+    return r;
+  }
+
+  template <Slop_operand X>
+  static Slop popcount_op(const X& xa, int nbits) {
+    int64_t count = 0;
+    for (int i = 0; i < nbits; ++i) {
+      count += sref_(xa).bit_test(i) ? 1 : 0;
+    }
+    Slop r;
+    r.base_[0] = count;
     return r;
   }
 
@@ -949,6 +1091,14 @@ public:
     return result;
   }
 
+  // LOGICAL not (`!x`): `x == 0`, Boolean-tagged. See Dlop::lnot_op. Slop
+  // has no unknowns, so it is always decided. Not the bitwise not_op above:
+  // with true == 1, ~1 is still truthy.
+  Slop lnot_op() const {
+    nil_check_();
+    return create_bool(is_known_false());
+  }
+
   // --- Shift ---
   // The `amount == 0` early-outs here are NOT a fast path (Blop::shl/shr both
   // handle a zero count, and a constant amount folds either way): they are what
@@ -986,6 +1136,13 @@ public:
   Slop eq_op(const Slop& other) const {
     nil_check_(other);
     return create_bool(Blop::eq<n_words>(base_, other.base_));
+  }
+
+  // `!=`. Callers used to spell it `!eq_op(o).is_known_true()`, which drops the
+  // Boolean tag and cannot be used where a Slop is expected.
+  Slop ne_op(const Slop& other) const {
+    nil_check_(other);
+    return create_bool(!Blop::eq<n_words>(base_, other.base_));
   }
 
   // same_repr: structural compare of (type, base). Slop has no unknowns at
@@ -1122,14 +1279,14 @@ public:
     // result is non-negative (matches Lconst::get_mask_op). When nbits lands on
     // a word boundary (top_bit == 0) the whole top word must be zeroed.
     //
-    // Fixed-width caveat: a value occupying the full width (get_bits() == N) has
+    // Fixed-width caveat: a value occupying the full width (get_signed_bits() == N) has
     // no spare bit for the cleared sign, so its magnitude (N+1 bits) is not
     // representable in Slop<N>; top_word reaches n_words and the value is
     // returned unchanged. Dlop, being arbitrary precision, widens instead — so
     // the two intentionally diverge only at that representational boundary. Keep
     // operand widths below N (as real LiveHD values are) to avoid it.
     Slop result;
-    int  nbits   = get_bits();
+    int  nbits   = get_signed_bits();
     result.base_ = base_;
     int top_word = nbits / 64;
     int top_bit  = nbits % 64;
@@ -1148,11 +1305,10 @@ public:
 
   // get_mask_op(mask): copy the bits selected by `mask` into a new integer,
   // packed LSB-first in their original order. Negative mask = "everything
-  // except the lowest |mask| bits". Mirrors Lconst::get_mask_op semantics.
-  //
-  // Single-bit result: when exactly one bit is selected, the result is the
-  // signed 1-bit integer -1 (bit set) or 0 (bit clear), not 0sb01. Detected
-  // from the selected-bit count after the loop — no popcount needed.
+  // except the lowest |mask| bits". The pack is UNSIGNED: the result is never
+  // negative, a lone selected set bit included (it used to read back as the
+  // signed -1, which let a bit pattern pose as a sign and made every consumer
+  // re-correct the one-bit case by hand).
   //
   // The mask goes through Slop_arg, so a Slop_u<N-1> mask is accepted with no
   // conversion. A canonical mask is never negative, so it always takes the
@@ -1165,8 +1321,7 @@ public:
 
     // FAST PATH — positive contiguous mask [lo, hi): the extract is a
     // word-wise shift (see set_mask_op's twin note; the per-bit walk below
-    // dominated wide-datapath simulation). Keeps the member form's signed
-    // single-bit quirk.
+    // dominated wide-datapath simulation).
     //
     // Nothing here reads a bit count of the SOURCE, so with the constant mask
     // cgen emits for a Get_mask cell the whole call folds to a shift and an
@@ -1176,9 +1331,6 @@ public:
     if (!mask.is_negative()) {
       int lo = 0, hi = 0;
       if (contiguous_range_(mask, lo, hi)) {
-        if (hi - lo == 1) {
-          return create_integer(bit_test(lo) ? -1 : 0);
-        }
         return extract_bits_(*this, lo, hi - lo);
       }
     }
@@ -1190,9 +1342,9 @@ public:
   // positions and pack them LSB-first. Deliberately out of line -- see above.
   [[gnu::noinline]] Slop get_mask_gather_(const Slop& mask) const {
     bool mask_neg           = mask.is_negative();
-    int  mask_bits          = mask.get_bits();
+    int  mask_bits          = mask.get_signed_bits();
     int  positive_mask_bits = mask_neg ? (mask_bits - 1) : mask_bits;
-    int  src_bits           = get_bits();
+    int  src_bits           = get_signed_bits();
 
     Slop result;
     int  out_bit = 0;
@@ -1229,9 +1381,6 @@ public:
         ++out_bit;
       }
     }
-    if (out_bit == 1) {
-      return create_integer((result.base_[0] & 1) ? -1 : 0);
-    }
     return result;
   }
 
@@ -1243,14 +1392,9 @@ public:
   // conversions per cell (operand read + result trim) -- 1039 of the 1842 that
   // survived the first 1-1 pass.
   //
-  // ONE deliberate difference: a single selected bit yields the UNSIGNED 0/1,
-  // not the signed -1 the member form returns. The LGraph/Pyrope Get_mask with a
-  // positive mask is an unsigned LSB-first pack (`#[N]` zero-extends), and that
-  // -1 is a long-standing wart every consumer patches around -- livehd clamps it
-  // in five separate places (upass_constprop's get_mask_zext, cprop,
-  // pass/bitwidth, cgen_verilog, cgen_sim). Producing the value the cell is
-  // defined to produce lets those clamps go. The member form keeps its old
-  // contract, so nothing that relies on it changes.
+  // Same UNSIGNED LSB-first pack as the member form, single selected bit
+  // included: the LGraph/Pyrope Get_mask with a positive mask zero-extends
+  // (`#[N]`), and only an explicit `#sext` may be negative.
   template <Slop_operand XT, Slop_operand MT>
   static Slop get_mask_op(const XT& xa, const MT& ma) {
     const auto& x    = sref_(xa);
@@ -1273,9 +1417,9 @@ public:
   template <int A, int M>
   [[gnu::noinline]] static Slop get_mask_gather_(const Slop<A>& x, const Slop<M>& mask) {
     const bool mask_neg           = mask.is_negative();
-    const int  mask_bits          = mask.get_bits();
+    const int  mask_bits          = mask.get_signed_bits();
     const int  positive_mask_bits = mask_neg ? (mask_bits - 1) : mask_bits;
-    const int  src_bits           = x.get_bits();
+    const int  src_bits           = x.get_signed_bits();
 
     Slop result;
     int  out_bit = 0;
@@ -1370,11 +1514,11 @@ public:
   // fast path above stays inlinable -- same reasoning as get_mask_gather_.
   [[gnu::noinline]] Slop set_mask_scatter_(const Slop& mask, const Slop& value) const {
     bool mask_neg           = mask.is_negative();
-    int  mask_bits          = mask.get_bits();
+    int  mask_bits          = mask.get_signed_bits();
     int  positive_mask_bits = mask_neg ? (mask_bits - 1) : mask_bits;
 
-    int src_bits = get_bits();
-    int val_bits = value.get_bits();
+    int src_bits = get_signed_bits();
+    int val_bits = value.get_signed_bits();
     int out_bits = std::max(src_bits, mask_bits);
     if (mask_neg) {
       out_bits = std::max(out_bits, positive_mask_bits + val_bits);
@@ -1429,7 +1573,7 @@ public:
   //   v.set_mask_op(Slop<544>::from_pyrope("0x0..0ffff..ffff0000000000000000"),
   //                 Slop<544>::create_integer(0))
   //
-  // pays for two nine-word constants, a get_bits(), a ctz/clz sweep over all
+  // pays for two nine-word constants, a get_signed_bits(), a ctz/clz sweep over all
   // nine mask words and a nine-word contiguity check — to express "clear bits
   // 64..255", which the code generator knew literally. Spelled directly:
   //
@@ -1447,7 +1591,7 @@ public:
   // where `m` is the positive Slop<N> holding exactly bits [lo, hi). An empty
   // range (hi <= lo) returns *this, matching set_mask_op's zero-mask early-out.
   // The type_ tag and every bit outside [lo, hi) — including the sign-extension
-  // region above get_bits() — carry through untouched, as in set_mask_op.
+  // region above get_signed_bits() — carry through untouched, as in set_mask_op.
 
   // Replace bits [lo, hi) with the low (hi - lo) bits of `value`, value's LSB
   // landing at bit `lo`. `value` is read SIGNED: a range wider than the value's
@@ -1565,10 +1709,9 @@ public:
   // contiguity check, all to say what cgen knew literally.
   //
   // ONE non-empty range only (hi > lo, the shape cgen emits and the shape a
-  // packed-field read has), so there is no empty-mask early-out and no
-  // single-bit special case: like the mixed-width static get_mask_op this is
-  // the UNSIGNED LSB-first pack the Get_mask cell is defined to produce, so a
-  // one-bit range yields 0/1, never the member form's signed -1.
+  // packed-field read has), so there is no empty-mask early-out: like every
+  // other get_mask_op form this is the UNSIGNED LSB-first pack the Get_mask
+  // cell is defined to produce, so a one-bit range yields 0/1.
   //
   // WITH LITERAL BOUNDS — always, from cgen — the whole body folds: `len`,
   // every word index and every shift count are constants, the word loops
@@ -1672,7 +1815,7 @@ public:
 
   Slop concat_op(const Slop& other) const {
     nil_check_(other);
-    int other_bits = other.get_bits();
+    int other_bits = other.get_signed_bits();
     if (other_bits <= 0) {
       return *this;
     }
@@ -1687,7 +1830,7 @@ public:
   //   Slop<9>::concat_op(a, b) == (a << 5) | b     // a: Slop<3>, b: Slop_u<5>
   //
   // Lane widths come from the operand TYPES, not from each value's significant
-  // bits (the binary form's get_bits()) -- that distinction is the whole point
+  // bits (the binary form's get_signed_bits()) -- that distinction is the whole point
   // of the cell. Dropping a lane's leading zeros would shift every lane above
   // it, so the width has to be declared, and here the type declares it: a
   // Slop<W> lane contributes its W raw bits (sign slot included), a Slop_u<W>
@@ -1973,6 +2116,7 @@ public:
   }
   bool is_integer() const { return type_ == Type::Integer; }
   bool is_string() const { return type_ == Type::String; }
+  bool is_bool() const { return type_ == Type::Boolean; }
   bool is_nil() const { return type_ == Type::Nil; }
 
   // Stable packed-word transport for generated native-code ABIs. The words
@@ -2065,7 +2209,13 @@ public:
     }
   }
 
-  constexpr int get_bits() const { return Blop::get_bits<n_words>(base_); }
+  // Two WIDTHS, two meanings (see Dlop): signed = minimal two's-complement
+  // carrier (1 -> 2); payload = what a hardware pin carries (1 -> 1, -1 -> 1).
+  constexpr int get_signed_bits() const { return Blop::get_signed_bits<n_words>(base_); }
+  constexpr int get_payload_bits() const {
+    const int sb = get_signed_bits();
+    return is_negative() ? sb : (sb > 0 ? sb - 1 : 0);
+  }
 
   bool bit_test(int pos) const {
     int word = pos / 64;
@@ -2092,7 +2242,7 @@ public:
     return Blop::ctz<n_words>(base_);
   }
 
-  constexpr bool is_just_i64() const { return get_bits() <= 62; }
+  constexpr bool is_just_i64() const { return get_signed_bits() <= 62; }
 
   constexpr int64_t to_just_i64() const {
     assert(is_just_i64());
@@ -2162,7 +2312,7 @@ public:
   }
 
   std::string to_binary() const {  // full declared width (VCD/raw callers)
-    int nbits = get_bits();
+    int nbits = get_signed_bits();
     if (nbits <= 0) {
       return "0";
     }
@@ -2331,7 +2481,7 @@ public:
     if (type_ == Type::String) {
       return std::format("\"{}\"", to_string());
     }
-    int         nbits = get_bits();
+    int         nbits = get_signed_bits();
     // For negatives, format the two's-complement magnitude (neg_op) as hex,
     // matching Dlop::to_verilog. Emitting the raw sign-extended words would
     // print the full-width 0xff..f instead of the magnitude.
@@ -2557,6 +2707,32 @@ public:
     return from_canonical_(Carrier::create_integer(Slop<cw>::gt_op(x, y).is_known_true() ? 1 : 0));
   }
 
+  // The chained-cell shapes (see Slop<N>::ne_op): `!=` is Xor(EQ,1), `<=` and
+  // `>=` are Xor(GT,1) / Xor(LT,1), `!x` is EQ(x, 0).
+  template <Slop_operand X, Slop_operand Y>
+  static Slop_u ne_op(const X& x, const Y& y) {
+    static_assert(N >= 1, "compare result needs one magnitude bit");
+    constexpr int cw = (Slop_arg<X>::bits > Slop_arg<Y>::bits ? Slop_arg<X>::bits : Slop_arg<Y>::bits);
+    return from_canonical_(Carrier::create_integer(Slop<cw>::eq_op(x, y).is_known_true() ? 0 : 1));
+  }
+  template <Slop_operand X, Slop_operand Y>
+  static Slop_u le_op(const X& x, const Y& y) {
+    static_assert(N >= 1, "compare result needs one magnitude bit");
+    constexpr int cw = (Slop_arg<X>::bits > Slop_arg<Y>::bits ? Slop_arg<X>::bits : Slop_arg<Y>::bits);
+    return from_canonical_(Carrier::create_integer(Slop<cw>::gt_op(x, y).is_known_true() ? 0 : 1));
+  }
+  template <Slop_operand X, Slop_operand Y>
+  static Slop_u ge_op(const X& x, const Y& y) {
+    static_assert(N >= 1, "compare result needs one magnitude bit");
+    constexpr int cw = (Slop_arg<X>::bits > Slop_arg<Y>::bits ? Slop_arg<X>::bits : Slop_arg<Y>::bits);
+    return from_canonical_(Carrier::create_integer(Slop<cw>::lt_op(x, y).is_known_true() ? 0 : 1));
+  }
+  template <Slop_operand X>
+  static Slop_u lnot_op(const X& x) {
+    static_assert(N >= 1, "compare result needs one magnitude bit");
+    return from_canonical_(Carrier::create_integer(Slop_arg<X>::s(x).is_known_false() ? 1 : 0));
+  }
+
   // n-ary concat_op — MSB-first, same lane rules as Slop::concat_op (see the
   // comment there). The unsigned landing: each lane is masked into its own
   // window, so the assembly is already canonical and there is nothing to do
@@ -2778,10 +2954,9 @@ public:
     return from_canonical_(Carrier::shl_op(x, amount).template zext_to<N, N + 1>());
   }
 
-  // The STATIC Slop::get_mask_op already produces the unsigned LSB-first pack
-  // (unlike the member form, whose single-bit result is the signed -1), so this
-  // is the natural unsigned cell. The mask is a runtime operand, so the pack
-  // width is not known at compile time: mask.
+  // Slop::get_mask_op produces the unsigned LSB-first pack, so this is the
+  // natural unsigned cell. The mask is a runtime operand, so the pack width is
+  // not known at compile time: mask.
   template <Slop_operand X, Slop_operand M>
   static Slop_u get_mask_op(const X& x, const M& mask) {
     return from_canonical_(Carrier::get_mask_op(x, mask).template zext_to<N, N + 1>());
@@ -2828,6 +3003,10 @@ public:
     return Slop_u<1>(static_cast<int64_t>(*this == o));
   }
   template <int M>
+  Slop_u<1> ne_op(const Slop_u<M>& o) const {
+    return Slop_u<1>(static_cast<int64_t>(!(*this == o)));
+  }
+  template <int M>
   Slop_u<1> lt_op(const Slop_u<M>& o) const {
     return Slop_u<1>(static_cast<int64_t>(*this < o));
   }
@@ -2852,12 +3031,12 @@ public:
   // --- Queries (delegated; the value is always a non-negative Integer) ---
   // Two different widths are on offer here, deliberately:
   //   width      -- N, the DECLARED width. What a field/port/VCD signal is.
-  //   get_bits() -- the Slop convention, magnitude + 1 sign slot, so a full
+  //   get_signed_bits() -- the Slop convention, magnitude + 1 sign slot, so a full
   //                 Slop_u<N> reports N+1. What a materialization needs.
   // to_binary() prints `width` bits; anything sizing a field must use `width`
-  // (or to_binary().size()), never get_bits().
+  // (or to_binary().size()), never get_signed_bits().
   bool              bit_test(int pos) const { return v_.bit_test(pos); }
-  constexpr int     get_bits() const { return v_.get_bits(); }
+  constexpr int     get_signed_bits() const { return v_.get_signed_bits(); }
   int               popcount() const { return v_.popcount(); }
   int               get_first_bit_set() const { return v_.get_first_bit_set(); }
   int               get_last_bit_set() const { return v_.get_last_bit_set(); }

@@ -7,6 +7,9 @@ module(
 # Compiler rules
 bazel_dep(name = "rules_cc", version = "0.2.25")
 
+# Standalone macOS builds use the Command Line Tools configuration.
+bazel_dep(name = "apple_support", version = "2.8.3", repo_name = "build_bazel_apple_support", dev_dependency = True)
+
 bazel_dep(name = "abseil-cpp", version = "20250814.2") # 20240722.0.bcr.2")
 
 bazel_dep(name = "boost.multiprecision", version = "1.90.0.bcr.1")

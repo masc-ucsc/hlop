@@ -76,7 +76,7 @@ void consume(const SP& r) {
   volatile auto s3 = r->to_string();
   volatile auto s4 = r->to_decimal_string();
   volatile auto s5 = r->to_hex_string();
-  (void)r->get_bits();
+  (void)r->get_signed_bits();
   (void)r->is_negative();
   (void)r->is_mask();
   (void)r->is_power2();

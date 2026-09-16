@@ -185,8 +185,8 @@ void check_unbounded_pair(int64_t a, int64_t b) {
     expect_unbounded_equal("rsh", a, shamt, *d_a->sra_op(Dlop::create_integer(shamt)), s_a.sra_op(shamt), l_a.rsh_op(shamt));
   }
 
-  EXPECT_EQ(d_a->get_bits(), s_a.get_bits()) << "get_bits Dlop vs Slop mismatch for a=" << a;
-  EXPECT_EQ(d_a->get_bits(), l_a.get_bits()) << "get_bits Dlop vs Lconst mismatch for a=" << a;
+  EXPECT_EQ(d_a->get_signed_bits(), s_a.get_signed_bits()) << "get_signed_bits Dlop vs Slop mismatch for a=" << a;
+  EXPECT_EQ(d_a->get_signed_bits(), l_a.get_bits()) << "get_signed_bits Dlop vs Lconst mismatch for a=" << a;
 
   if (b != 0 && !(a == std::numeric_limits<int64_t>::min() && b == -1)) {
     expect_unbounded_equal("div", a, b, *d_a->div_op(d_b), s_a.div_op(s_b), l_a.div_op(l_b));

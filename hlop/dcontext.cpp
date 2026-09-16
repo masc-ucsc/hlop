@@ -266,7 +266,7 @@ DResult DContext::exec_mux(const DCall& call) {
     for (size_t i = 1; i < data.size(); ++i) {
       result = result->or_op(data[i]);
     }
-    return {.outputs = {Dlop::unknown(result->get_bits())}};
+    return {.outputs = {Dlop::unknown(result->get_signed_bits())}};
   }
 
   assert(sel->is_just_i64());
