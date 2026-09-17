@@ -301,7 +301,7 @@ TEST_F(Dlop_test, concat_op_nary_unknowns_stay_in_lane) {
 
   int unknown_count = 0;
   for (int i = 0; i < 9; ++i) {
-    auto bit = r->get_mask_op(*Dlop::create_integer(int64_t(1) << i));
+    auto bit = r->get_mask_op_opt(i, i + 1);
     if (bit->has_unknowns()) {
       ++unknown_count;
       EXPECT_EQ(i, 6) << "unknown bit escaped its lane";
@@ -321,14 +321,13 @@ TEST_F(Dlop_test, concat_op_nary_unknown_sign_extends) {
   // Narrow lane: the whole window is unknown (must not assert).
   auto n = Dlop::concat_op(unk, 3, Dlop::create_integer(0), 2);
   for (int i = 2; i < 5; ++i) {
-    EXPECT_TRUE(n->get_mask_op(*Dlop::create_integer(int64_t(1) << i))->has_unknowns()) << "bit " << i;
+    EXPECT_TRUE(n->get_mask_op_opt(i, i + 1)->has_unknowns()) << "bit " << i;
   }
 
   // Lane wider than the stored word: the positions past it are unknown too.
   auto w = Dlop::concat_op(unk, 70, Dlop::create_integer(0), 2);
   for (int i : {2, 63, 64, 65, 66, 71}) {
-    EXPECT_TRUE(w->get_mask_op(*Dlop::create_integer(1)->shl_op(Dlop::create_integer(i)))->has_unknowns())
-        << "bit " << i << " escaped the unknown sign extension";
+    EXPECT_TRUE(w->get_mask_op_opt(i, i + 1)->has_unknowns()) << "bit " << i << " escaped the unknown sign extension";
   }
   // ... and the lane below it stays known-zero.
   EXPECT_FALSE(w->bit_test(0));
@@ -540,9 +539,9 @@ TEST_F(Dlop_test, illegal_operands_return_nil) {
   EXPECT_TRUE(i->sext_op(*s)->is_nil());
   EXPECT_TRUE(i->sext_op(*Dlop::create_integer(5))->is_negative());  // bit5 of 42 set
 
-  // set_mask with an unknown mask, or non-numeric operands → nil.
-  EXPECT_TRUE(i->set_mask_op(*Dlop::unknown(4), *i)->is_nil());
-  EXPECT_TRUE(s->set_mask_op(*i, *i)->is_nil());
+  // Range operations reject non-numeric operands and oversized results.
+  EXPECT_TRUE(i->set_mask_op_opt(0, INT32_MAX, *i)->is_nil());
+  EXPECT_TRUE(s->set_mask_op_opt(0, 8, *i)->is_nil());
 
   // Two definitely-active controls break the cell's one-hot-or-zero obligation
   // → nil. A non-numeric control is illegal → nil.
@@ -671,25 +670,25 @@ TEST_F(Dlop_test, popcount_op_unknown_range) {
 
 TEST_F(Dlop_test, popcount_op_negative) {
   // A negative value has an unbounded set-bit count (infinite sign extension),
-  // so popcount_op returns a 1-bit unknown (0sb?).
+  // so popcount_op leaves every bit unknown until a counting width is supplied.
   EXPECT_TRUE(Dlop::from_pyrope("-1")->is_negative());
-  EXPECT_TRUE(Dlop::from_pyrope("-1")->popcount_op()->same_repr(*Dlop::unknown(1)));
-  EXPECT_TRUE(Dlop::from_pyrope("-5")->popcount_op()->same_repr(*Dlop::unknown(1)));
+  EXPECT_TRUE(Dlop::from_pyrope("-1")->popcount_op()->same_repr(*Dlop::unknown()));
+  EXPECT_TRUE(Dlop::from_pyrope("-5")->popcount_op()->same_repr(*Dlop::unknown()));
 }
 
 TEST_F(Dlop_test, popcount_op_negative_or_unknown_sign) {
   // Popcount is unbounded for negative values and for an unknown sign bit;
-  // both collapse to a 1-bit unknown (0sb?).
+  // both leave every bit unknown.
   auto neg = Dlop::from_pyrope("0sb1010")->popcount_op();  // signed, negative
   EXPECT_TRUE(neg->has_unknowns());
-  EXPECT_TRUE(neg->same_repr(*Dlop::unknown(1)));
+  EXPECT_TRUE(neg->same_repr(*Dlop::unknown()));
 
   auto usign = Dlop::from_pyrope("0sb????")->popcount_op();  // unknown sign bit
   EXPECT_TRUE(usign->has_unknowns());
-  EXPECT_TRUE(usign->same_repr(*Dlop::unknown(1)));
+  EXPECT_TRUE(usign->same_repr(*Dlop::unknown()));
 
   auto usign2 = Dlop::from_pyrope("0sb?010")->popcount_op();  // 0sb?...
-  EXPECT_TRUE(usign2->same_repr(*Dlop::unknown(1)));
+  EXPECT_TRUE(usign2->same_repr(*Dlop::unknown()));
 }
 
 TEST_F(Dlop_test, to_pyrope_roundtrip) {
@@ -856,22 +855,22 @@ TEST_F(Dlop_test, mask_range_forms) {
   EXPECT_EQ(v->get_mask_op_opt(3, 4)->to_just_i64(), 0);
   EXPECT_EQ(v->get_mask_op_opt(4, 5)->to_just_i64(), 1);
   EXPECT_EQ(v->get_mask_op_opt(3, 3)->to_just_i64(), 0);   // empty range
-  EXPECT_EQ(v->get_mask_op_opt(4, 8)->to_just_i64(), v->get_mask_op(*Dlop::get_mask_value(7, 4))->to_just_i64());
+  EXPECT_EQ(v->get_mask_op_opt(4, 8)->to_just_i64(), Lconst(0xf0).get_mask_op(Lconst(0xf0)).to_i());
 
   // set_mask_op_opt(lo, hi, value) == set_mask_op(get_mask_value(hi-1, lo), value)
   auto base = Dlop::create_integer(0xff);
   EXPECT_EQ(base->set_mask_op_opt(4, 8, *Dlop::create_integer(0xa))->to_just_i64(), 0xaf);
   EXPECT_EQ(base->set_mask_op_opt(0, 0, *Dlop::create_integer(0xa))->to_just_i64(), 0xff);  // empty range
   EXPECT_EQ(base->set_mask_op_opt(4, 8, *Dlop::create_integer(0xa))->to_just_i64(),
-            base->set_mask_op(*Dlop::get_mask_value(7, 4), *Dlop::create_integer(0xa))->to_just_i64());
+            Lconst(0xff).set_mask_op(Lconst(0xf0), Lconst(0xa)).to_i());
 }
 
 TEST_F(Dlop_test, get_mask_op_multibit_packed) {
   auto v = Dlop::create_integer(0xfeed);
   // mask 0xff selects the low byte → 0xed
-  EXPECT_EQ(v->get_mask_op(Dlop::create_integer(0xff))->to_just_i64(), 0xed);
-  // non-contiguous mask 0xf00 selects nibble [11..8] → 0xe (packed low)
-  EXPECT_EQ(v->get_mask_op(Dlop::create_integer(0xf00))->to_just_i64(), 0xe);
+  EXPECT_EQ(v->get_mask_op_opt(0, 8)->to_just_i64(), 0xed);
+  // contiguous mask 0xf00 selects nibble [11..8] → 0xe (packed low)
+  EXPECT_EQ(v->get_mask_op_opt(8, 12)->to_just_i64(), 0xe);
 }
 
 // get_mask_op(mask) — a NEGATIVE source is sign-extended past its minimal
@@ -880,17 +879,17 @@ TEST_F(Dlop_test, get_mask_op_multibit_packed) {
 // returned 1 instead of 0xff for get_mask(-1, 0xff).
 TEST_F(Dlop_test, get_mask_op_negative_source_sign_extends) {
   auto neg1 = Dlop::create_integer(-1);
-  EXPECT_EQ(neg1->get_mask_op(Dlop::create_integer(0xff))->to_just_i64(), 0xff);    // low 8 bits of ...1111
-  EXPECT_EQ(neg1->get_mask_op(Dlop::create_integer(0xf))->to_just_i64(), 0xf);      // low 4 bits
-  EXPECT_EQ(neg1->get_mask_op(Dlop::create_integer(0xffff))->to_just_i64(), 0xffff);
+  EXPECT_EQ(neg1->get_mask_op_opt(0, 8)->to_just_i64(), 0xff);  // low 8 bits of ...1111
+  EXPECT_EQ(neg1->get_mask_op_opt(0, 4)->to_just_i64(), 0xf);   // low 4 bits
+  EXPECT_EQ(neg1->get_mask_op_opt(0, 16)->to_just_i64(), 0xffff);
 
   // -2 == ...11111110 → low byte is 0xfe.
   auto neg2 = Dlop::create_integer(-2);
-  EXPECT_EQ(neg2->get_mask_op(Dlop::create_integer(0xff))->to_just_i64(), 0xfe);
+  EXPECT_EQ(neg2->get_mask_op_opt(0, 8)->to_just_i64(), 0xfe);
 
   // Positive sources are unaffected (sign bit is 0 above their width).
   auto p511 = Dlop::create_integer(0x1ff);
-  EXPECT_EQ(p511->get_mask_op(Dlop::create_integer(0xff))->to_just_i64(), 0xff);
+  EXPECT_EQ(p511->get_mask_op_opt(0, 8)->to_just_i64(), 0xff);
 }
 
 // get_mask_op(mask) — the pack is UNSIGNED at every width, a single selected
@@ -898,21 +897,21 @@ TEST_F(Dlop_test, get_mask_op_negative_source_sign_extends) {
 TEST_F(Dlop_test, get_mask_op_single_bit_set_is_one) {
   // 0ub1010, bit 1 mask → bit is set → 1
   auto v = Dlop::create_integer(0b1010);
-  auto r = v->get_mask_op(Dlop::create_integer(0b0010));
+  auto r = v->get_mask_op_opt(1, 2);
   EXPECT_EQ(r->to_just_i64(), 1);
   EXPECT_FALSE(r->is_negative());
 
   // Selecting the only bit of an all-ones source is still 1, not -1.
-  EXPECT_EQ(Dlop::create_integer(0b100)->get_mask_op(Dlop::create_integer(0b100))->to_just_i64(), 1);
-  EXPECT_EQ(Dlop::create_integer(-1)->get_mask_op(Dlop::create_integer(1))->to_just_i64(), 1);
+  EXPECT_EQ(Dlop::create_integer(0b100)->get_mask_op_opt(2, 3)->to_just_i64(), 1);
+  EXPECT_EQ(Dlop::create_integer(-1)->get_mask_op_opt(0, 1)->to_just_i64(), 1);
   // An empty mask selects nothing.
-  EXPECT_EQ(Dlop::create_integer(0b1010)->get_mask_op(Dlop::create_integer(0))->to_just_i64(), 0);
+  EXPECT_EQ(Dlop::create_integer(0b1010)->get_mask_op_opt(0, 0)->to_just_i64(), 0);
 }
 
 TEST_F(Dlop_test, get_mask_op_single_bit_clear_is_zero) {
   // 0ub1010, bit 0 mask → bit clear → 0
   auto v = Dlop::create_integer(0b1010);
-  auto r = v->get_mask_op(Dlop::create_integer(0b0001));
+  auto r = v->get_mask_op_opt(0, 1);
   EXPECT_EQ(r->to_just_i64(), 0);
   EXPECT_FALSE(r->is_negative());
 }
@@ -924,17 +923,17 @@ TEST_F(Dlop_test, get_mask_op_single_bit_unknown) {
   auto v = Dlop::from_pyrope("0sb10?0");
 
   // Selecting bit 1 (the ?) → 1-bit unknown (structurally equal to unknown(1)).
-  auto r_unk = v->get_mask_op(Dlop::create_integer(0b0010));
+  auto r_unk = v->get_mask_op_opt(1, 2);
   EXPECT_TRUE(r_unk->has_unknowns());
   EXPECT_EQ(r_unk->to_pyrope(), Dlop::unknown(1)->to_pyrope());
 
   // Selecting bit 3 (known 1) → 1.
-  auto r_set = v->get_mask_op(Dlop::create_integer(0b1000));
+  auto r_set = v->get_mask_op_opt(3, 4);
   EXPECT_FALSE(r_set->has_unknowns());
   EXPECT_EQ(r_set->to_just_i64(), 1);
 
   // Selecting bit 0 (known 0) → 0.
-  auto r_clr = v->get_mask_op(Dlop::create_integer(0b0001));
+  auto r_clr = v->get_mask_op_opt(0, 1);
   EXPECT_FALSE(r_clr->has_unknowns());
   EXPECT_EQ(r_clr->to_just_i64(), 0);
 }
@@ -943,7 +942,7 @@ TEST_F(Dlop_test, get_mask_op_single_bit_unknown) {
 TEST_F(Dlop_test, get_mask_op_multibit_unknown_propagates) {
   // 0sb10?0, mask 0b1110 → bits 3,2,1 → 1,0,? → packed LSB-first: ?,0,1
   auto v = Dlop::from_pyrope("0sb10?0");
-  auto r = v->get_mask_op(Dlop::create_integer(0b1110));
+  auto r = v->get_mask_op_opt(1, 4);
   EXPECT_TRUE(r->has_unknowns());
   EXPECT_GE(r->get_signed_bits(), 3);
 }
@@ -1428,6 +1427,23 @@ TEST_F(Dlop_test, unknown_multiple_of_64_is_non_negative) {
   EXPECT_FALSE(Dlop::unknown_positive(129)->is_negative());
 }
 
+TEST_F(Dlop_test, unknown_integer_and_negative_field_sign_extensions) {
+  auto any = Dlop::unknown();
+  for (int bit : {0, 1, 63, 64, 127, 128, 1024}) {
+    EXPECT_TRUE(any->unknown_bit_test(bit));
+  }
+  for (int width : {1, 4, 63, 64, 65, 128}) {
+    auto negative = Dlop::unknown_negative(width);
+    EXPECT_TRUE(negative->is_negative());
+    for (int bit = 0; bit < width + 65; ++bit) {
+      EXPECT_EQ(negative->unknown_bit_test(bit), bit < width - 1);
+      if (bit >= width - 1) {
+        EXPECT_TRUE(negative->bit_test(bit));
+      }
+    }
+  }
+}
+
 // Regression: adjust_bits leaked the high word when `amount` was a multiple of
 // 64 (top_bit==0 was skipped). bit 64 must be dropped, leaving the low 64 bits.
 TEST_F(Dlop_test, adjust_bits_multiple_of_64_clears_high_word) {
@@ -1561,4 +1577,44 @@ TEST_F(Dlop_test, wide_binary_word_batch_matches_short_parse) {
   EXPECT_EQ(sepv->popcount(), 2);
   EXPECT_TRUE(sepv->bit_test(0));
   EXPECT_TRUE(sepv->bit_test(64));
+}
+
+TEST_F(Dlop_test, range_masks_preserve_both_planes_across_words) {
+  for (const auto& text : {std::string("0sb?10?01"),
+                           std::string("0sb101?10"),
+                           std::string("0ub") + std::string(1008, '?'),
+                           std::string("0x123456789abcdef")}) {
+    auto base        = Dlop::from_pyrope(text);
+    auto replacement = Dlop::from_pyrope("0sb?01?10");
+    for (int lo : {0, 1, 31, 63, 64, 65, 127, 361}) {
+      for (int width : {1, 2, 63, 64, 65, 129, 361}) {
+        SCOPED_TRACE(text + ":" + std::to_string(lo) + ":" + std::to_string(width));
+        auto selected = base->get_mask_op_opt(lo, lo + width);
+        auto changed  = base->set_mask_op_opt(lo, lo + width, *replacement);
+        ASSERT_FALSE(selected->is_nil());
+        ASSERT_FALSE(changed->is_nil());
+        for (int bit = 0; bit < width; ++bit) {
+          EXPECT_EQ(selected->unknown_bit_test(bit), base->unknown_bit_test(lo + bit)) << text << ":" << lo << ":" << width;
+          if (!base->unknown_bit_test(lo + bit)) {
+            EXPECT_EQ(selected->bit_test(bit), base->bit_test(lo + bit));
+          }
+        }
+        // A one-bit unknown has the historical signed unknown spelling.
+        if (width > 1 || !selected->has_unknowns()) {
+          EXPECT_FALSE(selected->is_negative());
+          EXPECT_FALSE(selected->bit_test(width));
+          EXPECT_FALSE(selected->unknown_bit_test(width));
+        }
+        for (int bit = 0; bit < std::max(1100, lo + width + 65); ++bit) {
+          const bool  inserted = bit >= lo && bit < lo + width;
+          const auto& source   = inserted ? *replacement : *base;
+          const int   offset   = inserted ? bit - lo : bit;
+          EXPECT_EQ(changed->unknown_bit_test(bit), source.unknown_bit_test(offset)) << "bit " << bit;
+          if (!source.unknown_bit_test(offset)) {
+            EXPECT_EQ(changed->bit_test(bit), source.bit_test(offset));
+          }
+        }
+      }
+    }
+  }
 }

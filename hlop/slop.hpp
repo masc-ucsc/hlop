@@ -291,25 +291,28 @@ public:
   // `ordering="none"` collision value: hlop/memory.hpp Memory_none and the
   // cgen.sim code it emits.
   //
-  // The result is CANONICAL — sign-extended from bit nbits-1, not
-  // zero-extended. A Slop is a signed nbits value everywhere else, and a
-  // non-canonical one misbehaves under SRA, signed compare and word-wise
-  // equality.
-  static Slop unknown(int nbits) {
-    Slop s;
-    if (nbits <= 0) {
-      return s;
+  // Like Dlop::unknown(nbits), this is a finite UNSIGNED field. The result
+  // type provides the extra zero sign bit even when nbits == N. A signed
+  // storage boundary must explicitly convert it to its declared width.
+  static Slop_u<N> unknown(int nbits) {
+    if (nbits > N) {
+      throw std::invalid_argument("unknown field does not fit Slop_u<N>");
     }
-    int words = std::min((nbits + 63) / 64, n_words);
+    Slop<N + 1> s;
+    if (nbits <= 0) {
+      return Slop_u<N>{s};
+    }
+    int words = (nbits + 63) / 64;
     for (int i = 0; i < words; ++i) {
       static thread_local std::mt19937_64 rng{hlop_random_seed()};
       ++hlop_random_draws();
       s.base_[i] = static_cast<int64_t>(rng());
     }
-    // sext also clears every bit above the sign, so no separate mask is needed
-    // (the old masked form was UB at nbits%64 == 63: int64_t(1) << 63).
-    Blop::sext<n_words>(s.base_, s.base_, std::min(nbits, N) - 1);
-    return s;
+    const int tail = nbits % 64;
+    if (tail != 0) {
+      s.base_[words - 1] &= static_cast<int64_t>((uint64_t{1} << tail) - 1);
+    }
+    return Slop_u<N>{s};
   }
 
   // Replace the bits selected by `mask` with fresh PRNG bits, keeping the rest.
@@ -318,7 +321,7 @@ public:
   // (`wensize`) write collides with only some lanes of an `ordering="none"`
   // read; the untouched lanes must still read the stored value.
   Slop unknown_lanes(const Slop& mask) const {
-    const Slop rnd  = unknown(N);
+    const Slop rnd{unknown(N)};
     const Slop kept = and_op(mask.not_op());
     const Slop got  = rnd.and_op(mask);
     return kept.or_op(got).sext_op(N - 1);

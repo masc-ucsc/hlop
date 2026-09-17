@@ -105,7 +105,7 @@ struct Mem_val<Slop<N>> {
   static V       zero() { return V::create_integer(0); }
   static V       ones(int nbits) { return V::create_integer(-1).adjust_bits(nbits); }
   // No x in Slop: an undefined value is a fresh draw from the seeded PRNG.
-  static V       undef(int nbits) { return V::unknown(nbits); }
+  static V       undef(int nbits) { return V{V::unknown(nbits)}; }
   static V       or_(const V& a, const V& b) { return a.or_op(b); }
   static V       and_(const V& a, const V& b) { return a.and_op(b); }
   static V       not_(const V& a) { return a.not_op(); }

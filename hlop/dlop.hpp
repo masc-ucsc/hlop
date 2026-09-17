@@ -497,12 +497,13 @@ public:
   static spool_ptr<Dlop> from_ref(std::string_view txt);
   static spool_ptr<Dlop> invalid();
 
+  // No argument: all bits, including the sign extension, are unknown.
+  // With nbits: only the low nbits are unknown; higher bits are known zero.
+  static spool_ptr<Dlop> unknown();
   static spool_ptr<Dlop> unknown(int nbits);
   static spool_ptr<Dlop> unknown_positive(int nbits);
   static spool_ptr<Dlop> unknown_negative(int nbits);
-  // Boolean with an unknown value: type=Boolean with every bit unknown so
-  // the result can collapse to either -1 (true) or 0 (false) and stays
-  // sign-extending across any width consumer.
+  // Boolean with an unknown value: either 1 (true) or 0 (false).
   static spool_ptr<Dlop> unknown_bool();
 
   // Pyrope nil literal — distinct from invalid()
@@ -639,8 +640,6 @@ public:
   spool_ptr<Dlop> sext_op(const Dlop& bits) const;
   spool_ptr<Dlop> sext_op(spool_ptr<Dlop> bits) const { return sext_op(*bits); }
   spool_ptr<Dlop> get_mask_op() const;
-  spool_ptr<Dlop> get_mask_op(const Dlop& mask) const;
-  spool_ptr<Dlop> get_mask_op(spool_ptr<Dlop> mask) const { return get_mask_op(*mask); }
 
   // RANGE forms, the shape every real mask has (the Slop twins are
   // get_mask_op_opt / set_mask_op_opt). Bits [lo, hi), half-open, LSB-aligned
@@ -650,10 +649,8 @@ public:
   // reads as 0 and writes nothing.
   spool_ptr<Dlop> get_mask_op_opt(int lo, int hi) const;
   spool_ptr<Dlop> set_mask_op_opt(int lo, int hi, const Dlop& value) const;
-  spool_ptr<Dlop> set_mask_op(const Dlop& mask, const Dlop& value) const;
-  spool_ptr<Dlop> set_mask_op(spool_ptr<Dlop> mask, spool_ptr<Dlop> value) const { return set_mask_op(*mask, *value); }
   // Make the bits selected by `mask` UNKNOWN, keeping every other bit. Unlike
-  // set_mask_op (a gather/scatter over the mask-selected positions) this is a
+  // set_mask_op_opt (one contiguous window) this is a
   // positional overlay: bit i becomes unknown iff mask bit i is set.
   //
   // This is the `ordering="none"` collision value in hlop/memory.hpp: with a

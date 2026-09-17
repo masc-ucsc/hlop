@@ -209,9 +209,17 @@ DResult DContext::exec_get_mask(const DCall& call) {
   assert(call.inputs.size() >= 2);
   auto value = call.inputs[0].value;
   auto mask  = call.inputs[1].value;
-  // get_mask is a gather/pack (extract the bits where mask==1 and pack them down
-  // to the low bits), not a plain AND. Route to the canonical, tested op.
-  return {.outputs = {value->get_mask_op(mask)}};
+  if (mask->is_known_zero()) {
+    return {.outputs = {Dlop::create_integer(0)}};
+  }
+  if (mask->is_just_i64() && mask->to_just_i64() == -1) {
+    return {.outputs = {value->get_mask_op()}};
+  }
+  const auto [lo, hi] = mask->get_mask_range();
+  if (mask->has_unknowns() || mask->is_negative() || lo < 0 || hi <= lo) {
+    throw std::invalid_argument("Get_mask requires a contiguous constant window or -1");
+  }
+  return {.outputs = {value->get_mask_op_opt(lo, hi)}};
 }
 
 DResult DContext::exec_set_mask(const DCall& call) {
@@ -224,10 +232,14 @@ DResult DContext::exec_set_mask(const DCall& call) {
     return {.outputs = {base}};
   }
 
-  // set_mask is a scatter (consume value's bits from bit 0 and place them into the
-  // mask-selected positions), not an in-place (base&~mask)|(value&mask). Route to
-  // the canonical, tested op.
-  return {.outputs = {base->set_mask_op(mask, value)}};
+  if (mask->is_just_i64() && mask->to_just_i64() == -1) {
+    return {.outputs = {value}};
+  }
+  const auto [lo, hi] = mask->get_mask_range();
+  if (mask->has_unknowns() || mask->is_negative() || lo < 0 || hi <= lo) {
+    throw std::invalid_argument("Set_mask requires a contiguous constant window or -1");
+  }
+  return {.outputs = {base->set_mask_op_opt(lo, hi, *value)}};
 }
 
 DResult DContext::exec_shl(const DCall& call) {

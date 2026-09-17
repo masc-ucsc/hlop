@@ -158,19 +158,19 @@ void RunOnce(std::mt19937_64& rng, const std::vector<std::string>& pool, int op_
       break;
     }
     case 23: ExpectEqual(*da->get_mask_op(), sa.get_mask_op(), "get_mask_op_unary"); break;
-    case 24: ExpectEqual(*da->get_mask_op(*db), sa.get_mask_op(sb), "get_mask_op(mask)"); break;
+    case 24: {
+      const int lo = rng() % 600;
+      const int hi = lo + 1 + rng() % 450;
+      ExpectEqual(*da->get_mask_op_opt(lo, hi), S::get_mask_op_opt(sa, lo, hi), "get_mask_op_opt");
+      break;
+    }
     case 25: {
-      // Lconst::set_mask_op is only defined for a non-negative source and value
-      // (its general path asserts !is_negative() on both; the negative cases are
-      // FIXME/undefined). The mask may be negative. Use magnitudes for src/val.
-      const auto& bv     = pool[rng() % pool.size()];
-      S           src_s  = sa.is_negative() ? sa.neg_op() : sa;
-      auto        src_d  = da->is_negative() ? da->neg_op() : da->add_op(*Dlop::create_integer(0));
-      auto        vraw_s = MakeSlop(bv);
-      auto        vraw_d = MakeDlop(bv);
-      S           val_s  = vraw_s.is_negative() ? vraw_s.neg_op() : vraw_s;
-      auto        val_d  = vraw_d->is_negative() ? vraw_d->neg_op() : vraw_d->add_op(*Dlop::create_integer(0));
-      ExpectEqual(*src_d->set_mask_op(*db, *val_d), src_s.set_mask_op(sb, val_s), "set_mask_op");
+      const auto& bv    = pool[rng() % pool.size()];
+      auto        val_s = MakeSlop(bv);
+      auto        val_d = MakeDlop(bv);
+      const int   lo    = rng() % 600;
+      const int   hi    = lo + 1 + rng() % 450;
+      ExpectEqual(*da->set_mask_op_opt(lo, hi, *val_d), sa.set_mask_op_opt(lo, hi, val_s), "set_mask_op_opt");
       break;
     }
     case 26: ExpectEqual(*da->concat_op(*db), sa.concat_op(sb), "concat_op"); break;

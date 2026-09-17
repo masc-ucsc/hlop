@@ -137,9 +137,8 @@ void RunOnce(std::mt19937_64& rng, const std::vector<PoolEntry>& pool, int op_id
     case 5: {
       // get_mask_op with a concrete (no-unknown) mask — exercises the
       // unknown-propagation fix we just added.
-      auto mask_d = Dlop::create_integer((int64_t(1) << 60) - 1);
       auto mask_s = S::create_integer((int64_t(1) << 60) - 1);
-      ExpectConsistent(*da->get_mask_op(*mask_d), sa.get_mask_op(mask_s), "get_mask_op");
+      ExpectConsistent(*da->get_mask_op_opt(0, 60), sa.get_mask_op(mask_s), "get_mask_op");
       break;
     }
     case 6 : ExpectConsistent(*da->add_op(*db), sa.add_op(sb), "add_op"); break;
@@ -176,18 +175,19 @@ void RunOnce(std::mt19937_64& rng, const std::vector<PoolEntry>& pool, int op_id
       break;
     }
     case 22: {
-      // get_mask_op where the mask itself may have unknowns.
-      ExpectConsistent(*da->get_mask_op(*db), sa.get_mask_op(sb), "get_mask_op(Dlop)");
+      // Unknown data across shifted windows and word boundaries.
+      const int lo = rng() % 128;
+      const int hi = lo + 1 + rng() % 100;
+      ExpectConsistent(*da->get_mask_op_opt(lo, hi), S::get_mask_op_opt(sa, lo, hi), "get_mask_op_opt");
       break;
     }
     case 23: {
       // set_mask_op: replace bits in da selected by mask with bits from value.
       const auto& ev     = pool[rng() % pool.size()];
-      auto        mask_d = Dlop::create_integer((int64_t(1) << 50) - 1);
       auto        mask_s = S::create_integer((int64_t(1) << 50) - 1);
       auto        val_d  = Dlop::from_pyrope("0sb" + ev.masked);
       auto        val_s  = S::from_pyrope("0sb" + ev.concrete);
-      ExpectConsistent(*da->set_mask_op(*mask_d, *val_d), sa.set_mask_op(mask_s, val_s), "set_mask_op");
+      ExpectConsistent(*da->set_mask_op_opt(0, 50, *val_d), sa.set_mask_op(mask_s, val_s), "set_mask_op");
       break;
     }
     case 24: {
@@ -294,5 +294,87 @@ TEST(SlopDlopDiff, to_verilog_parity) {
     auto d = Dlop::from_pyrope(txt);
     auto s = S::from_pyrope(txt);
     EXPECT_EQ(d->to_verilog(), s.to_verilog()) << "to_verilog mismatch for " << txt;
+  }
+}
+
+TEST(SlopDlopDiff, unknown_arithmetic_includes_every_small_realization) {
+  // Exhaust every 3-bit ternary pattern, including an unknown sign, and all
+  // its concrete realizations. Exercise unknowns on either side of div/rem.
+  for (int pattern = 0; pattern < 27; ++pattern) {
+    std::string masked(3, '0');
+    int         digits = pattern;
+    for (auto& bit : masked) {
+      bit     = "01?"[digits % 3];
+      digits /= 3;
+    }
+    for (bool unsign : {false, true}) {
+      auto d = Dlop::from_binary(masked, unsign);
+      for (int bits = 0; bits < 8; ++bits) {
+        std::string concrete(3, '0');
+        bool        matches = true;
+        for (int i = 0; i < 3; ++i) {
+          concrete[i]  = '0' + ((bits >> (2 - i)) & 1);
+          matches     &= masked[i] == '?' || masked[i] == concrete[i];
+        }
+        if (!matches) {
+          continue;
+        }
+        SCOPED_TRACE(std::string(unsign ? "u" : "s") + masked + " -> " + concrete);
+        auto s = S::from_binary(concrete, unsign);
+        ExpectConsistent(*d->get_mask_op(), s.get_mask_op(), "unary mask");
+        ExpectConsistent(*d->popcount_op(), s.popcount_op(), "popcount");
+        for (int n = -8; n <= 8; ++n) {
+          auto dn = Dlop::create_integer(n);
+          auto sn = S::create_integer(n);
+          if (n != 0) {
+            ExpectConsistent(*d->div_op(*dn), s.div_op(sn), "div unknown dividend");
+            ExpectConsistent(*d->rem_op(*dn), s.rem_op(sn), "rem unknown dividend");
+          }
+          if (!s.is_known_false()) {
+            ExpectConsistent(*dn->div_op(*d), sn.div_op(s), "div unknown divisor");
+            ExpectConsistent(*dn->rem_op(*d), sn.rem_op(s), "rem unknown divisor");
+          }
+        }
+        auto amount = Dlop::from_pyrope("0ub??");
+        for (int shift = 0; shift < 4; ++shift) {
+          ExpectConsistent(*d->shl_op(*amount), s.shl_op(shift), "unknown left shift");
+          ExpectConsistent(*d->sra_op(*amount), s.sra_op(shift), "unknown right shift");
+        }
+      }
+    }
+  }
+  // Unknown left shifts must not assume a maximum shift of 64.
+  auto amount = Dlop::from_pyrope("0ub?0000000");
+  ExpectConsistent(*Dlop::create_integer(1)->shl_op(*amount), S::create_integer(1).shl_op(128), "wide unknown shift");
+}
+
+template <int Width>
+void CheckUnknownFactory() {
+  auto d            = Dlop::unknown(Width);
+  bool saw_top_zero = false;
+  bool saw_top_one  = false;
+  for (int i = 0; i < 128; ++i) {
+    auto s = Slop<Width>::unknown(Width);
+    static_assert(std::is_same_v<decltype(s), Slop_u<Width>>);
+    ExpectConsistent(*d, S{s}, "finite random field");
+    EXPECT_FALSE(s.is_negative());
+    EXPECT_FALSE(s.bit_test(Width));
+    saw_top_zero |= !s.bit_test(Width - 1);
+    saw_top_one  |= s.bit_test(Width - 1);
+  }
+  EXPECT_TRUE(saw_top_zero);
+  EXPECT_TRUE(saw_top_one);
+}
+
+TEST(SlopDlopDiff, random_unknown_factory_preserves_unsigned_headroom) {
+  CheckUnknownFactory<1>();
+  CheckUnknownFactory<4>();
+  CheckUnknownFactory<63>();
+  CheckUnknownFactory<64>();
+  CheckUnknownFactory<65>();
+  CheckUnknownFactory<128>();
+  auto d = Dlop::unknown(4);
+  for (int i = 0; i < 128; ++i) {
+    ExpectConsistent(*d, S{S::unknown(4)}, "narrow random field in wide carrier");
   }
 }

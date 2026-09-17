@@ -229,7 +229,7 @@ V eval_ror(std::span<const V> inputs) {
   // If any input has unknowns and no known-true input exists, result is unknown
   for (size_t i = 0; i < inputs.size(); ++i) {
     if (inputs[i].has_unknowns()) {
-      return V::unknown(1);
+      return V{V::unknown(1)};
     }
   }
   return V::create_bool(false);
@@ -309,21 +309,13 @@ V eval_set_mask(const V& base, const V& mask, const V& value) {
 // --- SHL: shift left ---
 template <class V>
 V eval_shl(const V& value, const V& amount) {
-  if (amount.has_unknowns()) {
-    return V::unknown(value.get_signed_bits() + 64);  // conservative
-  }
-  assert(amount.is_just_i64());
-  return value.shl_op(amount.to_just_i64());
+  return value.shl_op(amount);
 }
 
 // --- SRA: arithmetic shift right ---
 template <class V>
 V eval_sra(const V& value, const V& amount) {
-  if (amount.has_unknowns()) {
-    return V::unknown(value.get_signed_bits());  // conservative
-  }
-  assert(amount.is_just_i64());
-  return value.sra_op(amount.to_just_i64());
+  return value.sra_op(amount);
 }
 
 // =========================================================================
@@ -358,7 +350,7 @@ V eval_mux(const MuxArgs<S, V>& args) {
     for (size_t i = 1; i < args.data.size(); ++i) {
       result = result.or_op(args.data[i]);
     }
-    return V::unknown(result.get_signed_bits());
+    return V{V::unknown(result.get_signed_bits())};
   }
 
   assert(args.sel.is_just_i64());
@@ -383,7 +375,7 @@ V eval_lut(const LutArgs<V>& args) {
   // Check for unknowns in inputs
   for (size_t i = 0; i < args.inputs.size(); ++i) {
     if (args.inputs[i].has_unknowns()) {
-      return V::unknown(1);
+      return V{V::unknown(1)};
     }
   }
 

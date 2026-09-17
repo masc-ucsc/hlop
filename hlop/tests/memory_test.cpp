@@ -430,20 +430,19 @@ TEST(MemoryPrimitives, dlop_make_unknown_bits_is_positional) {
   EXPECT_EQ(same->to_just_i64(), 0xF0);
 }
 
-TEST(MemoryPrimitives, slop_unknown_is_canonical) {
+TEST(MemoryPrimitives, slop_unknown_is_unsigned_until_stored) {
   hlop_set_random_seed(0xA5A5);
-  // A 10-bit draw must be a canonical signed Slop<16>: sign-extended from bit
-  // 9, never a zero-extended 0..1023.
-  bool saw_negative = false;
+  bool saw_high_bit = false;
   for (int i = 0; i < 64; ++i) {
     auto v = V16::unknown(10);
-    EXPECT_LE(v.to_just_i64(), 511);
-    EXPECT_GE(v.to_just_i64(), -512);
-    if (v.to_just_i64() < 0) {
-      saw_negative = true;
-    }
+    EXPECT_LE(v.to_just_i64(), 1023);
+    EXPECT_GE(v.to_just_i64(), 0);
+    saw_high_bit |= v.bit_test(9);
+    // A signed 10-bit storage boundary deliberately reinterprets bit 9.
+    Slop<10> stored{v};
+    EXPECT_EQ(stored.to_just_i64(), v.bit_test(9) ? v.to_just_i64() - 1024 : v.to_just_i64());
   }
-  EXPECT_TRUE(saw_negative);
+  EXPECT_TRUE(saw_high_bit);
 }
 
 TEST(MemoryPrimitives, slop_unknown_lanes_keeps_the_unmasked_bits) {

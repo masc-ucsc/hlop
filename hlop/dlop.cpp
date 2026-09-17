@@ -110,8 +110,9 @@ void Dlop::normalize() {
       min_size = i + 1;
       break;
     }
-    // Check if removing this word would change the sign of the one below
-    if ((i > 0) && ((bw[i - 1] < 0) != (base_sign < 0))) {
+    // Both planes sign-extend. Removing a word must preserve both signs;
+    // otherwise a finite unknown field can become an unbounded unknown tail.
+    if ((i > 0) && (((bw[i - 1] < 0) != (base_sign < 0)) || ((ew[i - 1] < 0) != (extra_sign < 0)))) {
       min_size = i + 1;
       break;
     }
@@ -236,6 +237,9 @@ void Dlop::init_unknown_negative(int nbits) {
     // nbits <= 63 → word 0; clearing the top unknown bit makes it mixed.
     set_extra_word(extra()[0] & ~(int64_t(1) << bit));
   }
+  // The sign is known one, including every bit above the requested width.
+  Blop::sextn(base(), size, base(), nbits - 1);
+  normalize();
 }
 
 // =========================================================================
@@ -270,6 +274,12 @@ spool_ptr<Dlop> Dlop::from_ref(std::string_view txt) {
 spool_ptr<Dlop> Dlop::invalid() {
   auto dlop = spool_ptr<Dlop>::make();
   dlop->init_invalid();
+  return dlop;
+}
+
+spool_ptr<Dlop> Dlop::unknown() {
+  auto dlop = make_result(Type::Integer, 1);
+  dlop->set_word_pair(-1, -1);
   return dlop;
 }
 
@@ -1002,19 +1012,11 @@ spool_ptr<Dlop> Dlop::div_op(const Dlop& other) const {
   }
 
   if (has_unknowns() || other.has_unknowns()) {
-    int b = get_signed_bits();
-    if (!other.has_unknowns()) {
-      b -= other.get_signed_bits();
-      if (b <= 0) {
-        return create_integer(0);
-      }
-    }
-    bool neg1 = is_negative();
-    bool neg2 = other.is_negative();
-    if (neg1 != neg2) {
-      return unknown_negative(b);
-    }
-    return unknown_positive(b);
+    // Width subtraction is not a quotient bound (3 / 1 still needs two
+    // payload bits). Unknown signs also cannot be read from the base plane.
+    // A non-negative dividend/divisor pair is bounded by the dividend;
+    // otherwise keep the sign and all higher bits unknown.
+    return !is_negative() && !other.is_negative() ? unknown(get_signed_bits()) : unknown();
   }
 
   // Division by ±1 is the one case whose quotient can overflow the dividend's
@@ -1049,9 +1051,8 @@ spool_ptr<Dlop> Dlop::div_op(const Dlop& other) const {
 }
 
 // rem_op: integer remainder, truncating toward zero (sign follows the
-// dividend, matching C/C++ `%` and the LGraph `rem` cell). Returns invalid on
-// rem-by-zero (undefined) and a 1-bit unknown when either operand has
-// unknowns; otherwise the exact remainder at any width.
+// dividend, matching C/C++ `%` and the LGraph `rem` cell). Unknown operands
+// retain a conservative bound; a one-bit unknown cannot cover a remainder.
 spool_ptr<Dlop> Dlop::rem_op(const Dlop& other) const {
   // Illegal operand (string / nil / invalid / ref) → nil. Must precede the
   // is_known_false() check: a size-0 nil/invalid reads as "false" and would
@@ -1059,11 +1060,11 @@ spool_ptr<Dlop> Dlop::rem_op(const Dlop& other) const {
   if (!is_numeric() || !other.is_numeric()) {
     return nil();
   }
-  if (has_unknowns() || other.has_unknowns()) {
-    return unknown(1);
-  }
   if (other.is_known_false()) {
     return nil();  // remainder by zero → nil
+  }
+  if (has_unknowns() || other.has_unknowns()) {
+    return !is_negative() ? unknown(get_signed_bits()) : unknown();
   }
   // x % ±1 == 0. Handled explicitly so the scalar fast path never evaluates
   // INT64_MIN % -1 (signed-overflow UB).
@@ -1590,13 +1591,12 @@ spool_ptr<Dlop> Dlop::sra_op(int64_t amount) const {
 }
 
 // Dlop-typed shift wrappers: forward to the int64 form once the amount is
-// confirmed numeric and known. Unknown-amount widths follow eval.hpp's
-// convention — left shift widens conservatively by 64 (could grow), right
-// shift keeps the source width (cannot grow). Non-numeric / nil amount is
-// invalid.
+// confirmed numeric and known. An unknown left shift can grow by more than
+// 64 bits, so it has no fixed-width bound here. Right shift cannot grow a
+// non-negative value; negative or unknown signs need unknown upper bits.
 spool_ptr<Dlop> Dlop::shl_op(const Dlop& amount) const {
   if (amount.has_unknowns()) {
-    return unknown(get_signed_bits() + 64);
+    return is_known_zero() ? create_integer(0) : unknown();
   }
   // The amount must be a plain (non-negative, in-range) integer. A non-numeric
   // amount — string / nil / invalid / ref — is illegal → nil. (is_just_i64 by
@@ -1609,7 +1609,7 @@ spool_ptr<Dlop> Dlop::shl_op(const Dlop& amount) const {
 
 spool_ptr<Dlop> Dlop::sra_op(const Dlop& amount) const {
   if (amount.has_unknowns()) {
-    return unknown(get_signed_bits());
+    return !is_negative() ? unknown(get_signed_bits()) : unknown();
   }
   // Non-numeric amount (string / nil / invalid / ref) is illegal → nil.
   if (!amount.is_numeric() || !amount.is_just_i64()) {
@@ -2130,6 +2130,12 @@ spool_ptr<Dlop> Dlop::sext_op(int from_bit) const {
 }
 
 spool_ptr<Dlop> Dlop::get_mask_op() const {
+  if (has_unknowns()) {
+    // The minimal signed width can change with the realization. Keeping
+    // source bits at a fixed width can invent known ones above the shorter
+    // realization's unsigned result. Unknown sign extension is unbounded.
+    return extra()[size - 1] < 0 ? unknown() : unknown(get_signed_bits());
+  }
   // Convert a signed value to its unsigned magnitude bit pattern. A
   // non-negative value is already its own mask.
   if (!is_negative()) {
@@ -2173,214 +2179,6 @@ spool_ptr<Dlop> Dlop::get_mask_op() const {
   // both planes with the same mask keeps the "unknown bits have base==1" invariant.
   dlop->normalize();
   return dlop;
-}
-
-// get_mask_op(mask): copy the bits of `*this` selected by `mask` into a new
-// integer, packed into the low bits in their original order. Negative mask
-// means "all bits except the lowest |mask| bits" (matches Lconst semantics).
-//
-// Examples (mirroring lconst.cpp comment header):
-//   get_mask(0xfeed, 0xff)  -> 0xed
-//   get_mask(0xfeed, -16)   -> 0     (all bits beyond bit 15)
-//   get_mask(0xfeed, 0xf00) -> 0xe
-//
-// The pack is UNSIGNED: the result is never negative, a lone selected set bit
-// included (it reads back as 1, not the signed -1). Pyrope's `x#[i]`
-// zero-extends; only an explicit `#sext` may be negative.
-spool_ptr<Dlop> Dlop::get_mask_op(const Dlop& mask) const {
-  if (mask.has_unknowns()) {
-    // Mask itself has unknown bits: every output bit is potentially unknown
-    // because we can't tell which source bits get extracted. Width is bounded
-    // by the mask's bit count (positive mask) — return a sound unknown of
-    // that width rather than collapsing to Invalid.
-    int w = mask.get_signed_bits();
-    if (w <= 0) {
-      w = 1;
-    }
-    return unknown(w);
-  }
-
-  // Determine effective range: positive mask uses its bit width; a negative
-  // mask carves out everything ABOVE its bit width (sign extension picks up).
-  int  mask_bits          = mask.get_signed_bits();
-  bool mask_neg           = mask.is_negative();
-  int  src_bits           = get_signed_bits();
-  int  positive_mask_bits = mask_neg ? (mask_bits - 1) : mask_bits;
-
-  // Pre-size the output. A negative mask packs every selected bit in
-  // [0, positive_mask_bits) plus the carve-out region [positive_mask_bits,
-  // src_bits); when the mask is wider than the source the first range
-  // dominates, so the bound is max(src_bits, positive_mask_bits). A positive
-  // mask packs at most positive_mask_bits bits. The extracted bits may include
-  // the source's sign bits (positions >= src_bits read the two's-complement
-  // sign), so the bound must NOT cap at src_bits.
-  int max_out_bits = mask_neg ? std::max(src_bits, positive_mask_bits) : positive_mask_bits;
-  // One extra zero word above the top output bit keeps the packed result
-  // non-negative (it is an unsigned bit-extract), matching Slop's fixed-width
-  // result; normalize() shrinks it afterward.
-  int  out_words = std::max(1, (max_out_bits + 63) / 64 + 1);
-  auto result    = make_result(Type::Integer, static_cast<int16_t>(out_words));  // zeroed by reconstruct
-  int64_t* re    = result->extra_mut();
-  int64_t* rb    = result->base();
-
-  // copy_bit: write source bit at position `i` into result at `out_bit`,
-  // carrying the unknown flag from extra() so an unknown source bit stays
-  // unknown in the output (invariant: unknown bits have base=1). Positions at
-  // or beyond the stored width read the sign bit (handled below), matching the
-  // sign-extending bit_test() Slop uses.
-  auto copy_bit = [&](int i, int out) {
-    int  sword = i / 64;
-    int  sbit  = i % 64;
-    int  oword = out / 64;
-    int  obit  = out % 64;
-    // Beyond the stored words the source is its sign bit (two's complement):
-    // 1 for a negative value, 0 otherwise. Unknown bits never extend past size.
-    bool b     = (sword < size) ? ((base()[sword] >> sbit) & 1) : is_negative();
-    bool u     = (sword < size) ? ((extra()[sword] >> sbit) & 1) : false;
-    if (b || u) {
-      rb[oword] |= int64_t(1) << obit;
-    }
-    if (u) {
-      re[oword] |= int64_t(1) << obit;
-    }
-  };
-
-  int out_bit = 0;
-  for (int i = 0; i < positive_mask_bits; ++i) {
-    bool selected = mask_neg ? !mask.bit_test(i) : mask.bit_test(i);
-    if (!selected) {
-      continue;
-    }
-    copy_bit(i, out_bit);
-    ++out_bit;
-  }
-  if (mask_neg) {
-    for (int i = positive_mask_bits; i < src_bits; ++i) {
-      copy_bit(i, out_bit);
-      ++out_bit;
-    }
-  }
-  // A lone selected UNKNOWN bit stays a 1-bit unknown; a known bit packs as
-  // the unsigned 0/1 the loop already wrote.
-  if (out_bit == 1 && (result->extra()[0] & 1)) {
-    return unknown(1);
-  }
-  result->normalize();
-  return result;
-}
-
-// set_mask_op(mask, value): replace the bits of `*this` selected by `mask`
-// with bits taken LSB-first from `value`; bits not selected stay as-is.
-// Mirrors Lconst::set_mask_op semantics, but only handles the
-// non-unknown integer case (mask must not have unknowns).
-//
-//   set_mask(0xFFF, 0xF, 0xa) -> 0xFFa
-//   set_mask(0xFFF, -16, 0xa) -> 0x0aF
-//   set_mask(foo, -1, bar)    -> bar
-//   set_mask(foo,  0, bar)    -> foo
-spool_ptr<Dlop> Dlop::set_mask_op(const Dlop& mask, const Dlop& value) const {
-  // Illegal/degenerate operands → nil: base/mask/value must be usable numbers,
-  // and the mask must be fully known (an unknown mask cannot select definite
-  // bit positions — this replaces the former assert(!mask.has_unknowns())).
-  if (!is_numeric() || !mask.is_numeric() || !value.is_numeric() || mask.has_unknowns()) {
-    return nil();
-  }
-  if (mask.is_known_false()) {
-    auto dlop = make_result(Type::Integer, size);
-    dlop->copy_payload_from(*this);
-    return dlop;
-  }
-  // mask == -1: fully replaced
-  if (mask.is_negative()) {
-    bool all_ones = true;
-    for (int i = 0; i < mask.size; ++i) {
-      if (mask.base()[i] != -1) {
-        all_ones = false;
-        break;
-      }
-    }
-    if (all_ones) {
-      auto dlop = make_result(Type::Integer, value.size);
-      dlop->copy_payload_from(value);
-      return dlop;
-    }
-  }
-
-  bool mask_neg           = mask.is_negative();
-  int  mask_bits          = mask.get_signed_bits();
-  int  positive_mask_bits = mask_neg ? (mask_bits - 1) : mask_bits;
-
-  // out_bits: enough to hold base bits and (for negative masks) the value
-  // bits past mask_bits.
-  int out_bits = std::max(get_signed_bits(), mask_bits);
-  if (mask_neg) {
-    out_bits = std::max(out_bits, positive_mask_bits + value.get_signed_bits());
-  }
-
-  // One word of headroom above the top filled bit so the result's sign stays
-  // the SOURCE's sign extension (bits past out_bits are untouched, like Slop's
-  // fixed-width result) rather than a value bit landing at a word's top bit and
-  // flipping the sign. normalize() trims it afterward.
-  int      out_words = std::max(1, out_bits / 64 + 1);
-  auto     result    = make_result(Type::Integer, static_cast<int16_t>(out_words));
-  int64_t* re        = result->extra_mut();
-  int64_t* rb        = result->base();
-  // Start from `this`, sign-extended to out_words. Bits not selected by the
-  // mask (including the sign-extension region beyond get_signed_bits()) flow through
-  // unchanged; the loop overwrites only the mask-selected positions.
-  int64_t base_sign  = (size > 0 && base()[size - 1] < 0) ? -1 : 0;
-  int64_t extra_sign = (size > 0 && extra()[size - 1] < 0) ? -1 : 0;
-  for (int i = 0; i < out_words; ++i) {
-    rb[i] = (i < size) ? base()[i] : base_sign;
-    re[i] = (i < size) ? extra()[i] : extra_sign;
-  }
-
-  // tri_bit: returns (base_bit, extra_bit) at position `p` from a Dlop.
-  auto tri_bit = [](const Dlop& d, int p) -> std::pair<bool, bool> {
-    int  word = p / 64;
-    int  bit  = p % 64;
-    bool b, u;
-    if (word >= d.size) {
-      b = d.base()[d.size - 1] < 0;
-      u = d.extra()[d.size - 1] < 0;
-    } else {
-      b = (d.base()[word] >> bit) & 1;
-      u = (d.extra()[word] >> bit) & 1;
-    }
-    return {b, u};
-  };
-
-  int value_pos = 0;
-  for (int i = 0; i < out_bits; ++i) {
-    bool from_value;
-    if (i < positive_mask_bits) {
-      bool mb    = mask.bit_test(i);
-      from_value = mask_neg ? !mb : mb;
-    } else {
-      from_value = mask_neg;
-    }
-    if (!from_value) {
-      continue;  // bit stays from `this` (already in result).
-    }
-    auto p = tri_bit(value, value_pos);
-    ++value_pos;
-    int     w        = i / 64;
-    int     s        = i % 64;
-    int64_t bit_mask = int64_t(1) << s;
-    if (p.first || p.second) {
-      rb[w] |= bit_mask;
-    } else {
-      rb[w] &= ~bit_mask;
-    }
-    if (p.second) {
-      re[w] |= bit_mask;
-    } else {
-      re[w] &= ~bit_mask;
-    }
-  }
-
-  result->normalize();
-  return result;
 }
 
 // ror_op: OR-reduce two operands to a single bit. Yields 1 if either side has
@@ -2450,12 +2248,13 @@ spool_ptr<Dlop> Dlop::popcount_op() const {
 
   // Popcount is only well-defined for non-negative finite values. A negative
   // value — or one whose sign bit is unknown (e.g. 0sb?...) — sign-extends with
-  // unbounded set/unknown bits, so the count has no finite answer. Return a
-  // generic 1-bit unknown (0sb?). By the base == base|extra invariant an
+  // unbounded set/unknown bits, so the count has no finite answer. Without a
+  // declared counting width, every result bit must remain unknown. By the
+  // base == base|extra invariant an
   // unknown sign bit also forces base's top bit to 1, so is_negative() catches
   // both the negative and the unknown-sign cases.
   if (is_negative()) {
-    return unknown(1);
+    return unknown();
   }
 
   int ones = 0;  // known-set bits: base bit set and not unknown
@@ -3378,26 +3177,84 @@ spool_ptr<Dlop> Dlop::get_mask_value() const {
 // mask VALUE -- which for a wide mask also meant building (and, from generated
 // code, parsing) a multi-word literal on every call.
 // =========================================================================
+namespace {
+// A 64-bit window from either ternary plane, including its sign extension.
+uint64_t mask_plane_window(const int64_t* plane, int words, int start) {
+  const auto word = [&](int i) -> uint64_t {
+    return i < words ? static_cast<uint64_t>(plane[i]) : (words && plane[words - 1] < 0 ? UINT64_MAX : 0);
+  };
+  const int offset = start % 64;
+  const int index  = start / 64;
+  return offset == 0 ? word(index) : (word(index) >> offset) | (word(index + 1) << (64 - offset));
+}
+uint64_t low_mask(int width) { return width == 64 ? UINT64_MAX : (uint64_t{1} << width) - 1; }
+}  // namespace
+
 spool_ptr<Dlop> Dlop::get_mask_op_opt(int lo, int hi) const {
-  if (lo < 0) {
-    lo = 0;
+  if (!is_numeric()) {
+    return nil();
   }
+  lo = std::max(0, lo);
   if (hi <= lo) {
     return create_integer(0);
   }
-  return get_mask_op(*get_mask_value(hi - 1, lo));
+  const int width = hi - lo;
+  const int words = width / 64 + 1;  // unsigned result needs a clear sign bit
+  if (words > INT16_MAX) {
+    return nil();
+  }
+  auto  result = make_result(Type::Integer, static_cast<int16_t>(words));
+  auto* re     = result->extra_mut();
+  auto* rb     = result->base();
+  for (int out = 0; out < width; out += 64) {
+    const auto mask       = low_mask(std::min(64, width - out));
+    const auto extra_word = mask_plane_window(extra(), size, lo + out) & mask;
+    rb[out / 64]          = static_cast<int64_t>((mask_plane_window(base(), size, lo + out) & mask) | extra_word);
+    re[out / 64]          = static_cast<int64_t>(extra_word);
+  }
+  if (width == 1 && (re[0] & 1)) {
+    return unknown(1);
+  }
+  result->normalize();
+  return result;
 }
 
 spool_ptr<Dlop> Dlop::set_mask_op_opt(int lo, int hi, const Dlop& value) const {
-  if (lo < 0) {
-    lo = 0;
+  if (!is_numeric() || !value.is_numeric()) {
+    return nil();
   }
+  lo = std::max(0, lo);
   if (hi <= lo) {
-    auto dlop = make_result(Type::Integer, size);
-    dlop->copy_payload_from(*this);
-    return dlop;
+    auto result = make_result(Type::Integer, size);
+    result->copy_payload_from(*this);
+    return result;
   }
-  return set_mask_op(*get_mask_value(hi - 1, lo), value);
+  const int words = std::max(get_signed_bits(), hi) / 64 + 1;
+  if (words > INT16_MAX) {
+    return nil();
+  }
+  auto  result = make_result(Type::Integer, static_cast<int16_t>(words));
+  auto* re     = result->extra_mut();
+  auto* rb     = result->base();
+  for (int word = 0; word < words; ++word) {
+    const int start = word * 64;
+    uint64_t  b     = mask_plane_window(base(), size, start);
+    uint64_t  x     = mask_plane_window(extra(), size, start);
+    const int first = std::max(start, lo);
+    const int end   = std::min(start + 64, hi);
+    if (first < end) {
+      const int  offset = first - start;
+      const auto mask   = low_mask(end - first) << offset;
+      const auto vb     = mask_plane_window(value.base(), value.size, first - lo) << offset;
+      const auto vx     = mask_plane_window(value.extra(), value.size, first - lo) << offset;
+      b                 = (b & ~mask) | ((vb | vx) & mask);
+      x                 = (x & ~mask) | (vx & mask);
+    }
+    rb[word] = static_cast<int64_t>(b);
+    re[word] = static_cast<int64_t>(x);
+  }
+  result->normalize();
+  return result;
 }
 
 // =========================================================================
