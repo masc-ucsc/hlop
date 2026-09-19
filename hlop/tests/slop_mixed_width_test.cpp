@@ -308,6 +308,31 @@ TEST(Slop_mixed_width, reductions_over_declared_bits) {
   EXPECT_EQ(Slop<8>::popcount_op(Slop<16>::create_integer(-1), 16).to_just_i64(), 16);
 }
 
+// The reductions count whole words; they must agree with a per-position
+// bit_test() walk on every declared count, across word boundaries and past the
+// carrier (where a position reads the sign).
+template <int N>
+void check_reductions_against_bit_walk(const Slop<N>& x) {
+  for (int nbits = 0; nbits <= ((N + 63) / 64) * 64 + 70; ++nbits) {
+    int64_t count = 0;
+    for (int i = 0; i < nbits; ++i) {
+      count += x.bit_test(i) ? 1 : 0;
+    }
+    EXPECT_EQ(Slop<8>::popcount_op(x, nbits).to_just_i64(), count) << "N=" << N << " nbits=" << nbits;
+    EXPECT_EQ(Slop<2>::rxor_op(x, nbits).to_just_i64(), count & 1) << "N=" << N << " nbits=" << nbits;
+    EXPECT_EQ(Slop<2>::rand_op(x, nbits).to_just_i64(), count == nbits ? 1 : 0) << "N=" << N << " nbits=" << nbits;
+  }
+}
+
+TEST(Slop_mixed_width, reductions_match_bit_walk) {
+  check_reductions_against_bit_walk(Slop<16>::create_integer(0x5a3c));
+  check_reductions_against_bit_walk(Slop<16>::create_integer(-3));
+  check_reductions_against_bit_walk(Slop<64>::create_integer(int64_t{0x7123456789abcdef}));
+  check_reductions_against_bit_walk(Slop<64>::create_integer(-1));
+  check_reductions_against_bit_walk(Slop<130>::from_pyrope("0x3ffff_ffff_ffff_ffff_ffff_ffff_ffff_fff0"));
+  check_reductions_against_bit_walk(Slop<130>::create_integer(-5));
+}
+
 // The point of the mixed-width form: operands at differing widths, result
 // materialized at the cell's own width, with no caller-side conversion.
 TEST(Slop_mixed_width, get_mask_across_widths) {

@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cassert>
 #include <cctype>
 #include <compare>
@@ -924,39 +925,52 @@ public:
   // Slop<8> holding 0xf must answer yes while a Slop<8> holding 0xff must not
   // depend on how wide the carrier happens to be. (The member forms read the
   // whole carrier, which is why they cannot serve a cell.)
+  //
+  // All three count WHOLE WORDS (bedrock's br_enc_gray2bin is 31 XOR
+  // reductions per cycle; the per-bit bit_test() loop they replaced made that
+  // 6.6x slower than Verilator). Counting agrees with bit_test() bit for bit,
+  // including positions past the carrier, which read the top word's sign.
   template <Slop_operand X>
   static Slop rand_op(const X& xa, int nbits) {
     Slop r;
-    r.base_[0] = 1;  // an empty AND-reduction is true
-    for (int i = 0; i < nbits; ++i) {
-      if (!sref_(xa).bit_test(i)) {
-        r.base_[0] = 0;
-        break;
-      }
-    }
+    r.base_[0] = sref_(xa).popcount_low_(nbits) == std::max(nbits, 0) ? 1 : 0;  // an empty AND-reduction is true
     return r;
   }
 
   template <Slop_operand X>
   static Slop rxor_op(const X& xa, int nbits) {
-    int parity = 0;
-    for (int i = 0; i < nbits; ++i) {
-      parity ^= sref_(xa).bit_test(i) ? 1 : 0;
-    }
     Slop r;
-    r.base_[0] = parity;
+    r.base_[0] = sref_(xa).popcount_low_(nbits) & 1;
     return r;
   }
 
   template <Slop_operand X>
   static Slop popcount_op(const X& xa, int nbits) {
-    int64_t count = 0;
-    for (int i = 0; i < nbits; ++i) {
-      count += sref_(xa).bit_test(i) ? 1 : 0;
-    }
     Slop r;
-    r.base_[0] = count;
+    r.base_[0] = sref_(xa).popcount_low_(nbits);
     return r;
+  }
+
+  // Set bits among positions [0, nbits), reading every position the way
+  // bit_test() does: a position past the last carrier word is its sign.
+  int64_t popcount_low_(int nbits) const {
+    if (nbits <= 0) {
+      return 0;
+    }
+    int64_t   count = 0;
+    const int full  = std::min(nbits / 64, n_words);
+    for (int w = 0; w < full; ++w) {
+      count += std::popcount(static_cast<uint64_t>(base_[w]));
+    }
+    if (full < n_words) {
+      const int rem = nbits - full * 64;  // 0 <= rem < 64
+      if (rem > 0) {
+        count += std::popcount(static_cast<uint64_t>(base_[full]) & ((uint64_t{1} << rem) - 1));
+      }
+    } else if (base_[n_words - 1] < 0) {
+      count += nbits - n_words * 64;
+    }
+    return count;
   }
 
   // Shifts: the amount is a plain count, never a materialized Slop constant.
