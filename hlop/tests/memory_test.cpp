@@ -7,6 +7,7 @@
 #include "memory.hpp"
 
 #include <gtest/gtest.h>
+#include <unistd.h>
 
 #include <array>
 #include <cstdint>
@@ -652,4 +653,91 @@ TEST(MemoryDlop, a_forwarding_prefix_cannot_run_past_the_write_ports) {
 
   m.stage_write(0, don(), di(2), di(42));
   EXPECT_EQ(m.read(0, di(2))->to_just_i64(), 42);
+}
+
+namespace {
+class Image_file {
+public:
+  std::string path;
+  explicit Image_file(std::string_view contents) {
+    char name[] = "/tmp/hlop-readmem-XXXXXX";
+    int  fd     = mkstemp(name);
+    if (fd < 0) {
+      throw std::runtime_error("mkstemp failed");
+    }
+    close(fd);
+    path = name;
+    std::ofstream(path) << contents;
+  }
+  ~Image_file() { std::remove(path.c_str()); }
+};
+}  // namespace
+
+TEST(MemoryImage, hex_partial_comments_addresses_and_writes) {
+  Image_file                 f("/* image */ 12 3_4 // pair\n @3 1ab");
+  Memory_old<V8, 8, 4, 1, 1> m;
+  m.fill(v8(7));
+  m.readmemh(f.path);
+  EXPECT_EQ(bitsof(m[0]), 0x12);
+  EXPECT_EQ(bitsof(m[1]), 0x34);
+  EXPECT_EQ(bitsof(m[2]), 7);
+  EXPECT_EQ(bitsof(m[3]), 0xab);
+  m.stage_write<0>(on8(), v8(1), v8(42));
+  m.tick();
+  EXPECT_EQ(bitsof(m[1]), 42);
+}
+TEST(MemoryImage, binary_unknowns_and_dynamic_dlop) {
+  Image_file                 f("@1 10xz_0101");
+  Memory_old<U8, 8, 4, 1, 0> m;
+  m.readmemb(f.path, true);
+  EXPECT_EQ(m[1].to_just_i64(), 0x85);
+  Mem_cfg cfg;
+  cfg.bits = 8;
+  cfg.size = 4;
+  Mem_dyn<D> d;
+  d.configure(cfg, Dlop::create_integer(0));
+  d.readmemb(f.path);
+  EXPECT_TRUE(d.entries()[1]->unknown_bit_test(5));
+  EXPECT_TRUE(d.entries()[1]->unknown_bit_test(4));
+  EXPECT_TRUE(d.entries()[1]->bit_test(7));
+}
+TEST(MemoryImage, wide_words) {
+  Image_file                            f("123456789abcdef0123456789abcdef0123");
+  Memory_old<Slop_u<130>, 130, 2, 1, 0> m;
+  m.readmemh(f.path);
+  auto expected = Slop_u<130>::from_pyrope("0x123456789abcdef0123456789abcdef0123");
+  EXPECT_TRUE(m[0].eq_op(expected).is_known_true());
+}
+TEST(MemoryImage, malformed_images_do_not_partially_commit) {
+  Memory_old<V8, 8, 4, 1, 0> m;
+  m.fill(v8(9));
+  for (const auto text : {"11 xxg", "11 @4 22", "11 22 33 44 55", "11 /*", "11 @", "11 /"}) {
+    Image_file f(text);
+    EXPECT_THROW(m.readmemh(f.path), std::runtime_error);
+    EXPECT_EQ(bitsof(m[0]), 9);
+  }
+  Image_file binary("012");
+  EXPECT_THROW(m.readmemb(binary.path), std::runtime_error);
+  Image_file missing("0");
+  std::remove(missing.path.c_str());
+  EXPECT_THROW(m.readmemh(missing.path), std::runtime_error);
+}
+TEST(MemoryImage, command_roundtrip) {
+  for (int radix : {2, 16}) {
+    auto image = memory_image(memory_image_command(radix, "a b/it's 100% image.hex"));
+    ASSERT_TRUE(image.has_value());
+    EXPECT_EQ(image->radix, radix);
+    EXPECT_EQ(image->path, "a b/it's 100% image.hex");
+  }
+  EXPECT_FALSE(memory_image("ordinary-string"));
+}
+
+TEST(MemoryImage, unknown_sign_bit_keeps_slop_canonical) {
+  Image_file                 f("xx");
+  Memory_old<V8, 8, 1, 1, 0> m;
+  for (int i = 0; i < 32; ++i) {
+    m.readmemh(f.path);
+    const auto value = m[0].to_just_i64();
+    EXPECT_EQ(value, static_cast<int8_t>(static_cast<uint8_t>(value)));
+  }
 }

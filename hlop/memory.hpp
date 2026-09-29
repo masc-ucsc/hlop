@@ -70,15 +70,19 @@
 
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
 #include "dlop.hpp"
+#include "readmem.hpp"
 #include "slop.hpp"
 #include "spool_ptr.hpp"
 
@@ -338,6 +342,27 @@ V mem_resolve(const V& stored, std::span<const Mem_write<V>> pend, int64_t raddr
   return v;
 }
 
+// Decode each word using the backend's normal unknown-bit policy. Slop may
+// explicitly resolve X/Z to zero; Dlop retains the unknown plane.
+template <class V>
+V memory_image_value(std::string binary, bool unknown_zero) {
+  if constexpr (std::is_same_v<V, spool_ptr<Dlop>>) {
+    return Dlop::from_pyrope("0sb" + binary);
+  } else {
+    if (unknown_zero) {
+      std::replace(binary.begin(), binary.end(), '?', '0');
+    }
+    return Mem_val<V>::sext_(V::from_binary(binary, true), static_cast<int>(binary.size()) - 1);
+  }
+}
+template <class Container>
+void load_memory_image(Container& entries, int bits, const std::string& path, int radix, bool unknown_zero) {
+  auto words = read_memory_image(path, radix, bits, entries.size());
+  for (auto& word : words) {
+    entries[word.address] = memory_image_value<typename Container::value_type>(std::move(word.binary), unknown_zero);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Shared storage + port plumbing (compile-time shape)
 // ---------------------------------------------------------------------------
@@ -370,6 +395,9 @@ public:
   static constexpr std::size_t entry_count = Size;
 
   static constexpr std::size_t size() { return Size; }
+
+  void readmemh(const std::string& path, bool unknown_zero = false) { load_memory_image(data_, Bits, path, 16, unknown_zero); }
+  void readmemb(const std::string& path, bool unknown_zero = false) { load_memory_image(data_, Bits, path, 2, unknown_zero); }
 
   // --- Storage access (checkpoint, VCD, whole-array bridging) ---
   array_type&       entries() { return data_; }
@@ -710,6 +738,9 @@ public:
     bulk_pending_ = false;
     configured_   = true;
   }
+
+  void readmemh(const std::string& path, bool unknown_zero = false) { load_memory_image(data_, cfg_.bits, path, 16, unknown_zero); }
+  void readmemb(const std::string& path, bool unknown_zero = false) { load_memory_image(data_, cfg_.bits, path, 2, unknown_zero); }
 
   bool           configured() const { return configured_; }
   const Mem_cfg& cfg() const { return cfg_; }
