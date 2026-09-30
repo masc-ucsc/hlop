@@ -432,6 +432,14 @@ TEST_F(Slop_test, from_pyrope_short_sign_prefix_rejected) {
   EXPECT_THROW(S::from_pyrope(std::string_view{"0ub", 2}), std::runtime_error);  // "0u"
   EXPECT_THROW(S::from_pyrope("0s"), std::runtime_error);
   EXPECT_THROW(S::from_pyrope("0u"), std::runtime_error);
+  // Every sign letter takes every radix letter; a signed hex/octal literal is a
+  // two's-complement bit pattern, `0s12`/`0u12` (no radix) are errors.
+  EXPECT_EQ(S::from_pyrope("0sxF").to_just_i64(), -1);
+  EXPECT_EQ(S::from_pyrope("0so17").to_just_i64(), 15);
+  EXPECT_EQ(S::from_pyrope("0sd12").to_just_i64(), 12);
+  EXPECT_EQ(S::from_pyrope("0ux1F").to_just_i64(), 31);
+  EXPECT_THROW(S::from_pyrope("0s12"), std::runtime_error);
+  EXPECT_THROW(S::from_pyrope("0u12"), std::runtime_error);
   EXPECT_EQ(S::from_pyrope("0sb1010").to_just_i64(), -6);
   EXPECT_EQ(S::from_pyrope("0ub1010").to_just_i64(), 10);
 }

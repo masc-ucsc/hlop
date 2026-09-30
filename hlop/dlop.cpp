@@ -526,26 +526,45 @@ void Dlop::init_from_pyrope(std::string_view orig_txt) {
     if (orig_txt.size() >= (2 + skip_chars) && orig_txt[skip_chars] == '0') {
       ++skip_chars;
       char sel_ch = lower(orig_txt[skip_chars]);
-      if (sel_ch == 's') {
-        // Signed literals are binary only: the prefix must be the full `0sb…`.
-        // Bounds-check before reading the base char so a bare `0s` does not read
-        // past the string_view.
+      if (sel_ch == 's' || sel_ch == 'u') {
+        // An explicit sign letter takes a radix letter (Pyrope: `0ub` `0uo`
+        // `0ud` `0ux`, `0sb` `0so` `0sd` `0sx`); `0s12`/`0u12` are errors.
+        // Bounds-check so a bare `0s`/`0u` does not read past the string_view.
+        const bool is_signed = sel_ch == 's';
         ++skip_chars;
-        if (skip_chars >= orig_txt.size() || lower(orig_txt[skip_chars]) != 'b') {
-          throw std::runtime_error(std::format("ERROR: {} unknown pyrope encoding only binary can be signed 0sb...\n", orig_txt));
-        }
-        sel_ch = 'b';
-        assert(!unsigned_result);
-      } else if (sel_ch == 'u') {
-        // Explicit `0u` prefix: unsigned, then a base selector (x/b/d/o)
-        // follows — the binary form is `0ub…`. Bounds-check so a bare `0u` does
-        // not read past the string_view.
-        ++skip_chars;
-        if (skip_chars >= orig_txt.size()) {
-          throw std::runtime_error(std::format("ERROR: {} unknown pyrope encoding, use 0ub... (binary) or 0ux/0ud/0uo\n", orig_txt));
+        if (skip_chars >= orig_txt.size() || std::string_view("bodx").find(lower(orig_txt[skip_chars])) == std::string_view::npos) {
+          throw std::runtime_error(std::format("ERROR: {} a sign letter needs a radix letter: 0{}b, 0{}o, 0{}d or 0{}x\n",
+                                               orig_txt, sel_ch, sel_ch, sel_ch, sel_ch));
         }
         sel_ch          = lower(orig_txt[skip_chars]);
-        unsigned_result = true;
+        unsigned_result = !is_signed;
+        if (is_signed && (sel_ch == 'x' || sel_ch == 'o')) {
+          // A signed hex/octal literal is a two's-complement bit pattern, like
+          // `0sb…` (4/3 bits per digit): `0sxF` is -1, `0so7` is -1.
+          const int   per = sel_ch == 'x' ? 4 : 3;
+          std::string bits;
+          for (size_t i = skip_chars + 1; i < orig_txt.size(); ++i) {
+            char c = orig_txt[i];
+            if (c == '_') {
+              continue;
+            }
+            auto v = char_to_val[static_cast<uint8_t>(c)];
+            if (v < 0 || v >= (1 << per)) {
+              throw std::runtime_error(std::format("ERROR: {} encoding could not use {}\n", orig_txt, c));
+            }
+            for (int k = per - 1; k >= 0; --k) {
+              bits.push_back(((v >> k) & 1) ? '1' : '0');
+            }
+          }
+          if (bits.empty()) {
+            throw std::runtime_error(std::format("ERROR: {} has no digits\n", orig_txt));
+          }
+          init_from_binary(bits, false);
+          if (negative) {
+            negate_mut();
+          }
+          return;
+        }
       } else {
         // No explicit sign. Binary literals MUST be explicit about their
         // signedness — `0b…` is no longer accepted; use `0ub…` (unsigned) or

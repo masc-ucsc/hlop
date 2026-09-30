@@ -223,6 +223,25 @@ TEST_F(Dlop_test, from_pyrope_unsigned_prefix) {
   EXPECT_EQ(ud->to_just_i64(), 42);
 }
 
+TEST_F(Dlop_test, from_pyrope_signed_prefix_every_radix) {
+  // Pyrope: every sign letter takes every radix letter. A signed
+  // hex/octal/binary literal is a two's-complement bit pattern (4/3/1 bits per
+  // digit); `0sd` is the plain decimal value.
+  EXPECT_EQ(Dlop::from_pyrope("0sxF")->to_just_i64(), -1);
+  EXPECT_EQ(Dlop::from_pyrope("0sx7F")->to_just_i64(), 127);
+  EXPECT_EQ(Dlop::from_pyrope("0sx80")->to_just_i64(), -128);
+  EXPECT_EQ(Dlop::from_pyrope("0so7")->to_just_i64(), -1);
+  EXPECT_EQ(Dlop::from_pyrope("0so17")->to_just_i64(), 15);
+  EXPECT_EQ(Dlop::from_pyrope("0sd12")->to_just_i64(), 12);
+  EXPECT_EQ(Dlop::from_pyrope("0sb111")->to_just_i64(), -1);
+  EXPECT_EQ(Dlop::from_pyrope("-0sxF")->to_just_i64(), 1);
+  EXPECT_EQ(Dlop::from_pyrope("0sx_F_F")->to_just_i64(), -1);
+  // A sign letter needs a radix letter.
+  EXPECT_THROW(Dlop::from_pyrope("0s12"), std::runtime_error);
+  EXPECT_THROW(Dlop::from_pyrope("0u12"), std::runtime_error);
+  EXPECT_THROW(Dlop::from_pyrope("0so8"), std::runtime_error);
+}
+
 TEST_F(Dlop_test, concat_op_integer_unchanged) {
   // Integer ++ integer stays a numeric bit-concat (signed-positive
   // integers carry a leading-zero sign bit; 0ub1010 occupies 5 bits in
