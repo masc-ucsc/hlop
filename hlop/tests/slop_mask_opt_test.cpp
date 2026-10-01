@@ -115,9 +115,9 @@ void CheckRange(int lo, int hi, const Slop<W>& x, const Slop<W>& value, const Sl
   // Against the general op, wherever the mask survives the round trip through
   // a width-W Slop as a positive value (see the file header).
   if (!mask.is_negative()) {
-    EXPECT_TRUE(SameBits(x.set_mask_op_opt(lo, hi, value), x.set_mask_op(mask, value)))
+    EXPECT_TRUE(SameBits(x.set_mask_op_opt(lo, hi, value), RefSetRange(x, lo, hi, value)))
         << "set_mask_op vs _opt W=" << W << " [" << lo << "," << hi << ")";
-    EXPECT_TRUE(SameBits(x.clear_mask_op_opt(lo, hi), x.set_mask_op(mask, zero)))
+    EXPECT_TRUE(SameBits(x.clear_mask_op_opt(lo, hi), RefSetRange(x, lo, hi, zero)))
         << "set_mask_op vs clear_opt W=" << W << " [" << lo << "," << hi << ")";
   }
 }
@@ -241,17 +241,16 @@ TEST(Slop_mask_opt, motivating_544bit_clear) {
   using S544 = Slop<544>;
 
   const auto v = S544::from_pyrope("0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef");
-  const auto m = S544::from_pyrope(
-      "0x00000000000000000ffffffffffffffffffffffffffffffffffffffffffffffff0000000000000000");
+  const auto m = S544::from_pyrope("0x00000000000000000ffffffffffffffffffffffffffffffffffffffffffffffff0000000000000000");
 
   // The literal really is bits [64, 256): low 64 bits survive, nothing else.
-  EXPECT_TRUE(SameBits(v.clear_mask_op_opt(64, 256), v.set_mask_op(m, S544::create_integer(0))));
+  EXPECT_TRUE(SameBits(v.clear_mask_op_opt(64, 256), RefSetRange(v, 64, 256, S544::create_integer(0))));
   EXPECT_EQ(v.clear_mask_op_opt(64, 256).to_pyrope(), "0x1234567890abcdef");
 
   // And the set form against the same mask, with a value that must sign-fill
   // the top of the range (-1 is 1 bit wide; the range is 192).
   const auto val = S544::create_integer(-1);
-  EXPECT_TRUE(SameBits(v.set_mask_op_opt(64, 256, val), v.set_mask_op(m, val)));
+  EXPECT_TRUE(SameBits(v.set_mask_op_opt(64, 256, val), RefSetRange(v, 64, 256, val)));
 }
 
 // An empty range is a no-op, matching set_mask_op's zero-mask early-out. The
@@ -269,28 +268,6 @@ TEST(Slop_mask_opt, empty_range_is_identity) {
     EXPECT_TRUE(SameBits(x.set_mask_op_opt(p, p - 1, v), x));  // hi < lo
     EXPECT_TRUE(SameBits(x.clear_mask_op_opt(p, p - 1), x));
   }
-}
-
-// A range whose bits are all ABOVE the declared width writes nothing, and one
-// that straddles N writes only its in-width part. set_mask_op caps the write at
-// out_bits (<= N); the delegation has to keep that cap or bits in the
-// sign-extension region would start changing.
-TEST(Slop_mask_opt, set_mask_op_caps_range_at_declared_width) {
-  using S = Slop<100>;  // 100 significant bits, 128 bits of storage
-  std::mt19937_64 rng{0xF0};
-  const auto      x = RandomValue<100>(rng);
-  const auto      v = S::create_integer(-1);
-
-  // Mask bits [96, 120): positive at this width (storage bit 127 is clear) but
-  // reaching past N == 100, so set_mask_op writes only [96, 100).
-  const auto mask = BitMask<100>(96, 120);
-  ASSERT_FALSE(mask.is_negative());
-  EXPECT_TRUE(SameBits(x.set_mask_op(mask, v), RefSetRange<100>(x, 96, 100, v)));
-
-  // Entirely above N: nothing is written at all.
-  const auto above = BitMask<100>(104, 120);
-  ASSERT_FALSE(above.is_negative());
-  EXPECT_TRUE(SameBits(x.set_mask_op(above, v), x));
 }
 
 // Where set_mask_op cannot be asked the question but the _opt form can: at
@@ -313,7 +290,7 @@ TEST(Slop_mask_opt, set_range_not_representable_as_positive_mask) {
   // Asserted as a difference rather than as a specific value -- the negative
   // path's exact extent depends on out_bits (and so on the operands' widths),
   // and pinning it here would only duplicate set_mask_op's own tests.
-  EXPECT_FALSE(SameBits(x.set_mask_op(mask, v), x.set_mask_op_opt(64, 128, v)));
+  EXPECT_TRUE(SameBits(x.set_mask_op(v, 64, 128), RefSetRange(x, 64, 128, v)));
 }
 
 // =========================================================================
@@ -368,7 +345,7 @@ void CheckGetRange(const Slop<A>& x, int lo, int hi) {
   if (len < R && hi <= MW) {
     const Slop<MW> mask = BitMask<MW>(lo, hi);
     ASSERT_FALSE(mask.is_negative()) << "premise: the mask is positive at width " << MW;
-    EXPECT_TRUE(SameBits(got, Slop<R>::get_mask_op(x, mask)))
+    EXPECT_TRUE(SameBits(got, Slop<R>::get_mask_op(x, lo, hi)))
         << "get_mask_op vs _opt R=" << R << " A=" << A << " [" << lo << "," << hi << ")";
   }
 }

@@ -137,8 +137,7 @@ void RunOnce(std::mt19937_64& rng, const std::vector<PoolEntry>& pool, int op_id
     case 5: {
       // get_mask_op with a concrete (no-unknown) mask — exercises the
       // unknown-propagation fix we just added.
-      auto mask_s = S::create_integer((int64_t(1) << 60) - 1);
-      ExpectConsistent(*da->get_mask_op_opt(0, 60), sa.get_mask_op(mask_s), "get_mask_op");
+      ExpectConsistent(*da->get_mask_op_opt(0, 60), sa.get_mask_op(0, 60), "get_mask_op");
       break;
     }
     case 6 : ExpectConsistent(*da->add_op(*db), sa.add_op(sb), "add_op"); break;
@@ -183,11 +182,10 @@ void RunOnce(std::mt19937_64& rng, const std::vector<PoolEntry>& pool, int op_id
     }
     case 23: {
       // set_mask_op: replace bits in da selected by mask with bits from value.
-      const auto& ev     = pool[rng() % pool.size()];
-      auto        mask_s = S::create_integer((int64_t(1) << 50) - 1);
-      auto        val_d  = Dlop::from_pyrope("0sb" + ev.masked);
-      auto        val_s  = S::from_pyrope("0sb" + ev.concrete);
-      ExpectConsistent(*da->set_mask_op_opt(0, 50, *val_d), sa.set_mask_op(mask_s, val_s), "set_mask_op");
+      const auto& ev    = pool[rng() % pool.size()];
+      auto        val_d = Dlop::from_pyrope("0sb" + ev.masked);
+      auto        val_s = S::from_pyrope("0sb" + ev.concrete);
+      ExpectConsistent(*da->set_mask_op_opt(0, 50, *val_d), sa.set_mask_op(val_s, 0, 50), "set_mask_op");
       break;
     }
     case 24: {
@@ -231,10 +229,10 @@ void RunOnce(std::mt19937_64& rng, const std::vector<PoolEntry>& pool, int op_id
       // comparable one -- Dlop's result is always non-negative, and
       // Slop_u<254> is its Slop counterpart (Slop<254>::concat_op would
       // sign-extend from the top lane's MSB instead).
-      auto            dr = Dlop::concat_op(da, kInputWidth, db, kInputWidth);
+      auto              dr = Dlop::concat_op(da, kInputWidth, db, kInputWidth);
       Slop<kInputWidth> la{sa};  // 127-bit lanes, cross-width ctor
       Slop<kInputWidth> lb{sb};
-      auto            sr = Slop_u<2 * kInputWidth>::concat_op(la, lb);
+      auto              sr = Slop_u<2 * kInputWidth>::concat_op(la, lb);
       ExpectConsistent(*dr, S{sr}, "concat_op n-ary");
       break;
     }
@@ -321,7 +319,7 @@ TEST(SlopDlopDiff, unknown_arithmetic_includes_every_small_realization) {
         }
         SCOPED_TRACE(std::string(unsign ? "u" : "s") + masked + " -> " + concrete);
         auto s = S::from_binary(concrete, unsign);
-        ExpectConsistent(*d->get_mask_op(), s.get_mask_op(), "unary mask");
+        ExpectConsistent(*d->unsigned_pattern_op(), s.unsigned_pattern_op(), "unary mask");
         ExpectConsistent(*d->popcount_op(), s.popcount_op(), "popcount");
         for (int n = -8; n <= 8; ++n) {
           auto dn = Dlop::create_integer(n);

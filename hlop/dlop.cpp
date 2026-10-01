@@ -196,8 +196,8 @@ void Dlop::init_unknown(int nbits) {
     // ceil(nbits/64) unknown words, plus one all-zero headroom word when nbits
     // lands exactly on a 64-bit boundary, so bit `nbits` and above (including the
     // sign bit) stay known 0 instead of forming an unbounded negative unknown.
-    // Matches get_mask_op()'s "words = nbits/64 + 1" headroom convention.
-    int words = full + 1;
+    // Matches unsigned_pattern_op()'s "words = nbits/64 + 1" headroom convention.
+    int words    = full + 1;
     grow_to(static_cast<int16_t>(words));
     int64_t* e = extra_mut();
     int64_t* b = base();
@@ -394,10 +394,10 @@ void Dlop::init_from_binary(std::string_view txt, bool unsigned_result) {
         if (ch2 == '1' || ch2 == '?') {
           // Set every bit at or above `nbits` (base plane; extra too for an
           // unknown sign), matching the pre-extended-then-shifted result.
-          const int     top_w    = static_cast<int>(nbits / 64);
-          const int     top_bit  = static_cast<int>(nbits % 64);
-          const int64_t top_mask = static_cast<int64_t>(~((uint64_t(1) << top_bit) - 1));
-          b[top_w] |= top_mask;
+          const int     top_w     = static_cast<int>(nbits / 64);
+          const int     top_bit   = static_cast<int>(nbits % 64);
+          const int64_t top_mask  = static_cast<int64_t>(~((uint64_t(1) << top_bit) - 1));
+          b[top_w]               |= top_mask;
           if (ch2 == '?') {
             e[top_w] |= top_mask;
           }
@@ -534,7 +534,11 @@ void Dlop::init_from_pyrope(std::string_view orig_txt) {
         ++skip_chars;
         if (skip_chars >= orig_txt.size() || std::string_view("bodx").find(lower(orig_txt[skip_chars])) == std::string_view::npos) {
           throw std::runtime_error(std::format("ERROR: {} a sign letter needs a radix letter: 0{}b, 0{}o, 0{}d or 0{}x\n",
-                                               orig_txt, sel_ch, sel_ch, sel_ch, sel_ch));
+                                               orig_txt,
+                                               sel_ch,
+                                               sel_ch,
+                                               sel_ch,
+                                               sel_ch));
         }
         sel_ch          = lower(orig_txt[skip_chars]);
         unsigned_result = !is_signed;
@@ -620,7 +624,7 @@ void Dlop::init_from_pyrope(std::string_view orig_txt) {
       case 'm': scale_pow2 = 20; break;
       case 'g': scale_pow2 = 30; break;
       case 't': scale_pow2 = 40; break;
-      default: break;
+      default : break;
     }
     if (scale_pow2 != 0) {
       --dec_end;  // drop the suffix from the magnitude scan
@@ -696,7 +700,7 @@ void Dlop::init_from_pyrope(std::string_view orig_txt) {
           throw std::runtime_error(std::format("ERROR: {} encoding could not use {}\n", orig_txt, c));
         }
         cur |= static_cast<uint64_t>(v) << sh;
-        sh += 4;
+        sh  += 4;
         if (sh == 64) {
           b[w++] = static_cast<int64_t>(cur);
           cur    = 0;
@@ -720,7 +724,8 @@ void Dlop::init_from_pyrope(std::string_view orig_txt) {
 
         auto char_sa = char_to_bits[static_cast<uint8_t>(c)];
         if (unlikely(char_sa > shift_mode)) {
-          throw std::runtime_error(std::format("ERROR: {} invalid syntax for number {} bits needed for '{}'", orig_txt, char_sa, c));
+          throw std::runtime_error(
+              std::format("ERROR: {} invalid syntax for number {} bits needed for '{}'", orig_txt, char_sa, c));
         }
         shl_base(shift_mode);
         or_base(v);
@@ -1674,9 +1679,9 @@ spool_ptr<Dlop> Dlop::merge_unknown(const std::vector<const Dlop*>& cands) {
     words = 1;
   }
 
-  auto result = make_result(Type::Integer, words);  // reconstruct zeroes both planes
-  int64_t* re = result->extra_mut();
-  int64_t* rb = result->base();
+  auto     result = make_result(Type::Integer, words);  // reconstruct zeroes both planes
+  int64_t* re     = result->extra_mut();
+  int64_t* rb     = result->base();
 
   for (int b = 0; b < words * 64; ++b) {
     bool any_unknown = false;
@@ -2148,7 +2153,7 @@ spool_ptr<Dlop> Dlop::sext_op(int from_bit) const {
   return dlop;
 }
 
-spool_ptr<Dlop> Dlop::get_mask_op() const {
+spool_ptr<Dlop> Dlop::unsigned_pattern_op() const {
   if (has_unknowns()) {
     // The minimal signed width can change with the realization. Keeping
     // source bits at a fixed width can invent known ones above the shorter
@@ -2176,8 +2181,8 @@ spool_ptr<Dlop> Dlop::get_mask_op() const {
   int64_t* re    = dlop->extra_mut();
   int64_t* rb    = dlop->base();
   for (int i = 0; i < words; ++i) {
-    rb[i] = (i < size) ? base()[i]  : -1;  // a negative value sign-extends base with 1s
-    re[i] = (i < size) ? extra()[i] : 0;   // unknown plane: no unknowns above stored width
+    rb[i] = (i < size) ? base()[i] : -1;  // a negative value sign-extends base with 1s
+    re[i] = (i < size) ? extra()[i] : 0;  // unknown plane: no unknowns above stored width
   }
   int top_word = nbits / 64;  // word holding bit `nbits`
   int top_bit  = nbits % 64;
@@ -2185,7 +2190,7 @@ spool_ptr<Dlop> Dlop::get_mask_op() const {
     rb[top_word] = 0;  // bit `nbits` is at a word boundary: clear the whole word
     re[top_word] = 0;
   } else {
-    int64_t m    = static_cast<int64_t>((uint64_t(1) << top_bit) - 1);
+    int64_t m     = static_cast<int64_t>((uint64_t(1) << top_bit) - 1);
     rb[top_word] &= m;
     re[top_word] &= m;
   }
@@ -2374,7 +2379,7 @@ spool_ptr<Dlop> Dlop::concat_op(const Dlop& other) const {
       return dlop;
     }
     auto shifted     = other.shl_op(self_bits);
-    auto masked_self = get_mask_op();
+    auto masked_self = unsigned_pattern_op();
     auto r           = shifted->or_op(masked_self);
     r->type          = Type::String;
     return r;
@@ -2388,7 +2393,7 @@ spool_ptr<Dlop> Dlop::concat_op(const Dlop& other) const {
   }
 
   auto shifted      = shl_op(other_bits);
-  auto masked_other = other.get_mask_op();
+  auto masked_other = other.unsigned_pattern_op();
   return shifted->or_op(masked_other);
 }
 
@@ -2421,7 +2426,7 @@ spool_ptr<Dlop> Dlop::concat_op(std::span<const Concat_lane> lanes) {
     if (l.bits < 0 || l.bits > kMaxBits - total || l.value == nullptr || !l.value->is_numeric()) {
       return nil();  // no bit window to assemble
     }
-    total += l.bits;
+    total       += l.bits;
     any_unknown |= l.value->has_unknowns();
   }
   if (total <= 0) {
@@ -2442,9 +2447,9 @@ spool_ptr<Dlop> Dlop::concat_op(std::span<const Concat_lane> lanes) {
 
   int off = total;
   for (const auto& l : lanes) {
-    const Dlop& v = *l.value;
-    const int   w = l.bits;
-    off -= w;
+    const Dlop& v  = *l.value;
+    const int   w  = l.bits;
+    off           -= w;
     if (w == 0) {
       continue;
     }
@@ -2465,25 +2470,25 @@ spool_ptr<Dlop> Dlop::concat_op(std::span<const Concat_lane> lanes) {
     // The mask is what turns a negative lane into its two's-complement window
     // (-1 with w=3 becomes 0b111). A non-negative lane already inside its
     // window needs none — the words above it are zero already.
-    const bool need_mask   = negative || vbits > w + 1;
-    const int  lane_words  = (w + 63) / 64;
-    const int  top_bit     = w % 64;
+    const bool     need_mask  = negative || vbits > w + 1;
+    const int      lane_words = (w + 63) / 64;
+    const int      top_bit    = w % 64;
     // Past the value's stored words BOTH planes sign-extend: base with the
     // value's sign, extra with the UNKNOWN sign (a value whose top stored bit
     // is unknown stays unknown all the way up). Filling extra with 0 would turn
     // those unknown bits into known ones — an unsound "this bit is 1" claim.
     // An unknown sign implies a set base sign, so the two fills stay consistent.
-    const uint64_t bfill = negative ? ~uint64_t(0) : uint64_t(0);
-    const uint64_t efill = (v.size > 0 && v.extra()[v.size - 1] < 0) ? ~uint64_t(0) : uint64_t(0);
+    const uint64_t bfill      = negative ? ~uint64_t(0) : uint64_t(0);
+    const uint64_t efill      = (v.size > 0 && v.extra()[v.size - 1] < 0) ? ~uint64_t(0) : uint64_t(0);
     for (int i = 0; i < lane_words; ++i) {
       uint64_t bw = (i < v.size) ? static_cast<uint64_t>(v.base()[i]) : bfill;
       uint64_t ew = (i < v.size) ? static_cast<uint64_t>(v.extra()[i]) : efill;
       if (need_mask && i == lane_words - 1 && top_bit != 0) {
         // Both planes take the same mask, keeping the "an unknown bit has
         // base == 1" invariant intact.
-        const uint64_t m = (uint64_t(1) << top_bit) - 1;
-        bw &= m;
-        ew &= m;
+        const uint64_t m  = (uint64_t(1) << top_bit) - 1;
+        bw               &= m;
+        ew               &= m;
       }
       or_bits_at(rb, words, bw, off + i * 64);
       if (re != nullptr) {
@@ -2525,7 +2530,7 @@ spool_ptr<Dlop> Dlop::adjust_bits(int amount) const {
         rb[top_word] = 0;
         re[top_word] = 0;
       } else {
-        int64_t m = static_cast<int64_t>((uint64_t(1) << top_bit) - 1);
+        int64_t m     = static_cast<int64_t>((uint64_t(1) << top_bit) - 1);
         rb[top_word] &= m;
         re[top_word] &= m;
       }
@@ -2940,9 +2945,9 @@ std::string Dlop::to_decimal_string() const {
     w[i] = static_cast<uint64_t>(mag->base()[i]);
   }
   // Repeatedly divide the whole magnitude by 1e9, collecting 9-digit groups.
-  constexpr uint64_t      base1e9 = 1000000000ULL;
-  std::vector<uint32_t>   groups;  // little-endian (least-significant first)
-  bool                    nonzero = true;
+  constexpr uint64_t    base1e9 = 1000000000ULL;
+  std::vector<uint32_t> groups;  // little-endian (least-significant first)
+  bool                  nonzero = true;
   while (nonzero) {
     unsigned __int128 rem = 0;
     for (int i = static_cast<int>(w.size()) - 1; i >= 0; --i) {
@@ -2962,9 +2967,9 @@ std::string Dlop::to_decimal_string() const {
   // Most-significant group unpadded; interior groups zero-padded to 9 digits.
   std::string out = std::to_string(groups.back());
   for (int i = static_cast<int>(groups.size()) - 2; i >= 0; --i) {
-    std::string g = std::to_string(groups[i]);
-    out += std::string(9 - g.size(), '0');
-    out += g;
+    std::string g  = std::to_string(groups[i]);
+    out           += std::string(9 - g.size(), '0');
+    out           += g;
   }
   return neg ? "-" + out : out;
 }

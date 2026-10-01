@@ -218,7 +218,7 @@ ScopePtr VCDWriter::prepare_register_scope(const std::string& scope, const std::
 
 VarPtr VCDWriter::create_registered_var(const std::string& name, VariableType type, unsigned size, const ScopePtr& scope,
                                         unsigned var_id, VarValue& init_value) const {
-  auto sz = [&size](unsigned def) { return (size ? size : def); };
+  auto   sz = [&size](unsigned def) { return (size ? size : def); };
   VarPtr pvar;
 
   switch (type) {
@@ -238,7 +238,7 @@ VarPtr VCDWriter::create_registered_var(const std::string& name, VariableType ty
       break;
 
     case VariableType::string: pvar = std::make_shared<VCDStringVariable>(name, type, sz(1), scope, var_id); break;
-    case VariableType::event:  pvar = std::make_shared<VCDScalarVariable>(name, type, 1, scope, var_id); break;
+    case VariableType::event : pvar = std::make_shared<VCDScalarVariable>(name, type, 1, scope, var_id); break;
 
     case VariableType::wire:
       if (!size) {
@@ -295,14 +295,14 @@ VarPtr VCDWriter::register_var(const std::string& scope, const std::string& name
 // -----------------------------
 VarPtr VCDWriter::register_passed_var(const std::string& scope, const std::string& name, VariableType type, unsigned size,
                                       const VarValue& init, bool duplicatenames_check) {
-  const std::string parentname = scope.substr(0, scope.find_last_of(scope_sep));
+  const std::string parentname    = scope.substr(0, scope.find_last_of(scope_sep));
   /*for unique ident::
    *if (scope has scope_sep)
    * then {extract parent name}
    */
-  ScopePtr     curscope      = prepare_register_scope(scope, name);
-  unsigned int unique_var_id = 0;
-  auto parentscope = scopes.begin();
+  ScopePtr          curscope      = prepare_register_scope(scope, name);
+  unsigned int      unique_var_id = 0;
+  auto              parentscope   = scopes.begin();
   for (auto e = scopes.begin(); e != scopes.end(); e++) {
     if ((*e)->name == parentname) {
       parentscope = e;
@@ -492,8 +492,7 @@ void VCDWriter::write_header() {
       // component walk below mishandles this when prev is 2+ levels deep -- its
       // prefix loop stops at prev's last separator, never credits the final
       // component, and closes/reopens the parent scope around its own child.
-      if (scope.size() > scope_prev.size() + scope_sep.size()
-          && scope.compare(0, scope_prev.size(), scope_prev) == 0
+      if (scope.size() > scope_prev.size() + scope_sep.size() && scope.compare(0, scope_prev.size(), scope_prev) == 0
           && scope.compare(scope_prev.size(), scope_sep.size(), scope_sep) == 0) {
         n_prev = scope_prev.size() + scope_sep.size();
       } else {

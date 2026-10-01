@@ -407,12 +407,12 @@ TEST(Slop_u_test, same_width_operand_slots_take_slop_u_bare) {
       Slop<20>::create_integer(0).set_mask_op_opt(0, 16, Slop<20>::create_integer(-1)).identical(Slop<20>::create_integer(0xffff)));
 
   // set_mask_op: both slots.
-  EXPECT_TRUE(base.set_mask_op(mask, value).identical(base.set_mask_op(mask.raw(), value.raw())));
+  EXPECT_TRUE(base.set_mask_op(value, 0, 4).identical(base.set_mask_op(value.raw(), 0, 4)));
 
   // member get_mask_op: the mask slot.
   const Slop<9> src = Slop<9>::create_integer(0xa5);
-  EXPECT_TRUE(src.get_mask_op(mask).identical(src.get_mask_op(mask.raw())));
-  EXPECT_TRUE(src.get_mask_op(mask).identical(Slop<9>::create_integer(0x5)));
+  EXPECT_TRUE(src.get_mask_op(0, 4).identical(src.get_mask_op(0, 4)));
+  EXPECT_TRUE(src.get_mask_op(0, 4).identical(Slop<9>::create_integer(0x5)));
 
   // not_op: the static form.
   EXPECT_TRUE(Slop<9>::not_op(value).identical(Slop<9>::not_op(value.raw())));
@@ -449,9 +449,8 @@ TEST(Slop_u_test, same_width_operand_slots_take_slop_u_bare) {
 TEST(Slop_u_test, slop_operand_get_mask_and_mux) {
   const Slop_u<8> v{0xa5};
 
-  EXPECT_TRUE(Slop<9>::get_mask_op(v, Slop<9>::create_integer(0x0f))
-                  .identical(Slop<9>::get_mask_op(v.raw(), Slop<9>::create_integer(0x0f))));
-  EXPECT_TRUE(Slop<9>::get_mask_op(v, Slop_u<8>{0x0f}).identical(Slop<9>::get_mask_op(v.raw(), Slop<9>::create_integer(0x0f))));
+  EXPECT_TRUE(Slop<9>::get_mask_op(v, 0, 4).identical(Slop<9>::get_mask_op(v.raw(), 0, 4)));
+  EXPECT_TRUE(Slop<9>::get_mask_op(v, 0, 4).identical(Slop<9>::get_mask_op(v.raw(), 0, 4)));
 
   const Slop_u<8> arm0{11};
   const Slop_u<8> arm1{22};
@@ -568,8 +567,8 @@ TEST(Slop_u_test, generated_member_mask_spellings_accept_mixed_operands) {
   EXPECT_TRUE(canonical_ok(base.clear_mask_op_opt(4, 8)));
 
   const Slop<9> mask = Slop<9>::create_integer(0xf0);
-  EXPECT_TRUE(Slop_u<8>::land(base.set_mask_op(mask, value)) == 0x35);
-  EXPECT_EQ(base.get_mask_op(mask).zext_to<4>().to_just_i64(), 0xa);
+  EXPECT_TRUE(base.set_mask_op(value, 4, 8) == 0x35);
+  EXPECT_EQ(base.get_mask_op(4, 8).raw().to_just_i64(), 0xa);
 }
 
 // Every op cgen emits, as a Slop_u RESULT. The value must match the lazy
@@ -619,13 +618,13 @@ TEST(Slop_u_test, slop_u_as_a_result_type) {
   EXPECT_TRUE(canonical_ok(Slop_u<8>::shl_op(a, 5)));
   EXPECT_TRUE(Slop_u<8>::shl_op(a, 5) == ((0xa5 << 5) & 0xff));
 
-  const auto gm = Slop_u<8>::get_mask_op(Slop<9>::create_integer(0xa5), Slop<9>::create_integer(0x0f));
+  const auto gm = Slop_u<8>::get_mask_op(Slop<9>::create_integer(0xa5), 0, 4);
   EXPECT_TRUE(gm == 0x5);
   EXPECT_TRUE(canonical_ok(gm));
   // The STATIC form packs unsigned, so a single selected bit is 0/1 here --
   // not the signed -1 the member form returns.
-  EXPECT_TRUE(Slop_u<8>::get_mask_op(Slop<9>::create_integer(0xa5), Slop<9>::create_integer(0x1)) == 1);
-  EXPECT_TRUE(canonical_ok(Slop_u<8>::get_mask_op(Slop<9>::create_integer(0xa5), Slop<9>::create_integer(0x1))));
+  EXPECT_TRUE(Slop_u<8>::get_mask_op(Slop<9>::create_integer(0xa5), 0, 1) == 1);
+  EXPECT_TRUE(canonical_ok(Slop_u<8>::get_mask_op(Slop<9>::create_integer(0xa5), 0, 1)));
 
   // sub_op: canonical only under the CALLER's x >= y obligation, which is the
   // range proof the bitwidth pass stamps as unsigned. In contract it is free

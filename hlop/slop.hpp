@@ -22,9 +22,11 @@
 #include <cstdint>
 #include <format>
 #include <initializer_list>
+#include <limits>
 #include <print>
 #include <random>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -457,8 +459,8 @@ public:
           // a bare `0s`/`0u` does not read past the string_view.
           const bool is_signed = sel_ch == 's';
           ++skip_chars;
-          if (skip_chars >= orig_txt.size() ||
-              std::string_view("bodx").find(lower(orig_txt[skip_chars])) == std::string_view::npos) {
+          if (skip_chars >= orig_txt.size()
+              || std::string_view("bodx").find(lower(orig_txt[skip_chars])) == std::string_view::npos) {
             throw std::runtime_error("ERROR: a sign letter needs a radix letter: 0ub/0uo/0ud/0ux or 0sb/0so/0sd/0sx");
           }
           sel_ch          = lower(orig_txt[skip_chars]);
@@ -1236,34 +1238,6 @@ public:
     return result;
   }
 
-  // Positive contiguous mask [lo, hi) detector — the shape every packed field
-  // access lowers to. Word-wise; false for a zero or gapped mask. Internal
-  // (trailing underscore): the fast paths of get_mask_op / set_mask_op.
-  static bool contiguous_range_(const Slop& m, int& lo, int& hi) {
-    lo = -1;
-    hi = -1;
-    for (int w = 0; w < n_words; ++w) {
-      const auto mw = static_cast<uint64_t>(m.base_[w]);
-      if (mw == 0) {
-        continue;
-      }
-      if (lo < 0) {
-        lo = w * 64 + __builtin_ctzll(mw);
-      }
-      hi = w * 64 + 64 - __builtin_clzll(mw);
-    }
-    if (lo < 0) {
-      return false;
-    }
-    for (int w = lo / 64; w <= (hi - 1) / 64; ++w) {
-      const uint64_t expect = range_word_mask_(w, lo, hi);
-      if ((static_cast<uint64_t>(m.base_[w]) & expect) != expect) {
-        return false;
-      }
-    }
-    return true;
-  }
-
   // The 64 bits of the contiguous mask [lo, hi) that live in word `w`. Only
   // words in [lo/64, (hi-1)/64] are asked for; every other word of the mask is
   // all-zero, so callers skip them instead of AND-ing with 0.
@@ -1307,7 +1281,30 @@ public:
     return result;
   }
 
-  Slop get_mask_op() const {
+  Slop get_mask_op(int lo, int hi) const { return get_mask_op_opt(*this, lo, hi); }
+  Slop get_mask_op(int bit) const {
+    if (bit < 0 || bit == std::numeric_limits<int>::max()) {
+      throw std::invalid_argument("invalid bit position");
+    }
+    return get_mask_op(bit, bit + 1);
+  }
+  template <Slop_operand X>
+  static Slop get_mask_op(const X& x, int lo, int hi) {
+    return get_mask_op_opt(x, lo, hi);
+  }
+  template <Slop_operand V>
+  Slop set_mask_op(const V& value, int lo, int hi) const {
+    return set_mask_op_opt(lo, hi, value);
+  }
+  template <Slop_operand V>
+  Slop set_mask_op(const V& value, int bit) const {
+    if (bit < 0 || bit == std::numeric_limits<int>::max()) {
+      throw std::invalid_argument("invalid bit position");
+    }
+    return set_mask_op(value, bit, bit + 1);
+  }
+
+  Slop unsigned_pattern_op() const {
     nil_check_();
     if (!is_negative()) {
       return *this;
@@ -1340,159 +1337,6 @@ public:
     return result;
   }
 
-  // get_mask_op(mask): copy the bits selected by `mask` into a new integer,
-  // packed LSB-first in their original order. Negative mask = "everything
-  // except the lowest |mask| bits". The pack is UNSIGNED: the result is never
-  // negative, a lone selected set bit included (it used to read back as the
-  // signed -1, which let a bit pattern pose as a sign and made every consumer
-  // re-correct the one-bit case by hand).
-  //
-  // The mask goes through Slop_arg, so a Slop_u<N-1> mask is accepted with no
-  // conversion. A canonical mask is never negative, so it always takes the
-  // contiguous fast path's `!is_negative()` arm.
-  template <Slop_operand MT>
-  Slop get_mask_op(const MT& mask_a) const {
-    static_assert(Slop_arg<MT>::bits == N, "get_mask_op mask must be at this width (Slop<N> or Slop_u<N-1>)");
-    const auto& mask = sref_(mask_a);
-    nil_check_(mask);
-
-    // FAST PATH — positive contiguous mask [lo, hi): the extract is a
-    // word-wise shift (see set_mask_op's twin note; the per-bit walk below
-    // dominated wide-datapath simulation).
-    //
-    // Nothing here reads a bit count of the SOURCE, so with the constant mask
-    // cgen emits for a Get_mask cell the whole call folds to a shift and an
-    // AND at the call site. That is why the general gather lives in its own
-    // function below: inlined here, its per-bit loops made this body too big
-    // for clang to inline at all, and every Get_mask paid a real call.
-    if (!mask.is_negative()) {
-      int lo = 0, hi = 0;
-      if (contiguous_range_(mask, lo, hi)) {
-        return extract_bits_(*this, lo, hi - lo);
-      }
-    }
-
-    return get_mask_gather_(mask);
-  }
-
-  // The general (non-contiguous or negative) mask gather: walk the selected
-  // positions and pack them LSB-first. Deliberately out of line -- see above.
-  [[gnu::noinline]] Slop get_mask_gather_(const Slop& mask) const {
-    bool mask_neg           = mask.is_negative();
-    int  mask_bits          = mask.get_signed_bits();
-    int  positive_mask_bits = mask_neg ? (mask_bits - 1) : mask_bits;
-    int  src_bits           = get_signed_bits();
-
-    Slop result;
-    int  out_bit = 0;
-    for (int i = 0; i < positive_mask_bits; ++i) {
-      bool selected = mask_neg ? !mask.bit_test(i) : mask.bit_test(i);
-      if (!selected) {
-        continue;
-      }
-      // A positive mask may select bit positions ABOVE the source's minimal
-      // width; those are the sign bit (0 for non-negative, 1 for negative), so
-      // do NOT cap at src_bits. bit_test already sign-extends past storage, so
-      // get_mask(-1, 0xff) yields 0xff rather than 1. (Slop is fixed width and
-      // stores full sign extension, so no explicit is_negative() read is needed
-      // like in Dlop's minimally-sized representation.)
-      bool b = bit_test(i);
-      if (b) {
-        int word = out_bit / 64;
-        int bit  = out_bit % 64;
-        if (word < n_words) {
-          result.base_[word] |= int64_t(1) << bit;
-        }
-      }
-      ++out_bit;
-    }
-    if (mask_neg) {
-      for (int i = positive_mask_bits; i < src_bits; ++i) {
-        if (bit_test(i)) {
-          int word = out_bit / 64;
-          int bit  = out_bit % 64;
-          if (word < n_words) {
-            result.base_[word] |= int64_t(1) << bit;
-          }
-        }
-        ++out_bit;
-      }
-    }
-    return result;
-  }
-
-  // Mixed-width get_mask: ONE LGraph Get_mask cell -> ONE Slop call.
-  //
-  // Same bit-selection semantics as the member form above, but the value and the
-  // mask come in at ANY widths and the result is materialized at N, so cgen emits
-  // no per-operand conversion. On the dino CPU the member form cost TWO emitted
-  // conversions per cell (operand read + result trim) -- 1039 of the 1842 that
-  // survived the first 1-1 pass.
-  //
-  // Same UNSIGNED LSB-first pack as the member form, single selected bit
-  // included: the LGraph/Pyrope Get_mask with a positive mask zero-extends
-  // (`#[N]`), and only an explicit `#sext` may be negative.
-  template <Slop_operand XT, Slop_operand MT>
-  static Slop get_mask_op(const XT& xa, const MT& ma) {
-    const auto& x    = sref_(xa);
-    const auto& mask = sref_(ma);
-    // FAST PATH — positive contiguous mask [lo, hi): a word-wise shift of x,
-    // zero-filled above (the unsigned LSB-first pack this form is defined to
-    // produce, single selected bit included). Kept small and free of any
-    // source bit count so a constant mask folds to a shift + AND; the per-bit
-    // walk lives out of line for the same reason as the member form's.
-    if (!mask.is_negative()) {
-      int lo = 0, hi = 0;
-      if (Slop<Slop_arg<MT>::bits>::contiguous_range_(mask, lo, hi)) {
-        return extract_bits_(x, lo, hi - lo);
-      }
-    }
-
-    return get_mask_gather_(x, mask);
-  }
-
-  template <int A, int M>
-  [[gnu::noinline]] static Slop get_mask_gather_(const Slop<A>& x, const Slop<M>& mask) {
-    const bool mask_neg           = mask.is_negative();
-    const int  mask_bits          = mask.get_signed_bits();
-    const int  positive_mask_bits = mask_neg ? (mask_bits - 1) : mask_bits;
-    const int  src_bits           = x.get_signed_bits();
-
-    Slop result;
-    int  out_bit = 0;
-    auto put     = [&result](int ob) {
-      const int word = ob / 64;
-      if (word < n_words) {
-        result.base_[word] |= int64_t(1) << (ob % 64);
-      }
-    };
-    for (int i = 0; i < positive_mask_bits; ++i) {
-      const bool selected = mask_neg ? !mask.bit_test(i) : mask.bit_test(i);
-      if (!selected) {
-        continue;
-      }
-      if (x.bit_test(i)) {  // bit_test sign-extends past storage
-        put(out_bit);
-      }
-      ++out_bit;
-    }
-    if (mask_neg) {
-      for (int i = positive_mask_bits; i < src_bits; ++i) {
-        if (x.bit_test(i)) {
-          put(out_bit);
-        }
-        ++out_bit;
-      }
-    }
-    if (out_bit == 1) {
-      result.base_[0] &= 1;  // unsigned 0/1, NOT the member form's signed -1
-      for (int i = 1; i < n_words; ++i) {
-        result.base_[i] = 0;
-      }
-    }
-    return result;
-  }
-
   // Mux with an already-decoded integer index. The Slop-selector form forces the
   // caller to materialize the index as a full Slop at the RESULT width, which for
   // a wide mux meant building a multi-word constant to carry a 0/1 select.
@@ -1507,128 +1351,8 @@ public:
     return mux_op(idx, std::span<const Slop>(values.begin(), values.size()));
   }
 
-  // set_mask_op(mask, value): replace the bits selected by `mask` with bits
-  // taken LSB-first from `value`; bits not selected stay unchanged. Mirrors
-  // Lconst::set_mask_op for the non-string, non-unknown path.
-  template <Slop_operand MT, Slop_operand VT>
-  Slop set_mask_op(const MT& mask_a, const VT& value_a) const {
-    static_assert(Slop_arg<MT>::bits == N && Slop_arg<VT>::bits == N,
-                  "set_mask_op operands must be at this width (Slop<N> or Slop_u<N-1>)");
-    const auto& mask  = sref_(mask_a);
-    const auto& value = sref_(value_a);
-    nil_check_(mask);
-    I(!value.is_nil());
-    if (mask.is_known_false()) {
-      return *this;
-    }
-
-    // FAST PATH — a positive CONTIGUOUS mask [lo, hi): the shape every packed
-    // field write lowers to. The generic loop below walks EVERY bit of the
-    // result; on wide datapath Slops (the 500-1000+ bit VPU vectors of
-    // lhdsuite's minion) that per-bit walk dominated whole-design simulation.
-    // A contiguous range is a word-wise splice, which is exactly what
-    // set_mask_op_opt does. Bit-for-bit identical to the loop (value bits map
-    // LSB-first onto the selected range; bits at/above out_bits never write
-    // and never consume value bits, hence the `hi` cap).
-    //
-    // The cap is `min(hi, N)`, not `min(hi, out_bits)`: for a positive mask
-    // out_bits is min(N, max(src_bits, hi+1)), which is >= hi whenever hi <= N
-    // and exactly N when hi > N -- so the two agree, and the fast path does
-    // not have to compute the source/value/mask bit counts at all (three clz
-    // sweeps that a constant mask cannot fold away, since src and value are
-    // runtime values).
-    if (!mask.is_negative()) {
-      int lo = 0, hi = 0;
-      if (contiguous_range_(mask, lo, hi)) {
-        return set_mask_op_opt(lo, hi > N ? N : hi, value);
-      }
-    }
-
-    return set_mask_scatter_(mask, value);
-  }
-
-  // The general (non-contiguous or negative) mask scatter. Out of line so the
-  // fast path above stays inlinable -- same reasoning as get_mask_gather_.
-  [[gnu::noinline]] Slop set_mask_scatter_(const Slop& mask, const Slop& value) const {
-    bool mask_neg           = mask.is_negative();
-    int  mask_bits          = mask.get_signed_bits();
-    int  positive_mask_bits = mask_neg ? (mask_bits - 1) : mask_bits;
-
-    int src_bits = get_signed_bits();
-    int val_bits = value.get_signed_bits();
-    int out_bits = std::max(src_bits, mask_bits);
-    if (mask_neg) {
-      out_bits = std::max(out_bits, positive_mask_bits + val_bits);
-    }
-    if (out_bits > N) {
-      out_bits = N;
-    }
-
-    // Start from `this` so bits not selected by the mask — including the
-    // sign-extension region beyond src_bits — carry through unchanged. The
-    // loop then overwrites just the bits the mask selects.
-    Slop result    = *this;
-    int  value_pos = 0;
-    for (int i = 0; i < out_bits; ++i) {
-      bool from_value;
-      if (i < positive_mask_bits) {
-        bool mb    = mask.bit_test(i);
-        from_value = mask_neg ? !mb : mb;
-      } else {
-        from_value = mask_neg;
-      }
-      if (!from_value) {
-        continue;
-      }
-      bool the_bit = value.bit_test(value_pos);
-      ++value_pos;
-      int word = i / 64;
-      int bit  = i % 64;
-      if (word < n_words) {
-        if (the_bit) {
-          result.base_[word] |= (int64_t(1) << bit);
-        } else {
-          result.base_[word] &= ~(int64_t(1) << bit);
-        }
-      }
-    }
-    return result;
-  }
-
-  // --- Contiguous-range mask reads and writes (`_opt`) ---
-  //
-  // `_opt` marks an OPTIMIZED SPECIAL CASE, not an LGraph cell: unlike
-  // set_mask_op / get_mask_op these have no Set_mask / Get_mask counterpart in
-  // livehd graph/cell.* to keep name-for-name in sync. They are those ops
-  // narrowed to the mask shape a packed-field access always has — one
-  // contiguous run of ones.
-  //
-  // set_mask_op already fast-paths that shape, but the CALLER still has to
-  // materialize the mask, and the callee still has to rediscover its range on
-  // every execution. On a wide datapath that is expensive for what it says:
-  //
-  //   v.set_mask_op(Slop<544>::from_pyrope("0x0..0ffff..ffff0000000000000000"),
-  //                 Slop<544>::create_integer(0))
-  //
-  // pays for two nine-word constants, a get_signed_bits(), a ctz/clz sweep over all
-  // nine mask words and a nine-word contiguity check — to express "clear bits
-  // 64..255", which the code generator knew literally. Spelled directly:
-  //
-  //   v.clear_mask_op_opt(64, 256)
-  //
-  // With literal bounds (what cgen emits) the whole word walk constant-folds:
-  // only the words the range actually touches survive.
-  //
-  // THE RANGE IS HALF-OPEN [lo, hi) — bit `lo` is included, bit `hi` is not.
-  // Same convention as contiguous_range_() above and Dlop::get_mask_range().
-  //
-  // Bit-exact with the general form for every 0 <= lo <= hi <= N:
-  //   x.set_mask_op_opt(lo, hi, value) == x.set_mask_op(m, value)
-  //   x.clear_mask_op_opt(lo, hi)      == x.set_mask_op(m, create_integer(0))
-  // where `m` is the positive Slop<N> holding exactly bits [lo, hi). An empty
-  // range (hi <= lo) returns *this, matching set_mask_op's zero-mask early-out.
-  // The type_ tag and every bit outside [lo, hi) — including the sign-extension
-  // region above get_signed_bits() — carry through untouched, as in set_mask_op.
+  // Bit ranges are half-open [lo, hi). Sparse selections must be expanded
+  // by the caller into individual ranges; there is no mask-valued API.
 
   // Replace bits [lo, hi) with the low (hi - lo) bits of `value`, value's LSB
   // landing at bit `lo`. `value` is read SIGNED: a range wider than the value's
@@ -1738,17 +1462,7 @@ public:
     }
   }
 
-  // get_mask_op_opt(x, lo, hi): bits [lo, hi) of `x`, LSB-aligned into Slop<N>.
-  // The READ counterpart of set_mask_op_opt — the same half-open range, and the
-  // same reason to exist: `x.get_mask_op(m)` makes the caller materialize `m`
-  // (a from_pyrope string parse per cycle once it is wider than 64 bits) and
-  // then makes the callee rediscover [lo, hi) with a ctz/clz sweep and a
-  // contiguity check, all to say what cgen knew literally.
-  //
-  // ONE non-empty range only (hi > lo, the shape cgen emits and the shape a
-  // packed-field read has), so there is no empty-mask early-out: like every
-  // other get_mask_op form this is the UNSIGNED LSB-first pack the Get_mask
-  // cell is defined to produce, so a one-bit range yields 0/1.
+  // Extract the half-open range [lo, hi).
   //
   // WITH LITERAL BOUNDS — always, from cgen — the whole body folds: `len`,
   // every word index and every shift count are constants, the word loops
@@ -1769,12 +1483,6 @@ public:
   //             the logical shift (UBFX), always canonical. See the forwarder
   //             on Slop_u.
   //
-  // Bit-exact with `Slop<N>::get_mask_op(x, m)` for every 0 <= lo < hi with
-  // hi - lo <= N, where `m` holds exactly bits [lo, hi) — EXCEPT for that
-  // signed landing at len == N, which the mask form (a pure zero-extending
-  // pack) cannot express: it would deposit a Slop<N> whose storage contradicts
-  // its own sign bit, which every signed read (is_negative, lt_op, sra_op)
-  // would then get wrong.
   template <Slop_operand XT>
   [[gnu::always_inline]] static inline Slop get_mask_op_opt(const XT& xa, int lo, int hi) {
     const auto& x = sref_(xa);
@@ -1857,7 +1565,7 @@ public:
       return *this;
     }
     auto shifted = shl_op(other_bits);
-    auto masked  = other.get_mask_op();
+    auto masked  = other.unsigned_pattern_op();
     return shifted.or_op(masked);
   }
 
@@ -2937,6 +2645,29 @@ public:
     return from_canonical_(Carrier::get_mask_op_opt(x, lo, hi));
   }
 
+  Slop_u get_mask_op(int lo, int hi) const { return get_mask_op_opt(*this, lo, hi); }
+  Slop_u get_mask_op(int bit) const {
+    if (bit < 0 || bit == std::numeric_limits<int>::max()) {
+      throw std::invalid_argument("invalid bit position");
+    }
+    return get_mask_op(bit, bit + 1);
+  }
+  template <Slop_operand X>
+  static Slop_u get_mask_op(const X& x, int lo, int hi) {
+    return get_mask_op_opt(x, lo, hi);
+  }
+  template <Slop_operand V>
+  Slop_u set_mask_op(const V& value, int lo, int hi) const {
+    return set_mask_op_opt(lo, hi, value);
+  }
+  template <Slop_operand V>
+  Slop_u set_mask_op(const V& value, int bit) const {
+    if (bit < 0 || bit == std::numeric_limits<int>::max()) {
+      throw std::invalid_argument("invalid bit position");
+    }
+    return set_mask_op(value, bit, bit + 1);
+  }
+
   template <Slop_operand B>
   static Slop_u clear_mask_op_opt(const B& base, int lo, int hi) {
     static_assert(Slop_arg<B>::canonical, "clear_mask_op_opt needs a canonical base to stay canonical");
@@ -2956,16 +2687,6 @@ public:
   }
 
   Slop_u clear_mask_op_opt(int lo, int hi) const { return Slop_u::clear_mask_op_opt(*this, lo, hi); }
-
-  template <Slop_operand M, Slop_operand V>
-  Carrier set_mask_op(const M& mask, const V& value) const {
-    return v_.set_mask_op(mask, value);
-  }
-
-  template <Slop_operand M>
-  Carrier get_mask_op(const M& mask) const {
-    return v_.get_mask_op(mask);
-  }
 
   // The three below each cost ONE mask, unlike everything above. They are here
   // anyway because the mask REPLACES a conversion the caller was already
@@ -2989,14 +2710,6 @@ public:
   template <Slop_operand X, Slop_operand Amount>
   static Slop_u shl_op(const X& x, const Amount& amount) {
     return from_canonical_(Carrier::shl_op(x, amount).template zext_to<N, N + 1>());
-  }
-
-  // Slop::get_mask_op produces the unsigned LSB-first pack, so this is the
-  // natural unsigned cell. The mask is a runtime operand, so the pack width is
-  // not known at compile time: mask.
-  template <Slop_operand X, Slop_operand M>
-  static Slop_u get_mask_op(const X& x, const M& mask) {
-    return from_canonical_(Carrier::get_mask_op(x, mask).template zext_to<N, N + 1>());
   }
 
   // --- Comparisons ---

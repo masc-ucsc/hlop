@@ -24,29 +24,29 @@ namespace {
 using S = Slop<200>;  // headroom well past one 64-bit word
 
 struct Case {
-  const char* lit;      // pyrope literal, parsed by BOTH classes
+  const char* lit;  // pyrope literal, parsed by BOTH classes
   int         digits;
   bool        sep;
   bool        upper;
-  const char* dec;      // expected to_decimal(digits, sep)
-  const char* hex;      // expected to_hex(digits, sep, upper)
-  const char* bin;      // expected to_binary(digits, sep)
+  const char* dec;  // expected to_decimal(digits, sep)
+  const char* hex;  // expected to_hex(digits, sep, upper)
+  const char* bin;  // expected to_binary(digits, sep)
 };
 
 TEST(FormatApi, SlopDlopParity) {
   const std::vector<Case> cases = {
-      {"255", 0, false, false, "255", "ff", "11111111"},
-      {"255", 4, false, false, "0255", "00ff", "11111111"},
-      {"255", 12, true, false, "000_000_000_255", "0000_0000_00ff", "0000_1111_1111"},
-      {"255", 0, false, true, "255", "FF", "11111111"},
-      {"0", 0, false, false, "0", "0", "0"},
-      {"0", 4, false, false, "0000", "0000", "0000"},
-      {"1234567", 0, true, false, "1_234_567", "12_d687", "1_0010_1101_0110_1000_0111"},
-      {"-255", 6, false, false, "-000255", "-0000ff", ""},  // bin: skip (2c view)
+      {                   "255",  0, false, false,                            "255",                       "ff",                   "11111111"},
+      {                   "255",  4, false, false,                           "0255",                     "00ff",                   "11111111"},
+      {                   "255", 12,  true, false,                "000_000_000_255",           "0000_0000_00ff",             "0000_1111_1111"},
+      {                   "255",  0, false,  true,                            "255",                       "FF",                   "11111111"},
+      {                     "0",  0, false, false,                              "0",                        "0",                          "0"},
+      {                     "0",  4, false, false,                           "0000",                     "0000",                       "0000"},
+      {               "1234567",  0,  true, false,                      "1_234_567",                  "12_d687", "1_0010_1101_0110_1000_0111"},
+      {                  "-255",  6, false, false,                        "-000255",                  "-0000ff",                           ""}, // bin: skip (2c view)
       // > 64 bits: 2^76 + 0xAB — the case a 64-bit round-trip truncates.
-      {"0x100000000000000000AB", 0, false, false, "75557863725914323419307", "100000000000000000ab", ""},
-      {"0x100000000000000000AB", 0, true, true, "75_557_863_725_914_323_419_307", "1000_0000_0000_0000_00AB", ""},
-      {"0x100000000000000000AB", 24, false, false, "075557863725914323419307", "0000100000000000000000ab", ""},
+      {"0x100000000000000000AB",  0, false, false,        "75557863725914323419307",     "100000000000000000ab",                           ""},
+      {"0x100000000000000000AB",  0,  true,  true, "75_557_863_725_914_323_419_307", "1000_0000_0000_0000_00AB",                           ""},
+      {"0x100000000000000000AB", 24, false, false,       "075557863725914323419307", "0000100000000000000000ab",                           ""},
   };
   for (const auto& c : cases) {
     auto d = Dlop::from_pyrope(c.lit);

@@ -17,6 +17,11 @@
 // Self-contained: depends only on slop.hpp + the C++23 standard library + POSIX
 // (fork/dirent/mkdir), so the host-compiled sim driver links with no extra deps.
 
+#include <dirent.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
 #include <algorithm>
 #include <array>
 #include <cerrno>
@@ -25,16 +30,12 @@
 #include <concepts>
 #include <cstdint>
 #include <cstdlib>
-#include <dirent.h>
 #include <fstream>
 #include <functional>
 #include <map>
 #include <sstream>
 #include <string>
 #include <string_view>
-#include <sys/stat.h>
-#include <sys/wait.h>
-#include <unistd.h>
 #include <vector>
 
 #include "slop.hpp"
@@ -207,11 +208,11 @@ inline std::string json_escape(std::string_view s) {
   for (char c : s) {
     switch (c) {
       case '\\': o += "\\\\"; break;
-      case '"': o += "\\\""; break;
+      case '"' : o += "\\\""; break;
       case '\n': o += "\\n"; break;
       case '\r': o += "\\r"; break;
       case '\t': o += "\\t"; break;
-      default: o += c;
+      default  : o += c;
     }
   }
   return o;
@@ -239,8 +240,8 @@ inline std::map<std::string, std::string> read_str_map(const std::string& path) 
   }
   std::stringstream ss;
   ss << f.rdbuf();
-  std::string s = ss.str();
-  size_t      i = 0;
+  std::string s        = ss.str();
+  size_t      i        = 0;
   auto        next_str = [&](std::string& out) -> bool {
     while (i < s.size() && s[i] != '"') {
       ++i;
@@ -257,7 +258,7 @@ inline std::map<std::string, std::string> read_str_map(const std::string& path) 
           case 'n': out += '\n'; break;
           case 'r': out += '\r'; break;
           case 't': out += '\t'; break;
-          default: out += n;
+          default : out += n;
         }
       } else {
         out += s[i];
@@ -277,9 +278,7 @@ inline std::map<std::string, std::string> read_str_map(const std::string& path) 
 }
 
 // ── checkpoint directory management ──────────────────────────────────────────
-inline std::string ckpt_path(const std::string& base, long cycle) {
-  return base + "/ckp" + std::to_string(cycle);
-}
+inline std::string ckpt_path(const std::string& base, long cycle) { return base + "/ckp" + std::to_string(cycle); }
 
 // POSIX recursive mkdir (ignores EEXIST). std::filesystem is avoided so the
 // header-only driver build has no extra link dependency.
@@ -432,8 +431,8 @@ inline uint64_t    fnv1a(uint64_t h, std::string_view s) {
 }
 inline uint64_t fnv1a_u64(uint64_t h, uint64_t v) {
   for (int i = 0; i < 8; ++i) {
-    h ^= (v & 0xff);
-    h *= kFnvPrime;
+    h  ^= (v & 0xff);
+    h  *= kFnvPrime;
     v >>= 8;
   }
   return h;

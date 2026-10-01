@@ -7,8 +7,10 @@
 #include <cstdint>
 #include <cstring>
 #include <initializer_list>
+#include <limits>
 #include <memory>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -493,7 +495,7 @@ public:
   // from_pyrope on a malformed literal (the failure is NOT cached). The cached
   // Dlop owns its own words via the immortal raw_ptr_pool, so the cache is safe
   // at thread teardown.
-  static const Dlop& from_pyrope_cached(std::string_view txt);
+  static const Dlop&     from_pyrope_cached(std::string_view txt);
   static spool_ptr<Dlop> from_ref(std::string_view txt);
   static spool_ptr<Dlop> invalid();
 
@@ -525,7 +527,7 @@ public:
   uint64_t hash() const;
   // Words that survive sign-extension trimming of BOTH planes (what normalize
   // would shrink to). hash() keys on it so equal values hash equal at any size.
-  int minimal_word_count() const;
+  int      minimal_word_count() const;
 
 protected:
   // --- Integer-amount op kernels ---
@@ -639,7 +641,7 @@ public:
   // numeric constant node). Non-numeric / unknown bit count → invalid.
   spool_ptr<Dlop> sext_op(const Dlop& bits) const;
   spool_ptr<Dlop> sext_op(spool_ptr<Dlop> bits) const { return sext_op(*bits); }
-  spool_ptr<Dlop> get_mask_op() const;
+  spool_ptr<Dlop> unsigned_pattern_op() const;
 
   // RANGE forms, the shape every real mask has (the Slop twins are
   // get_mask_op_opt / set_mask_op_opt). Bits [lo, hi), half-open, LSB-aligned
@@ -647,6 +649,20 @@ public:
   // mask VALUE for the callee to rediscover with a ctz/clz sweep -- which for a
   // wide mask also meant parsing a multi-word literal. An empty range (hi <= lo)
   // reads as 0 and writes nothing.
+  spool_ptr<Dlop> get_mask_op(int lo, int hi) const { return get_mask_op_opt(lo, hi); }
+  spool_ptr<Dlop> get_mask_op(int bit) const {
+    if (bit < 0 || bit == std::numeric_limits<int>::max()) {
+      throw std::invalid_argument("invalid bit position");
+    }
+    return get_mask_op(bit, bit + 1);
+  }
+  spool_ptr<Dlop> set_mask_op(const Dlop& value, int lo, int hi) const { return set_mask_op_opt(lo, hi, value); }
+  spool_ptr<Dlop> set_mask_op(const Dlop& value, int bit) const {
+    if (bit < 0 || bit == std::numeric_limits<int>::max()) {
+      throw std::invalid_argument("invalid bit position");
+    }
+    return set_mask_op(value, bit, bit + 1);
+  }
   spool_ptr<Dlop> get_mask_op_opt(int lo, int hi) const;
   spool_ptr<Dlop> set_mask_op_opt(int lo, int hi, const Dlop& value) const;
   // Make the bits selected by `mask` UNKNOWN, keeping every other bit. Unlike
@@ -791,7 +807,7 @@ public:
 
   // Bit ENVELOPE (instance form): the all-ones mask covering this value's
   // magnitude bits, never narrower than one bit (a safe over-approximation).
-  spool_ptr<Dlop>                  get_mask_value() const;
+  spool_ptr<Dlop> get_mask_value() const;
 
   // The half-open [lo, hi) range of the single contiguous 1-run in base, or
   // (-1, -1) when there is none. (The multi-run get_mask_range_pairs() is gone:

@@ -147,9 +147,9 @@ class VCDWriter {
   std::unordered_map<VarPtr, VarValue> vars_prevs;
 
   // state
-  bool closed;
-  bool dumping;
-  bool registering;
+  bool         closed;
+  bool         dumping;
+  bool         registering;
   // gen var idents (internal names)
   unsigned     next_var_id;
   VarSearchPtr search;

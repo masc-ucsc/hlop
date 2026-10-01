@@ -122,44 +122,29 @@ TEST_F(EvalSlopTest, eval_sra) {
   EXPECT_TRUE(out.is_known_eq(V32::create_integer(-4)));
 }
 
-TEST_F(EvalSlopTest, eval_set_mask_zero_mask) {
-  auto base = V8::create_integer(0xFF);
-  auto mask = V8::create_integer(0);
-  auto val  = V8::create_integer(0xAA);
-  auto out  = hlop::eval_set_mask(base, mask, val);
-  EXPECT_TRUE(out.is_known_eq(base));
-}
-
-TEST_F(EvalSlopTest, eval_set_mask_low_nibble) {
-  auto base = V32::from_pyrope("0xFFF");
-  auto mask = V32::from_pyrope("0x0F");
-  auto val  = V32::from_pyrope("0xa");
-  auto out  = hlop::eval_set_mask(base, mask, val);
-  EXPECT_TRUE(out.is_known_eq(V32::from_pyrope("0xFFa")));
-}
-
-// Non-contiguous mask: get_mask is a gather/pack, not an AND. Selecting the two
-// separated nibbles of 0xABCD with 0xF0F concatenates them low-first -> 0xBD
-// (a plain AND would wrongly yield 0x0B0D).
-TEST_F(EvalSlopTest, eval_get_mask_non_contiguous) {
-  auto out = hlop::eval_get_mask(V32::from_pyrope("0xABCD"), V32::from_pyrope("0xF0F"));
-  EXPECT_TRUE(out.is_known_eq(V32::from_pyrope("0xBD")));
-  // Documented example: extract bits 8..11 of 0xFEED -> 0xE.
-  auto out2 = hlop::eval_get_mask(V32::from_pyrope("0xFEED"), V32::from_pyrope("0xF00"));
-  EXPECT_TRUE(out2.is_known_eq(V32::from_pyrope("0xE")));
-}
-
-// Non-contiguous mask: set_mask is a scatter (consume value's low bits into the
-// mask-selected positions), not (base&~mask)|(value&mask). 0xABC scattered into
-// the two nibbles of 0xFFF selected by 0xF0F -> 0xBFC (the in-place form would
-// wrongly yield 0xAFC).
-TEST_F(EvalSlopTest, eval_set_mask_non_contiguous) {
-  auto base = V32::from_pyrope("0xFFF");
-  auto mask = V32::from_pyrope("0xF0F");
-  auto val  = V32::from_pyrope("0xABC");
-  auto out  = hlop::eval_set_mask(base, mask, val);
+TEST_F(EvalSlopTest, eval_mask_ranges) {
+  const auto base = V32::from_pyrope("0xFFF");
+  const auto val  = V32::from_pyrope("0xABC");
+  EXPECT_TRUE(hlop::eval_set_mask(base, val, 0, 0).is_known_eq(base));
+  EXPECT_TRUE(hlop::eval_set_mask(base, val, 0, 4).is_known_eq(V32::from_pyrope("0xFFC")));
+  EXPECT_TRUE(hlop::eval_get_mask(V32::from_pyrope("0xFEED"), 8, 12).is_known_eq(V32::from_pyrope("0xE")));
+  EXPECT_TRUE(hlop::eval_get_mask(val, 2).is_known_eq(V32::create_integer(1)));
+  // Sparse selections are composed from ranges, never represented by a mask.
+  auto out = hlop::eval_set_mask(base, hlop::eval_get_mask(val, 0, 4), 0, 4);
+  out      = hlop::eval_set_mask(out, hlop::eval_get_mask(val, 4, 8), 8, 12);
   EXPECT_TRUE(out.is_known_eq(V32::from_pyrope("0xBFC")));
 }
+
+template <class V>
+concept HasMaskValueRead = requires(V v) { v.get_mask_op(v); };
+template <class V>
+concept HasMaskValueWrite = requires(V v) { v.set_mask_op(v, v); };
+static_assert(!HasMaskValueRead<Dlop>);
+static_assert(!HasMaskValueWrite<Dlop>);
+static_assert(!HasMaskValueRead<Slop<32>>);
+static_assert(!HasMaskValueWrite<Slop<32>>);
+static_assert(!HasMaskValueRead<Slop_u<31>>);
+static_assert(!HasMaskValueWrite<Slop_u<31>>);
 
 // --- Multi-sink ops ---
 
@@ -1089,4 +1074,27 @@ TEST_F(EvalDlopTest, equivalence_mux) {
 
   EXPECT_EQ(dres.outputs[0]->to_just_i64(), sres.to_just_i64());
   EXPECT_EQ(dres.outputs[0]->to_just_i64(), 200);
+}
+
+TEST_F(EvalDlopTest, selection_ranges_and_bits) {
+  hlop::DCall read{
+      .op     = hlop::Ntype_op::Get_mask,
+      .inputs = {{.value = V("0xab")}, {.value = Vi(4)}, {.value = Vi(8)}}
+  };
+  EXPECT_EQ(ctx.execute(read).outputs[0]->to_just_i64(), 10);
+  read.inputs.pop_back();
+  read.inputs[1].value = Vi(3);
+  EXPECT_EQ(ctx.execute(read).outputs[0]->to_just_i64(), 1);
+  read.inputs[1].pin = "mask";
+  EXPECT_THROW(ctx.execute(read), std::invalid_argument);
+  hlop::DCall write{
+      .op     = hlop::Ntype_op::Set_mask,
+      .inputs = {{.pin = "a", .value = V("0xab")},
+                 {.pin = "value", .value = Vi(3)},
+                 {.pin = "lo", .value = Vi(4)},
+                 {.pin = "hi", .value = Vi(8)}}
+  };
+  EXPECT_EQ(ctx.execute(write).outputs[0]->to_just_i64(), 0x3b);
+  write.inputs[2].pin = "mask";
+  EXPECT_THROW(ctx.execute(write), std::invalid_argument);
 }

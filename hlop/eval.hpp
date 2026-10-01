@@ -283,27 +283,22 @@ V eval_sext(const V& value, int bits) {
   return value.sext_op(bits);
 }
 
-// --- Get_mask: gather/pack bits where mask is set ---
+// --- Bit selection and replacement: half-open [lo, hi). ---
 template <class V>
-V eval_get_mask(const V& value, const V& mask) {
-  // get_mask extracts the bits at positions where mask is 1 and packs them down
-  // to the low bits (a gather/pack), not a plain AND. Route to the canonical op.
-  return value.get_mask_op(mask);
+V eval_get_mask(const V& value, int lo, int hi) {
+  return V{value.get_mask_op(lo, hi)};
 }
-
-// --- Set_mask: scatter operation (inverse of get_mask) ---
-// set_mask(base, mask, value): replaces bits in base at positions where mask is 1
-// with bits consumed sequentially from the low bits of value.
 template <class V>
-V eval_set_mask(const V& base, const V& mask, const V& value) {
-  // set_mask(base, 0, value) -> base
-  if (mask.is_known_false()) {
-    return base;
-  }
-  // Scatter value's low bits into the mask-selected positions of base. Route to
-  // the canonical op rather than the (base&~mask)|(value&mask) approximation,
-  // which only matches for a contiguous low-anchored mask.
-  return base.set_mask_op(mask, value);
+V eval_get_mask(const V& value, int bit) {
+  return V{value.get_mask_op(bit)};
+}
+template <class V>
+V eval_set_mask(const V& base, const V& value, int lo, int hi) {
+  return V{base.set_mask_op(value, lo, hi)};
+}
+template <class V>
+V eval_set_mask(const V& base, const V& value, int bit) {
+  return V{base.set_mask_op(value, bit)};
 }
 
 // --- SHL: shift left ---

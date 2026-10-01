@@ -33,7 +33,7 @@ struct Operand {
 
 std::vector<Operand> operands() {
   std::vector<Operand> v;
-  auto add = [&](const char* n, std::function<SP()> f) { v.push_back({n, std::move(f)}); };
+  auto                 add = [&](const char* n, std::function<SP()> f) { v.push_back({n, std::move(f)}); };
 
   add("int_0", [] { return Dlop::create_integer(0); });
   add("int_1", [] { return Dlop::create_integer(1); });
@@ -89,7 +89,7 @@ void consume(const SP& r) {
 }
 
 struct BinOp {
-  const char*                           name;
+  const char*                             name;
   std::function<SP(const SP&, const SP&)> run;
 };
 
@@ -130,15 +130,15 @@ std::vector<BinOp> binops() {
 
 std::vector<UnOp> unops() {
   return {
-      {"neg_op", [](const SP& a) { return a->neg_op(); }},
-      {"not_op", [](const SP& a) { return a->not_op(); }},
-      {"ror_op", [](const SP& a) { return a->ror_op(); }},
-      {"rand_op", [](const SP& a) { return a->rand_op(); }},
-      {"rxor_op", [](const SP& a) { return a->rxor_op(); }},
-      {"popcount_op", [](const SP& a) { return a->popcount_op(); }},
-      {"get_mask_op", [](const SP& a) { return a->get_mask_op(); }},
-      {"get_mask_value", [](const SP& a) { return a->get_mask_value(); }},
-      {"to_known_rand", [](const SP& a) { return a->to_known_rand(); }},
+      {        "neg_op",              [](const SP& a) { return a->neg_op(); }},
+      {        "not_op",              [](const SP& a) { return a->not_op(); }},
+      {        "ror_op",              [](const SP& a) { return a->ror_op(); }},
+      {       "rand_op",             [](const SP& a) { return a->rand_op(); }},
+      {       "rxor_op",             [](const SP& a) { return a->rxor_op(); }},
+      {   "popcount_op",         [](const SP& a) { return a->popcount_op(); }},
+      {   "get_mask_op", [](const SP& a) { return a->unsigned_pattern_op(); }},
+      {"get_mask_value",      [](const SP& a) { return a->get_mask_value(); }},
+      { "to_known_rand",       [](const SP& a) { return a->to_known_rand(); }},
   };
 }
 
@@ -220,19 +220,12 @@ int main() {
   for (const auto& a : vals) {
     for (int64_t amt : kAmounts) {
       auto amount = Dlop::create_integer(amt);
-      run_case("shl_op_i(" + std::string(a.name) + ", " + std::to_string(amt) + ")", [&] {
-        consume(a.make()->shl_op(*amount));
-      });
-      run_case("sra_op_i(" + std::string(a.name) + ", " + std::to_string(amt) + ")", [&] {
-        consume(a.make()->sra_op(*amount));
-      });
-      run_case("sext_op_i(" + std::string(a.name) + ", " + std::to_string(amt) + ")", [&] {
-        consume(a.make()->sext_op(*amount));
-      });
+      run_case("shl_op_i(" + std::string(a.name) + ", " + std::to_string(amt) + ")", [&] { consume(a.make()->shl_op(*amount)); });
+      run_case("sra_op_i(" + std::string(a.name) + ", " + std::to_string(amt) + ")", [&] { consume(a.make()->sra_op(*amount)); });
+      run_case("sext_op_i(" + std::string(a.name) + ", " + std::to_string(amt) + ")", [&] { consume(a.make()->sext_op(*amount)); });
       if (amt > 0) {
-        run_case("adjust_bits(" + std::string(a.name) + ", " + std::to_string(amt) + ")", [&] {
-          consume(a.make()->adjust_bits(static_cast<int>(amt)));
-        });
+        run_case("adjust_bits(" + std::string(a.name) + ", " + std::to_string(amt) + ")",
+                 [&] { consume(a.make()->adjust_bits(static_cast<int>(amt))); });
       }
     }
   }

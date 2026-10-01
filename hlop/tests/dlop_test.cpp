@@ -265,15 +265,19 @@ TEST_F(Dlop_test, concat_op_nary_msb_first) {
   // concat_op(a, 3, b, 5) == (a << 5) | b, with a masked into its 3-bit window
   auto r = Dlop::concat_op(a, 3, b, 5);
   EXPECT_EQ(r->to_just_i64(), 0b111'00101);
-  EXPECT_FALSE(r->is_negative());  // the result is always non-negative
-  EXPECT_EQ(r->get_signed_bits(), 9);     // 8 lane bits + sign slot
+  EXPECT_FALSE(r->is_negative());      // the result is always non-negative
+  EXPECT_EQ(r->get_signed_bits(), 9);  // 8 lane bits + sign slot
 
   // Lane order is the operand order.
   EXPECT_EQ(Dlop::concat_op(b, 5, a, 3)->to_just_i64(), 0b00101'111);
 
   // The spelling does not matter: values, spool_ptrs, span, initializer_list.
   EXPECT_TRUE(Dlop::concat_op(*a, 3, *b, 5)->is_known_eq(*r));
-  EXPECT_TRUE(Dlop::concat_op({{a.get(), 3}, {b.get(), 5}})->is_known_eq(*r));
+  EXPECT_TRUE(Dlop::concat_op({
+                                  {a.get(), 3},
+                                  {b.get(), 5}
+  })
+                  ->is_known_eq(*r));
 
   // Same values, widths declared instead of inferred: the binary form packs b
   // into 4 bits (get_signed_bits()), the n-ary form into whatever was asked for.
@@ -291,8 +295,16 @@ TEST_F(Dlop_test, concat_op_nary_lane_masking) {
             0b11'1);
 
   // Any number of lanes; 1-bit lanes are the packed-bit-ring shape.
-  auto bits = Dlop::concat_op(Dlop::create_integer(1), 1, Dlop::create_integer(0), 1, Dlop::create_integer(1), 1,
-                              Dlop::create_integer(1), 1, Dlop::create_integer(0), 1);
+  auto bits = Dlop::concat_op(Dlop::create_integer(1),
+                              1,
+                              Dlop::create_integer(0),
+                              1,
+                              Dlop::create_integer(1),
+                              1,
+                              Dlop::create_integer(1),
+                              1,
+                              Dlop::create_integer(0),
+                              1);
   EXPECT_EQ(bits->to_just_i64(), 0b10110);
 }
 
@@ -314,9 +326,9 @@ TEST_F(Dlop_test, concat_op_nary_unknowns_stay_in_lane) {
   // its own lane's window and nowhere else.
   auto unk = Dlop::from_pyrope("0sb0?1");  // 3 bits: 0, ?, 1
   auto r   = Dlop::concat_op(unk, 3, Dlop::create_integer(0), 5);
-  EXPECT_TRUE(r->bit_test(5));    // the literal's '1' -> bit 5
-  EXPECT_FALSE(r->bit_test(7));   // the literal's '0' -> bit 7
-  EXPECT_FALSE(r->bit_test(4));   // the all-zero lane below
+  EXPECT_TRUE(r->bit_test(5));   // the literal's '1' -> bit 5
+  EXPECT_FALSE(r->bit_test(7));  // the literal's '0' -> bit 7
+  EXPECT_FALSE(r->bit_test(4));  // the all-zero lane below
 
   int unknown_count = 0;
   for (int i = 0; i < 9; ++i) {
@@ -873,7 +885,7 @@ TEST_F(Dlop_test, mask_range_forms) {
   EXPECT_EQ(v->get_mask_op_opt(7, 8)->to_just_i64(), 1);  // unsigned single bit: never -1
   EXPECT_EQ(v->get_mask_op_opt(3, 4)->to_just_i64(), 0);
   EXPECT_EQ(v->get_mask_op_opt(4, 5)->to_just_i64(), 1);
-  EXPECT_EQ(v->get_mask_op_opt(3, 3)->to_just_i64(), 0);   // empty range
+  EXPECT_EQ(v->get_mask_op_opt(3, 3)->to_just_i64(), 0);  // empty range
   EXPECT_EQ(v->get_mask_op_opt(4, 8)->to_just_i64(), Lconst(0xf0).get_mask_op(Lconst(0xf0)).to_i());
 
   // set_mask_op_opt(lo, hi, value) == set_mask_op(get_mask_value(hi-1, lo), value)
@@ -1235,8 +1247,8 @@ TEST_F(Dlop_test, mux_known_select) {
 }
 
 TEST_F(Dlop_test, mux_condition_and_heterogeneous_arms) {
-  auto narrow = Dlop::create_integer(3);
-  auto wide   = Dlop::from_pyrope("0ux123456789abcdef0123");
+  auto                         narrow = Dlop::create_integer(3);
+  auto                         wide   = Dlop::from_pyrope("0ux123456789abcdef0123");
   std::vector<spool_ptr<Dlop>> vals{narrow, wide};
 
   EXPECT_TRUE(Dlop::mux_op(*Dlop::create_integer(0), vals)->same_repr(*narrow));
@@ -1418,10 +1430,10 @@ TEST_F(Dlop_test, normalize_reclaims_inline_storage) {
 TEST_F(Dlop_test, copies_preserve_storage_and_value) {
   auto check_copy = [](const char* txt) {
     auto src = Dlop::from_pyrope(txt);
-    Dlop a(*src);            // copy ctor
+    Dlop a(*src);  // copy ctor
     Dlop b;
-    b = a;                   // copy assign
-    Dlop c(std::move(a));    // move ctor
+    b = a;                 // copy assign
+    Dlop c(std::move(a));  // move ctor
     EXPECT_TRUE(b.same_repr(*src)) << txt;
     EXPECT_TRUE(c.same_repr(*src)) << txt;
     EXPECT_EQ(c.to_pyrope(), src->to_pyrope()) << txt;
@@ -1473,13 +1485,13 @@ TEST_F(Dlop_test, adjust_bits_multiple_of_64_clears_high_word) {
   EXPECT_FALSE(a->is_negative());
 }
 
-// Regression: no-arg get_mask_op() dropped the unknown plane on a negative
+// Regression: no-arg unsigned_pattern_op() dropped the unknown plane on a negative
 // operand (zero_extra). The magnitude must keep the source's unknown bits.
 TEST_F(Dlop_test, get_mask_op_preserves_unknowns_on_negative) {
   auto v = Dlop::from_pyrope("0sb1?0");  // negative, bit 1 unknown
   ASSERT_TRUE(v->is_negative());
   ASSERT_TRUE(v->has_unknowns());
-  auto mag = v->get_mask_op();
+  auto mag = v->unsigned_pattern_op();
   EXPECT_TRUE(mag->has_unknowns());  // unknown preserved (was lost before the fix)
   EXPECT_FALSE(mag->is_negative());  // magnitude is the unsigned bit pattern
 }
@@ -1580,8 +1592,8 @@ TEST_F(Dlop_test, wide_binary_word_batch_matches_short_parse) {
   // Signed unknown sign bit: '?' extends BOTH planes past the literal width.
   std::string sunk = "0sb?";
   sunk.append(64, '0');
-  sunk += "1";
-  auto sv = Dlop::from_pyrope(sunk);
+  sunk    += "1";
+  auto sv  = Dlop::from_pyrope(sunk);
   EXPECT_TRUE(sv->has_unknowns());
   EXPECT_TRUE(sv->bit_test(0));
   EXPECT_TRUE(sv->unknown_bit_test(65));
@@ -1591,8 +1603,8 @@ TEST_F(Dlop_test, wide_binary_word_batch_matches_short_parse) {
   // '_' separators inside a wide pattern.
   std::string sep = "0ub1_";
   sep.append(63, '0');
-  sep += "_1";
-  auto sepv = Dlop::from_pyrope(sep);
+  sep       += "_1";
+  auto sepv  = Dlop::from_pyrope(sep);
   EXPECT_EQ(sepv->popcount(), 2);
   EXPECT_TRUE(sepv->bit_test(0));
   EXPECT_TRUE(sepv->bit_test(64));

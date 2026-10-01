@@ -372,9 +372,9 @@ TEST_F(Slop_test, get_mask_op_multibit_packed) {
   using S32 = Slop<32>;
   auto v    = S32::create_integer(0xABCD);
   // 0xff selects the low byte -> 0xCD.
-  EXPECT_EQ(v.get_mask_op(S32::create_integer(0xff)).to_just_i64(), 0xCD);
+  EXPECT_EQ(v.get_mask_op(0, 8).to_just_i64(), 0xCD);
   // 0xf00 selects bits 8..11 -> 0xB, packed down to the low nibble.
-  EXPECT_EQ(v.get_mask_op(S32::create_integer(0xf00)).to_just_i64(), 0xB);
+  EXPECT_EQ(v.get_mask_op(8, 12).to_just_i64(), 0xB);
 }
 
 // get_mask_op(mask) — a NEGATIVE source is sign-extended past its minimal
@@ -385,17 +385,17 @@ TEST_F(Slop_test, get_mask_op_multibit_packed) {
 TEST_F(Slop_test, get_mask_op_negative_source_sign_extends) {
   using S32 = Slop<32>;
   auto neg1 = S32::create_integer(-1);
-  EXPECT_EQ(neg1.get_mask_op(S32::create_integer(0xff)).to_just_i64(), 0xff);    // low 8 bits of ...1111
-  EXPECT_EQ(neg1.get_mask_op(S32::create_integer(0xf)).to_just_i64(), 0xf);      // low 4 bits
-  EXPECT_EQ(neg1.get_mask_op(S32::create_integer(0xffff)).to_just_i64(), 0xffff);
+  EXPECT_EQ(neg1.get_mask_op(0, 8).to_just_i64(), 0xff);  // low 8 bits of ...1111
+  EXPECT_EQ(neg1.get_mask_op(0, 4).to_just_i64(), 0xf);   // low 4 bits
+  EXPECT_EQ(neg1.get_mask_op(0, 16).to_just_i64(), 0xffff);
 
   // -2 == ...11111110 -> low byte is 0xfe.
   auto neg2 = S32::create_integer(-2);
-  EXPECT_EQ(neg2.get_mask_op(S32::create_integer(0xff)).to_just_i64(), 0xfe);
+  EXPECT_EQ(neg2.get_mask_op(0, 8).to_just_i64(), 0xfe);
 
   // Positive sources are unaffected (sign bit is 0 above their width).
   auto p511 = S32::create_integer(0x1ff);
-  EXPECT_EQ(p511.get_mask_op(S32::create_integer(0xff)).to_just_i64(), 0xff);
+  EXPECT_EQ(p511.get_mask_op(0, 8).to_just_i64(), 0xff);
 }
 
 // get_mask_op(mask) — the pack is UNSIGNED at every width, a single selected
@@ -403,15 +403,15 @@ TEST_F(Slop_test, get_mask_op_negative_source_sign_extends) {
 TEST_F(Slop_test, get_mask_op_single_bit) {
   using S32 = Slop<32>;
   auto v    = S32::create_integer(0b1010);
-  EXPECT_EQ(v.get_mask_op(S32::create_integer(0b0010)).to_just_i64(), 1);  // bit set
-  EXPECT_EQ(v.get_mask_op(S32::create_integer(0b0001)).to_just_i64(), 0);  // bit clear
+  EXPECT_EQ(v.get_mask_op(1, 2).to_just_i64(), 1);  // bit set
+  EXPECT_EQ(v.get_mask_op(0, 1).to_just_i64(), 0);  // bit clear
 
-  EXPECT_EQ(S32::create_integer(0b100).get_mask_op(S32::create_integer(0b100)).to_just_i64(), 1);
-  EXPECT_EQ(S32::create_integer(-1).get_mask_op(S32::create_integer(1)).to_just_i64(), 1);
-  EXPECT_EQ(v.get_mask_op(S32::create_integer(0)).to_just_i64(), 0);  // empty mask
+  EXPECT_EQ(S32::create_integer(0b100).get_mask_op(2, 3).to_just_i64(), 1);
+  EXPECT_EQ(S32::create_integer(-1).get_mask_op(0, 1).to_just_i64(), 1);
+  EXPECT_EQ(v.set_mask_op(S32::create_integer(0), 0, 0).to_just_i64(), 0b1010);  // empty write
 
   // Same answer as the static / range forms, which already packed unsigned.
-  EXPECT_EQ(S32::get_mask_op(v, S32::create_integer(0b0010)).to_just_i64(), 1);
+  EXPECT_EQ(S32::get_mask_op(v, 1, 2).to_just_i64(), 1);
   EXPECT_EQ((S32::get_mask_op_opt(v, 1, 2)).to_just_i64(), 1);
 }
 
@@ -503,7 +503,7 @@ TEST_F(Slop_test, xwidth_multiword) {
   EXPECT_EQ((Slop<100>{Slop<8>::create_integer(-1)}).to_just_i64(), -1);  // signed widen across words
   EXPECT_EQ((Slop<70>{Slop<8>::create_integer(5)}).to_just_i64(), 5);
   EXPECT_EQ(Slop<8>::create_integer(200).zext_to<100>().to_just_i64(), 200);  // unsigned widen across words
-  EXPECT_EQ((Slop<8>{Slop<100>::create_integer(-3)}).to_just_i64(), -3);  // narrow wide -> one word
+  EXPECT_EQ((Slop<8>{Slop<100>::create_integer(-3)}).to_just_i64(), -3);      // narrow wide -> one word
 }
 
 // zext_to skips its mask only when `keep` lands on the top of the result's word
@@ -524,7 +524,8 @@ TEST_F(Slop_test, xwidth_unsigned_mask_is_load_bearing) {
   EXPECT_EQ(Slop<64>::create_integer(-1).zext_to<64>().to_just_i64(), -1);
   EXPECT_EQ(Slop<100>::create_integer(-1).zext_to<64>().to_just_i64(), -1);
   // N % 64 == 0 widening: also mask-free, and the new upper word must read 0.
-  EXPECT_EQ(Slop<64>::create_integer(-1).zext_to<100>().to_binary(), Slop<100>::create_integer(-1).zext_to<64>().zext_to<100>().to_binary());
+  EXPECT_EQ(Slop<64>::create_integer(-1).zext_to<100>().to_binary(),
+            Slop<100>::create_integer(-1).zext_to<64>().zext_to<100>().to_binary());
 }
 
 // zext_to is constexpr: usable in constant expressions, so cgen-emitted width

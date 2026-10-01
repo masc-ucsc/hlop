@@ -258,19 +258,31 @@ TEST(Slop_mixed_width, bitwise_needs_no_result_clamp) {
 // single-selected-bit case included: both pack unsigned.
 TEST(Slop_mixed_width, get_mask_matches_member_form) {
   std::mt19937_64 rng(0xBEEF);
-  const int64_t   masks[] = {-1, 1, 3, 7, 0xff, 0xffff, 0x7fffffff, 126, 0b1010, 0x40, 6, 0x0f0f};
-  int             checked = 0;
-  for (int64_t mk : masks) {
+  const int       windows[][2] = {
+      {0,  1},
+      {0,  2},
+      {0,  3},
+      {0,  8},
+      {0, 16},
+      {1,  7},
+      {2,  9},
+      {6,  7},
+      {1,  3},
+      {5, 19},
+      {0, 19}
+  };
+  int checked = 0;
+  for (const auto& range : windows) {
+    const int lo = range[0], hi = range[1];
     for (int i = 0; i < 300; ++i) {
       const int64_t v = static_cast<int64_t>(rng()) % 65536;
       const auto    x = Slop<20>::create_integer(v);
-      const auto    m = Slop<20>::create_integer(mk);
 
-      const auto member = x.get_mask_op(m);             // Slop<20>
-      const auto mixed  = Slop<20>::get_mask_op(x, m);  // same widths -> must match
+      const auto member = x.get_mask_op(lo, hi);             // Slop<20>
+      const auto mixed  = Slop<20>::get_mask_op(x, lo, hi);  // same widths -> must match
 
-      EXPECT_EQ(mixed.to_binary(), member.to_binary()) << "mask=" << mk << " v=" << v;
-      EXPECT_FALSE(member.is_negative()) << "mask=" << mk << " v=" << v;
+      EXPECT_EQ(mixed.to_binary(), member.to_binary()) << "lo=" << lo << " hi=" << hi << " v=" << v;
+      EXPECT_FALSE(member.is_negative()) << "lo=" << lo << " hi=" << hi << " v=" << v;
       ++checked;
     }
   }
@@ -336,17 +348,15 @@ TEST(Slop_mixed_width, reductions_match_bit_walk) {
 // The point of the mixed-width form: operands at differing widths, result
 // materialized at the cell's own width, with no caller-side conversion.
 TEST(Slop_mixed_width, get_mask_across_widths) {
-  auto x  = Slop<40>::create_integer(0xABCDE);
-  auto m8 = Slop<8>::create_integer(0xff);
-  EXPECT_EQ(Slop<9>::get_mask_op(x, m8).to_just_i64(), 0xDE);
+  auto x = Slop<40>::create_integer(0xABCDE);
+  EXPECT_EQ(Slop<9>::get_mask_op(x, 0, 8).to_just_i64(), 0xDE);
 
   auto wide = Slop<80>::create_integer(int64_t{0x123456789});
-  auto m16  = Slop<16>::create_integer(0xffff);
-  EXPECT_EQ(Slop<17>::get_mask_op(wide, m16).to_just_i64(), 0x6789);
+  EXPECT_EQ(Slop<17>::get_mask_op(wide, 0, 16).to_just_i64(), 0x6789);
 
   // to-positive (-1) across widths
   auto neg = Slop<8>::create_integer(-8);
-  EXPECT_EQ(Slop<9>::get_mask_op(neg, Slop<4>::create_integer(-1)).to_just_i64(), 8);
+  EXPECT_EQ(Slop<9>::get_mask_op(neg, 0, 4).to_just_i64(), 8);
 }
 
 // mux_op with a decoded integer index must equal the Slop-selector form.
@@ -383,8 +393,7 @@ TEST(Slop_mixed_width, mux_condition_and_heterogeneous_arms) {
   // that the arm-selection walk stops in the right place.)
   EXPECT_TRUE(Slop<80>::mux_op(Slop<3>::create_integer(3), narrow, middle, wide).is_invalid());
   EXPECT_TRUE(Slop<80>::mux_op(Slop<8>::create_integer(-1), narrow, middle, wide).is_invalid());
-  EXPECT_TRUE(
-      Slop<80>::mux_op(Slop<80>::from_pyrope("0x1_0000_0000_0000_0000"), narrow, middle, wide).is_invalid());
+  EXPECT_TRUE(Slop<80>::mux_op(Slop<80>::from_pyrope("0x1_0000_0000_0000_0000"), narrow, middle, wide).is_invalid());
 }
 
 // A Hotmux control is a one-bit predicate whose CARRIER width is independent of

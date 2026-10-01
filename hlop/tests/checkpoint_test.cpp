@@ -14,7 +14,7 @@ using namespace hlop::ckpt;
 
 namespace {
 std::string tmp_root() {
-  const char* t = std::getenv("TEST_TMPDIR");
+  const char* t    = std::getenv("TEST_TMPDIR");
   std::string base = (t != nullptr) ? std::string(t) : std::string("/tmp");
   return base + "/ckpt_test";
 }
@@ -79,9 +79,9 @@ TEST_F(Checkpoint_test, mem_hex_honors_addr_and_comments) {
   {
     std::ofstream f(path);
     f << "// comment\n";
-    f << "1\n";       // addr 0
-    f << "@3\n";      // jump to addr 3
-    f << "ff\n";      // addr 3
+    f << "1\n";   // addr 0
+    f << "@3\n";  // jump to addr 3
+    f << "ff\n";  // addr 3
   }
   std::array<Slop<8>, 4> a{};
   ASSERT_TRUE(read_mem_hex(path, a));
@@ -94,10 +94,10 @@ TEST_F(Checkpoint_test, mem_hex_honors_addr_and_comments) {
 TEST_F(Checkpoint_test, str_map_roundtrip) {
   make_dirs(tmp_root());
   std::map<std::string, std::string> m{
-      {"top.cpu0.pc", "0x40"},
-      {"top.cpu0.flag", "true"},
-      {"top.s", "'hi there'"},
-      {"weird", "a\"b\\c"},  // quote + backslash must survive
+      {  "top.cpu0.pc",       "0x40"},
+      {"top.cpu0.flag",       "true"},
+      {        "top.s", "'hi there'"},
+      {        "weird",    "a\"b\\c"}, // quote + backslash must survive
   };
   std::string path = tmp_root() + "/regs.json";
   write_str_map(path, m);

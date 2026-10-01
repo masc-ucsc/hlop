@@ -544,10 +544,10 @@ public:
 
     // Shift/subtract long division on the magnitudes, MSB first.
     for (int i = static_cast<int>(n * 64) - 1; i >= 0; --i) {
-      ushl1_words(r.data(), n);                            // r <<= 1
-      r[0] |= (u[i / 64] >> (i % 64)) & 1ull;              // pull in bit i of u
-      if (ucmp_words(r.data(), v.data(), n) >= 0) {        // r >= v ?
-        usub_words(r.data(), v.data(), n);                 // r -= v
+      ushl1_words(r.data(), n);                      // r <<= 1
+      r[0] |= (u[i / 64] >> (i % 64)) & 1ull;        // pull in bit i of u
+      if (ucmp_words(r.data(), v.data(), n) >= 0) {  // r >= v ?
+        usub_words(r.data(), v.data(), n);           // r -= v
         q[i / 64] |= static_cast<uint64_t>(1) << (i % 64);
       }
     }
@@ -942,9 +942,9 @@ private:
   static void uneg_words(uint64_t* a, size_t n) {
     uint64_t carry = 1;
     for (size_t i = 0; i < n; ++i) {
-      uint64_t t     = ~a[i] + carry;
-      carry          = (t < carry) ? 1u : 0u;
-      a[i]           = t;
+      uint64_t t = ~a[i] + carry;
+      carry      = (t < carry) ? 1u : 0u;
+      a[i]       = t;
     }
   }
 

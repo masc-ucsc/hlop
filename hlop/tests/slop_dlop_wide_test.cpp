@@ -50,7 +50,7 @@ std::vector<std::string> BuildPool() {
   pool.reserve(kPoolSize);
   const int eff_widths[] = {kInputWidth, 300, 130, 65, 64, 33, 8, 3, 1};
   for (int i = 0; i < kPoolSize; ++i) {
-    int eff = eff_widths[i % (sizeof(eff_widths) / sizeof(eff_widths[0]))];
+    int         eff = eff_widths[i % (sizeof(eff_widths) / sizeof(eff_widths[0]))];
     // Randomize the low `eff` bits; sign-extend the rest from bit eff-1.
     std::string bits(kInputWidth, '0');
     for (int b = 0; b < eff; ++b) {
@@ -63,8 +63,8 @@ std::vector<std::string> BuildPool() {
     pool.push_back(std::move(bits));
   }
   // A few crafted patterns that stress word boundaries and sign handling.
-  pool.emplace_back(kInputWidth, '0');                       // 0
-  pool.emplace_back(kInputWidth, '1');                       // -1 (all ones)
+  pool.emplace_back(kInputWidth, '0');                          // 0
+  pool.emplace_back(kInputWidth, '1');                          // -1 (all ones)
   pool.emplace_back("01" + std::string(kInputWidth - 2, '0'));  // large positive 2^498
   {
     std::string m(kInputWidth, '0');  // 0sb0...01...1 mask of 64 ones at a word boundary
@@ -101,14 +101,14 @@ void RunOnce(std::mt19937_64& rng, const std::vector<std::string>& pool, int op_
   auto db = MakeDlop(bb);
 
   switch (op_idx) {
-    case 0:  ExpectEqual(*da->and_op(*db), sa.and_op(sb), "and_op"); break;
-    case 1:  ExpectEqual(*da->or_op(*db), sa.or_op(sb), "or_op"); break;
-    case 2:  ExpectEqual(*da->xor_op(*db), sa.xor_op(sb), "xor_op"); break;
-    case 3:  ExpectEqual(*da->not_op(), sa.not_op(), "not_op"); break;
-    case 4:  ExpectEqual(*da->neg_op(), sa.neg_op(), "neg_op"); break;
-    case 5:  ExpectEqual(*da->add_op(*db), sa.add_op(sb), "add_op"); break;
-    case 6:  ExpectEqual(*da->sub_op(*db), sa.sub_op(sb), "sub_op"); break;
-    case 7:  ExpectEqual(*da->mult_op(*db), sa.mult_op(sb), "mult_op"); break;
+    case 0: ExpectEqual(*da->and_op(*db), sa.and_op(sb), "and_op"); break;
+    case 1: ExpectEqual(*da->or_op(*db), sa.or_op(sb), "or_op"); break;
+    case 2: ExpectEqual(*da->xor_op(*db), sa.xor_op(sb), "xor_op"); break;
+    case 3: ExpectEqual(*da->not_op(), sa.not_op(), "not_op"); break;
+    case 4: ExpectEqual(*da->neg_op(), sa.neg_op(), "neg_op"); break;
+    case 5: ExpectEqual(*da->add_op(*db), sa.add_op(sb), "add_op"); break;
+    case 6: ExpectEqual(*da->sub_op(*db), sa.sub_op(sb), "sub_op"); break;
+    case 7: ExpectEqual(*da->mult_op(*db), sa.mult_op(sb), "mult_op"); break;
     case 8: {
       if (sb.is_known_false()) {
         break;  // skip divide-by-zero
@@ -157,7 +157,7 @@ void RunOnce(std::mt19937_64& rng, const std::vector<std::string>& pool, int op_
       }
       break;
     }
-    case 23: ExpectEqual(*da->get_mask_op(), sa.get_mask_op(), "get_mask_op_unary"); break;
+    case 23: ExpectEqual(*da->unsigned_pattern_op(), sa.unsigned_pattern_op(), "get_mask_op_unary"); break;
     case 24: {
       const int lo = rng() % 600;
       const int hi = lo + 1 + rng() % 450;
@@ -200,9 +200,7 @@ TEST(SlopDlopWide, fuzz_all_ops_500bit) {
 // |x| for both classes (neg if negative). The Dlop identity-copy goes through
 // add_op(0) so the positive branch also yields a fresh spool_ptr<Dlop>.
 static S               SlopAbs(const S& x) { return x.is_negative() ? x.neg_op() : x; }
-static spool_ptr<Dlop> DlopAbs(const Dlop& x) {
-  return x.is_negative() ? x.neg_op() : x.add_op(*Dlop::create_integer(0));
-}
+static spool_ptr<Dlop> DlopAbs(const Dlop& x) { return x.is_negative() ? x.neg_op() : x.add_op(*Dlop::create_integer(0)); }
 
 // a == (a/b)*b + (a%b) and |a%b| < |b|, verified entirely within Slop.
 static void CheckDivModInvariantSlop(const S& a, const S& b, const std::string& tag) {
@@ -261,20 +259,20 @@ TEST(SlopDlopWide, divrem_known_answers) {
   auto dlop_pow2 = [](int k) { return Dlop::create_integer(1)->shl_op(Dlop::create_integer(k)); };
 
   struct Case {
-    int     an, ar;   // dividend = 2^an + ar
-    int     bn;       // divisor  = 2^bn
+    int     an, ar;  // dividend = 2^an + ar
+    int     bn;      // divisor  = 2^bn
     bool    neg_a, neg_b;
-    int     exp_qn;   // |quotient| = 2^exp_qn
-    int64_t exp_r;    // remainder (signed)
+    int     exp_qn;  // |quotient| = 2^exp_qn
+    int64_t exp_r;   // remainder (signed)
   };
   // 2^200 / 2^100 = 2^100 r 0 ;  (2^200 + ar)/2^100 = 2^100 r ar  (ar < 2^100)
   const Case cases[] = {
-      {200, 0, 100, false, false, 100, 0},
-      {200, 7, 100, false, false, 100, 7},
-      {200, 7, 100, true, false, 100, -7},
-      {200, 7, 100, false, true, 100, 7},
-      {200, 7, 100, true, true, 100, -7},
-      {300, 123456789, 64, false, false, 300 - 64, 123456789},
+      {200,         0, 100, false, false,      100,         0},
+      {200,         7, 100, false, false,      100,         7},
+      {200,         7, 100,  true, false,      100,        -7},
+      {200,         7, 100, false,  true,      100,         7},
+      {200,         7, 100,  true,  true,      100,        -7},
+      {300, 123456789,  64, false, false, 300 - 64, 123456789},
   };
 
   for (const auto& c : cases) {
@@ -445,8 +443,8 @@ TEST(SlopDlopWide, dlop_div_by_pm1_no_overflow) {
   auto mone = Dlop::create_integer(-1);
 
   // -2^63 / -1 == +2^63 (single-word dividend widens to two words; no UB).
-  auto min63 = Dlop::create_integer(INT64_MIN);                              // -2^63
-  auto pos63 = Dlop::create_integer(1)->shl_op(Dlop::create_integer(63));    // +2^63
+  auto min63 = Dlop::create_integer(INT64_MIN);                            // -2^63
+  auto pos63 = Dlop::create_integer(1)->shl_op(Dlop::create_integer(63));  // +2^63
   EXPECT_TRUE(min63->div_op(*mone)->is_known_eq(*pos63)) << "-2^63 / -1";
   EXPECT_FALSE(min63->div_op(*mone)->is_negative()) << "-2^63 / -1 must be positive";
   EXPECT_TRUE(min63->rem_op(*mone)->is_known_eq(*Dlop::create_integer(0))) << "-2^63 % -1";

@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <limits>
 #include <stdexcept>
 
 namespace hlop {
@@ -205,41 +206,70 @@ DResult DContext::exec_sext(const DCall& call) {
   return {.outputs = {value->sext_op(bits)}};
 }
 
+namespace {
+// The dynamic adapter accepts exactly the range/bit API. Named and graph-pid
+// inputs are normalized to the public positional order here.
+std::vector<DValue> selection_args(const DCall& call, bool write) {
+  const size_t required = write ? 3 : 2;
+  if (call.inputs.size() != required && call.inputs.size() != required + 1) {
+    throw std::invalid_argument("get_mask/set_mask expects a bit position or lo/hi endpoints");
+  }
+  std::vector<DValue> args(required + 1);
+  for (size_t i = 0; i < call.inputs.size(); ++i) {
+    const auto& input = call.inputs[i];
+    size_t      slot  = i;
+    if (!input.pin.empty() || input.pid >= 0) {
+      if (input.pin == "a" || (input.pin.empty() && input.pid == 0)) {
+        slot = 0;
+      } else if (write && (input.pin == "value" || (input.pin.empty() && input.pid == 4))) {
+        slot = 1;
+      } else if (input.pin == "lo" || (input.pin.empty() && input.pid == 2)) {
+        slot = required - 1;
+      } else if (input.pin == "hi" || (input.pin.empty() && input.pid == 3)) {
+        slot = required;
+      } else {
+        throw std::invalid_argument("get_mask/set_mask accepts a, value, lo, hi; no mask operand");
+      }
+    }
+    if (args[slot]) {
+      throw std::invalid_argument("duplicate selection operand");
+    }
+    args[slot] = input.value;
+  }
+  for (size_t i = 0; i < required; ++i) {
+    if (!args[i]) {
+      throw std::invalid_argument("missing selection operand");
+    }
+  }
+  return args;
+}
+std::pair<int, int> selection_bounds(const DValue& lo, const DValue& hi) {
+  if (!lo->is_integer() || !lo->is_just_i64() || lo->has_unknowns() || lo->to_just_i64() < 0
+      || lo->to_just_i64() >= std::numeric_limits<int>::max()) {
+    throw std::invalid_argument("invalid selection lo endpoint");
+  }
+  const int lower = lo->to_just_i64();
+  if (!hi) {
+    return {lower, lower + 1};
+  }
+  if (!hi->is_integer() || !hi->is_just_i64() || hi->has_unknowns() || hi->to_just_i64() < lower
+      || hi->to_just_i64() > std::numeric_limits<int>::max()) {
+    throw std::invalid_argument("invalid selection hi endpoint");
+  }
+  return {lower, static_cast<int>(hi->to_just_i64())};
+}
+}  // namespace
+
 DResult DContext::exec_get_mask(const DCall& call) {
-  assert(call.inputs.size() >= 2);
-  auto value = call.inputs[0].value;
-  auto mask  = call.inputs[1].value;
-  if (mask->is_known_zero()) {
-    return {.outputs = {Dlop::create_integer(0)}};
-  }
-  if (mask->is_just_i64() && mask->to_just_i64() == -1) {
-    return {.outputs = {value->get_mask_op()}};
-  }
-  const auto [lo, hi] = mask->get_mask_range();
-  if (mask->has_unknowns() || mask->is_negative() || lo < 0 || hi <= lo) {
-    throw std::invalid_argument("Get_mask requires a contiguous constant window or -1");
-  }
-  return {.outputs = {value->get_mask_op_opt(lo, hi)}};
+  auto args           = selection_args(call, false);
+  const auto [lo, hi] = selection_bounds(args[1], args[2]);
+  return {.outputs = {args[0]->get_mask_op(lo, hi)}};
 }
 
 DResult DContext::exec_set_mask(const DCall& call) {
-  assert(call.inputs.size() >= 3);
-  auto base  = call.inputs[0].value;
-  auto mask  = call.inputs[1].value;
-  auto value = call.inputs[2].value;
-
-  if (mask->is_known_false()) {
-    return {.outputs = {base}};
-  }
-
-  if (mask->is_just_i64() && mask->to_just_i64() == -1) {
-    return {.outputs = {value}};
-  }
-  const auto [lo, hi] = mask->get_mask_range();
-  if (mask->has_unknowns() || mask->is_negative() || lo < 0 || hi <= lo) {
-    throw std::invalid_argument("Set_mask requires a contiguous constant window or -1");
-  }
-  return {.outputs = {base->set_mask_op_opt(lo, hi, *value)}};
+  auto args           = selection_args(call, true);
+  const auto [lo, hi] = selection_bounds(args[2], args[3]);
+  return {.outputs = {args[0]->set_mask_op(*args[1], lo, hi)}};
 }
 
 DResult DContext::exec_shl(const DCall& call) {
