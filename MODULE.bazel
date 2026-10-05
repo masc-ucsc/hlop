@@ -5,7 +5,7 @@ module(
 )
 
 # Compiler rules
-bazel_dep(name = "rules_cc", version = "0.2.25")
+bazel_dep(name = "rules_cc", version = "0.2.26")
 
 # Standalone macOS builds use the Command Line Tools configuration.
 bazel_dep(name = "apple_support", version = "2.8.3", repo_name = "build_bazel_apple_support", dev_dependency = True)
