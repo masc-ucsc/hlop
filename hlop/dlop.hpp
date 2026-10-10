@@ -797,6 +797,9 @@ public:
   // (which also accepts nil/invalid/empty-string); use is_known_zero for
   // `value == 0` checks on integer Dlops where the type is known.
   bool is_known_zero() const;
+  // Some assignment of the unknown bits makes the value 0 (no bit is a known
+  // 1). True for a known zero too. Division/remainder by such a value is X.
+  bool may_be_zero() const;
   bool is_mask() const;
   bool is_power2() const;
   bool is_nil() const { return type == Type::Nil; }

@@ -511,7 +511,8 @@ TEST_F(EvalDlopTest, rem_negative_and_operand_order) {
   EXPECT_EQ(ctx.execute(swapped).outputs[0]->to_just_i64(), 5);
 }
 
-TEST_F(EvalDlopTest, rem_by_zero_is_nil) {
+// Remainder (and division) by zero is X, Verilog's all-x: every bit unknown.
+TEST_F(EvalDlopTest, rem_by_zero_is_unknown) {
   hlop::DCall call{
       .op     = hlop::Ntype_op::Rem,
       .inputs = {
@@ -520,7 +521,7 @@ TEST_F(EvalDlopTest, rem_by_zero_is_nil) {
       },
   };
   auto res = ctx.execute(call);
-  EXPECT_TRUE(res.outputs[0]->is_nil());
+  EXPECT_TRUE(res.outputs[0]->same_repr(*Dlop::unknown()));
 }
 
 TEST_F(EvalDlopTest, not_basic) {

@@ -1024,6 +1024,21 @@ spool_ptr<Dlop> Dlop::mult_op(const Dlop& other) const {
   return dlop;
 }
 
+// No bit is a known 1 (base == base|extra, so a known one is base & ~extra).
+bool Dlop::may_be_zero() const {
+  if (!is_numeric()) {
+    return false;
+  }
+  const auto* b = base();
+  const auto* e = extra();
+  for (int i = 0; i < size; ++i) {
+    if ((b[i] & ~e[i]) != 0) {
+      return false;
+    }
+  }
+  return true;
+}
+
 spool_ptr<Dlop> Dlop::div_op(const Dlop& other) const {
   // Illegal operand (string / nil / invalid / ref) → nil. Must precede the
   // is_known_false() check below: a size-0 nil/invalid reads as "false" and
@@ -1031,8 +1046,10 @@ spool_ptr<Dlop> Dlop::div_op(const Dlop& other) const {
   if (!is_numeric() || !other.is_numeric()) {
     return nil();
   }
-  if (other.is_known_false()) {
-    return nil();  // division by zero → nil
+  if (other.is_known_false() || (other.has_unknowns() && other.may_be_zero())) {
+    // Division by zero is X (every bit unknown, the sign too), as Verilog
+    // defines it (Icarus: all-x); a divisor that may be zero may give X.
+    return unknown();
   }
 
   if (has_unknowns() || other.has_unknowns()) {
@@ -1084,8 +1101,8 @@ spool_ptr<Dlop> Dlop::rem_op(const Dlop& other) const {
   if (!is_numeric() || !other.is_numeric()) {
     return nil();
   }
-  if (other.is_known_false()) {
-    return nil();  // remainder by zero → nil
+  if (other.is_known_false() || (other.has_unknowns() && other.may_be_zero())) {
+    return unknown();  // remainder by zero is X, like division (Verilog: all-x)
   }
   if (has_unknowns() || other.has_unknowns()) {
     return !is_negative() ? unknown(get_signed_bits()) : unknown();
@@ -2831,17 +2848,23 @@ std::string Dlop::to_binary() const {
     }
     std::string result;
     for (int i = nbits - 1; i >= 0; --i) {
-      bool b          = bit_test(i);
-      int  word       = i / 64;
-      int  bit        = i % 64;
-      bool is_unknown = (word < size) ? ((extra()[word] >> bit) & 1) : false;
-      if (is_unknown) {
+      bool b = bit_test(i);
+      // unknown_bit_test sign-extends the unknown plane past the stored words;
+      // reading it as 0 there printed the top bit of a fully unknown value
+      // (Dlop::unknown(), a division by zero) as a known 1: `65'sb1???..`.
+      if (unknown_bit_test(i)) {
         result.push_back('?');
       } else {
         result.push_back(b ? '1' : '0');
       }
     }
-    return result;
+    // A signed pattern's leading copies of its sign digit are redundant
+    // (`???` == `?`, `??1` == `?1`): keep the canonical shortest spelling.
+    size_t lead = 0;
+    while (lead + 1 < result.size() && result[lead] == result[lead + 1]) {
+      ++lead;
+    }
+    return result.substr(lead);
   }
 
   int nbits = get_signed_bits();
@@ -3066,7 +3089,7 @@ std::string Dlop::to_verilog() const {
 
   if (has_unknowns()) {
     auto bin = to_binary();
-    return std::format("{}'sb{}", get_signed_bits(), bin);
+    return std::format("{}'sb{}", bin.size(), bin);  // a signed literal: its top digit extends
   }
 
   if (type == Type::String) {

@@ -1075,7 +1075,9 @@ public:
 
   Slop div_op(const Slop& other) const {
     nil_check_(other);
-    I(!other.is_known_false(), "Slop division by zero");
+    if (other.is_known_false()) {
+      return Slop{unknown(N)}.sext_op(N - 1);  // division by zero is X: a random value (Dlop: unknown())
+    }
     Slop result;
     Blop::div<n_words>(result.base_, base_, other.base_);
     return result;
@@ -1086,7 +1088,9 @@ public:
   // rem-by-zero.
   Slop rem_op(const Slop& other) const {
     nil_check_(other);
-    I(!other.is_known_false(), "Slop remainder by zero");
+    if (other.is_known_false()) {
+      return Slop{unknown(N)}.sext_op(N - 1);  // remainder by zero is X, like division
+    }
     Slop result;
     // Route through Blop::mod (even for n_words==1) so the INT64_MIN % -1
     // signed-overflow UB is guarded in one place, matching div_op.

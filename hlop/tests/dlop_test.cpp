@@ -548,10 +548,17 @@ TEST_F(Dlop_test, illegal_operands_return_nil) {
     EXPECT_TRUE((*bad)->not_op()->is_nil());
   }
 
-  // Division / remainder by zero → nil.
-  EXPECT_TRUE(i->div_op(*z)->is_nil());
-  EXPECT_TRUE(i->rem_op(*z)->is_nil());
-  EXPECT_TRUE(big->div_op(*z)->is_nil());
+  // Division / remainder by zero → X: every bit unknown (Verilog all-x), not nil.
+  for (const auto& q : {i->div_op(*z), i->rem_op(*z), big->div_op(*z)}) {
+    EXPECT_FALSE(q->is_nil());
+    EXPECT_TRUE(q->has_unknowns());
+    EXPECT_TRUE(q->same_repr(*Dlop::unknown()));
+  }
+  // A fully unknown value prints every bit unknown, the sign bit too.
+  EXPECT_EQ(Dlop::unknown()->to_binary().find_first_not_of('?'), std::string::npos) << Dlop::unknown()->to_binary();
+  // A divisor that may be zero (0ub?0) may give X; one with a known 1 may not.
+  EXPECT_TRUE(i->div_op(*Dlop::from_pyrope("0ub?0"))->same_repr(*Dlop::unknown()));
+  EXPECT_FALSE(i->div_op(*Dlop::from_pyrope("0ub?1"))->same_repr(*Dlop::unknown()));
 
   // Shifts: negative, non-integer, and astronomically large amounts → nil.
   EXPECT_TRUE(i->shl_op(*neg)->is_nil());
