@@ -552,9 +552,10 @@ public:
   spool_ptr<Dlop> div_op(spool_ptr<Dlop> other) const { return div_op(*other); }
   // rem_op: TRUNCATED remainder, the LGraph `rem` cell (sign follows the
   // dividend, like C/C++ `%` and Verilog `%` -- NOT a floored modulo, which
-  // would flip the sign for a negative dividend). Returns invalid for
-  // rem-by-zero (undefined), a 1-bit unknown when either operand has unknowns,
-  // and the exact remainder otherwise.
+  // would flip the sign for a negative dividend). Rem-by-zero (or by a divisor
+  // whose unknown bits allow zero) is all-unknown X, like div_op and Verilog;
+  // a non-numeric operand gives nil; otherwise unknown operands give an
+  // unknown result and known ones the exact remainder.
   spool_ptr<Dlop> rem_op(const Dlop& other) const;
   spool_ptr<Dlop> rem_op(spool_ptr<Dlop> other) const { return rem_op(*other); }
   spool_ptr<Dlop> neg_op() const;
