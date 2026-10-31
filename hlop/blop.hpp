@@ -69,14 +69,20 @@ public:
 
   static void addn(int64_t* dest, size_t dest_sz, const int64_t* src1, const int64_t* src2) {
     assert(dest_sz >= 1);
-    uint64_t carry = __builtin_uaddll_overflow(src1[0], src2[0], reinterpret_cast<unsigned long long*>(dest));
+    // The builtin's output type need not alias int64_t (long on LP64).
+    // Store through a correctly typed temporary before converting the bits.
+    unsigned long long word;
+    uint64_t           carry = __builtin_uaddll_overflow(src1[0], src2[0], &word);
+    dest[0]                  = static_cast<int64_t>(word);
     for (size_t i = 1; i < dest_sz - 1; ++i) {
       unsigned long long tmp;
       carry  = __builtin_uaddll_overflow(src1[i], carry, &tmp);
-      carry |= __builtin_uaddll_overflow(tmp, src2[i], reinterpret_cast<unsigned long long*>(dest + i));
+      carry   |= __builtin_uaddll_overflow(tmp, src2[i], &word);
+      dest[i]  = static_cast<int64_t>(word);
     }
     if (dest_sz > 1) {
-      dest[dest_sz - 1] = src1[dest_sz - 1] + src2[dest_sz - 1] + carry;
+      dest[dest_sz - 1]
+          = static_cast<int64_t>(static_cast<uint64_t>(src1[dest_sz - 1]) + static_cast<uint64_t>(src2[dest_sz - 1]) + carry);
     }
   }
 
@@ -85,13 +91,16 @@ public:
     if constexpr (N == 1) {
       dest[0] = src1[0] + src2[0];
     } else {
-      uint64_t carry = __builtin_uaddll_overflow(src1[0], src2[0], reinterpret_cast<unsigned long long*>(&dest[0]));
+      unsigned long long word;
+      uint64_t           carry = __builtin_uaddll_overflow(src1[0], src2[0], &word);
+      dest[0]                  = static_cast<int64_t>(word);
       for (size_t i = 1; i < N - 1; ++i) {
         unsigned long long tmp;
         carry  = __builtin_uaddll_overflow(src1[i], carry, &tmp);
-        carry |= __builtin_uaddll_overflow(tmp, src2[i], reinterpret_cast<unsigned long long*>(&dest[i]));
+        carry   |= __builtin_uaddll_overflow(tmp, src2[i], &word);
+        dest[i]  = static_cast<int64_t>(word);
       }
-      dest[N - 1] = src1[N - 1] + src2[N - 1] + carry;
+      dest[N - 1] = static_cast<int64_t>(static_cast<uint64_t>(src1[N - 1]) + static_cast<uint64_t>(src2[N - 1]) + carry);
     }
   }
 
@@ -102,14 +111,18 @@ public:
 
   static void subn(int64_t* dest, size_t dest_sz, const int64_t* src1, const int64_t* src2) {
     assert(dest_sz >= 1);
-    uint64_t carry = __builtin_usubll_overflow(src1[0], src2[0], reinterpret_cast<unsigned long long*>(dest));
+    unsigned long long word;
+    uint64_t           carry = __builtin_usubll_overflow(src1[0], src2[0], &word);
+    dest[0]                  = static_cast<int64_t>(word);
     for (size_t i = 1; i < dest_sz - 1; ++i) {
       unsigned long long tmp;
       carry  = __builtin_usubll_overflow(src1[i], carry, &tmp);
-      carry |= __builtin_usubll_overflow(tmp, src2[i], reinterpret_cast<unsigned long long*>(dest + i));
+      carry   |= __builtin_usubll_overflow(tmp, src2[i], &word);
+      dest[i]  = static_cast<int64_t>(word);
     }
     if (dest_sz > 1) {
-      dest[dest_sz - 1] = src1[dest_sz - 1] - src2[dest_sz - 1] - carry;
+      dest[dest_sz - 1]
+          = static_cast<int64_t>(static_cast<uint64_t>(src1[dest_sz - 1]) - static_cast<uint64_t>(src2[dest_sz - 1]) - carry);
     }
   }
 
@@ -118,13 +131,16 @@ public:
     if constexpr (N == 1) {
       dest[0] = src1[0] - src2[0];
     } else {
-      uint64_t carry = __builtin_usubll_overflow(src1[0], src2[0], reinterpret_cast<unsigned long long*>(&dest[0]));
+      unsigned long long word;
+      uint64_t           carry = __builtin_usubll_overflow(src1[0], src2[0], &word);
+      dest[0]                  = static_cast<int64_t>(word);
       for (size_t i = 1; i < N - 1; ++i) {
         unsigned long long tmp;
         carry  = __builtin_usubll_overflow(src1[i], carry, &tmp);
-        carry |= __builtin_usubll_overflow(tmp, src2[i], reinterpret_cast<unsigned long long*>(&dest[i]));
+        carry   |= __builtin_usubll_overflow(tmp, src2[i], &word);
+        dest[i]  = static_cast<int64_t>(word);
       }
-      dest[N - 1] = src1[N - 1] - src2[N - 1] - carry;
+      dest[N - 1] = static_cast<int64_t>(static_cast<uint64_t>(src1[N - 1]) - static_cast<uint64_t>(src2[N - 1]) - carry);
     }
   }
 
